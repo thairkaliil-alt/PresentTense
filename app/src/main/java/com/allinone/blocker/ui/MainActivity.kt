@@ -258,6 +258,9 @@ fun AppRoot(
         val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault(
             BlockerRepository.nextAlarmRequestCode()
         )
+        // Pre-save before navigating so the edit screen finds it by ID
+        // and nextAlarmRequestCode() sees it next time (prevents overwriting)
+        BlockerRepository.addStrictAlarmEntry(fresh)
         selectedAlarmId = fresh.id
         screen = Screen.STRICT_ALARM_EDIT
     },
