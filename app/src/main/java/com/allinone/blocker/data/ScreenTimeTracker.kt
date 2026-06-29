@@ -348,6 +348,25 @@ object ScreenTimeTracker {
         return (total / 60_000L).toInt()
     }
 
+    /**
+     * Total screen time for the calendar day right before today, in minutes.
+     * Used purely for the small "X% less than yesterday" home-screen hint -
+     * a quiet, positive-only comparison. Reads straight from daily_totals,
+     * no cache needed since yesterday's numbers never change anymore.
+     */
+    fun yesterdayTotalMinutes(context: Context): Int {
+        val db = ScreenTimeDatabase.get(context).readableDatabase
+        val yesterdayKey = offsetDayKey(dayKeyFor(System.currentTimeMillis()), -1)
+        var total = 0L
+        db.query(
+            "daily_totals", arrayOf("total_millis"),
+            "day_key = ?", arrayOf(yesterdayKey.toString()), null, null, null
+        ).use { c ->
+            while (c.moveToNext()) total += c.getLong(0)
+        }
+        return (total / 60_000L).toInt()
+    }
+
     private fun ensureCacheFreshEnough(context: Context) {
         if (todayCacheDayKey == -1) reconcile(context)
     }
