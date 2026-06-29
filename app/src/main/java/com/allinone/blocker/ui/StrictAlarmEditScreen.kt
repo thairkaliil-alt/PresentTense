@@ -84,7 +84,7 @@ fun StrictAlarmEditScreen(
     val context = LocalContext.current
     val allAlarms by BlockerRepository.strictAlarms.collectAsState()
     val alarm = remember(allAlarms, alarmId) {
-        allAlarms.firstOrNull { it.id == alarmId } ?: StrictAlarmEntry(id = alarmId)
+       allAlarms.firstOrNull { it.id == alarmId } ?: StrictAlarmEntry(id = alarmId, requestCode = BlockerRepository.nextAlarmRequestCode())
     }
     val canScheduleExact = remember { AlarmScheduler.canScheduleExact(context) }
 
