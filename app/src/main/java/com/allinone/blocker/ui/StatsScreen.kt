@@ -171,6 +171,17 @@ fun StatsScreen(onBack: () -> Unit) {
     var goalMinutes           by remember { mutableIntStateOf(BlockerRepository.dailyGoalMinutes()) }
     var showGoalDialog        by remember { mutableStateOf(false) }
 
+    // BUGFIX (scroll flicker): rows inside a LazyColumn are destroyed when they
+    // scroll off-screen and rebuilt from scratch when they scroll back into
+    // view. AnimatedAppearance plays its fade-in/slide-in "first appearance"
+    // animation every single time a row is rebuilt — which is exactly what
+    // made the app list look like it kept disappearing and reappearing while
+    // scrolling. This flag is remembered once at the StatsScreen level (not
+    // per-row), so it survives rows being recycled. The entrance animation
+    // plays only once, right after the real data loads — after that, every
+    // row (even ones scrolling back into view) renders instantly, no replay.
+    var entranceAnimationPlayed by remember { mutableStateOf(false) }
+
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -227,6 +238,11 @@ fun StatsScreen(onBack: () -> Unit) {
 
             loading = false
         }
+        // Entrance animation should run exactly once, right after this first
+        // load. Setting it true here (outside the IO block, after loading
+        // flips) means later recompositions — like scrolling rows in and out
+        // of view — see entranceAnimationPlayed == true and skip the animation.
+        entranceAnimationPlayed = true
     }
 
     Scaffold(
@@ -357,10 +373,13 @@ fun StatsScreen(onBack: () -> Unit) {
                 } else {
                     val maxMillis = appStats.first().todayMillis.coerceAtLeast(1L)
                     itemsIndexed(appStats, key = { _, stat -> "app_${stat.packageName}" }) { index, stat ->
-                        if (index < 6) {
+                        if (index < 6 && !entranceAnimationPlayed) {
                             // First few rows settle in with a stagger — a list
                             // "long enough to feel alive" cap (README guidance:
                             // keep cascades short or the tail feels slow).
+                            // Only happens on the very first composition of the
+                            // list (see entranceAnimationPlayed above) — not
+                            // every time this row scrolls back into view.
                             AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * (4 + index)) {
                                 AppStatRow(stat = stat, maxMillis = maxMillis)
                             }
@@ -377,7 +396,7 @@ fun StatsScreen(onBack: () -> Unit) {
                     item(key = "browser_total") { BrowsingTotalCard(domainStats) }
                     val maxMillis = domainStats.first().todayMillis.coerceAtLeast(1L)
                     itemsIndexed(domainStats, key = { _, stat -> "domain_${stat.domain}" }) { index, stat ->
-                        if (index < 6) {
+                        if (index < 6 && !entranceAnimationPlayed) {
                             AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * (4 + index)) {
                                 DomainStatRow(stat = stat, maxMillis = maxMillis)
                             }
