@@ -48,19 +48,11 @@ import java.util.Calendar
 import java.util.Locale
 
 /**
- * SESSION 3 of the multi-alarm rework.
- *
- * The new "all alarms" list screen — shows every [StrictAlarmEntry] as a
- * clean, card-less row (big time, short repeat-days summary, a toggle on
- * the right), closest in spirit to a normal phone clock app's alarm list.
- * Tapping a row is meant to open an editor for that one alarm; tapping "+"
- * is meant to create a new one and open the editor for it.
- *
- * NOT WIRED INTO NAVIGATION YET. This file builds and is safe to drop in,
- * but nothing currently routes to it — Screen.STRICT_ALARM (the existing
- * single-alarm screen) is still what the app actually shows today. Hooking
- * this up as the new entry point, and building the matching redesigned
- * editor screen, happens in later sessions.
+ * The "all alarms" list screen — shows every [StrictAlarmEntry] as a clean,
+ * card-less row (big time, short repeat-days summary, a toggle on the
+ * right), closest in spirit to a normal phone clock app's alarm list.
+ * Tapping a row opens the editor for that one alarm; tapping "+" creates a
+ * new one and opens the editor for it.
  *
  * @param onBack            back arrow in the top bar.
  * @param onAddAlarm        "+" button tapped — caller should create a new
