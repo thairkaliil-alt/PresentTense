@@ -1,449 +1,460 @@
-package com.allinone.blocker.data
+package com.allinone.blocker.ui
 
-import android.content.Context
-import android.content.SharedPreferences
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import org.json.JSONArray
-import org.json.JSONObject
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.allinone.blocker.data.AlarmScheduler
+import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
+import com.allinone.blocker.data.StrictAlarmEntry
+import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentRed
+import com.allinone.blocker.ui.theme.CardSurface
+import com.allinone.blocker.ui.theme.TextMuted
+import com.allinone.blocker.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 import java.util.Calendar
-import java.util.UUID
+import java.util.Locale
 
-object BlockerRepository {
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StrictAlarmListScreen(
+    onBack: () -> Unit,
+    onAddAlarm: () -> Unit = {},
+    onEditAlarm: (String) -> Unit = {},
+    onOpenSleepCalculator: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val alarms by BlockerRepository.strictAlarms.collectAsState()
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
 
-    private const val PREFS = "blocker_prefs"
-    private const val KEY_APPS = "apps"
-    private const val KEY_WEBSITES = "blocked_websites"
-    private const val KEY_REELS = "reels_kill_switch"
-    private const val KEY_PROTECTION_ON = "protection_enabled"
-    private const val KEY_OPENS = "opens_today"
-    private const val KEY_LAST_USE = "last_use"
-    private const val KEY_DAY = "day_key"
-    private const val KEY_WHITELIST = "whitelist"
-    private const val KEY_SCHEDULES = "lockdown_schedules"
-    private const val KEY_MANUAL_LOCK_UNTIL = "manual_lock_until"
-    private const val KEY_STRICT_MODE = "strict_mode"
-    private const val KEY_STRICT_ALARMS_LIST = "strict_alarms_list"
-    private const val KEY_BREAK_UNTIL = "lockdown_break_until"
-    private const val KEY_BREAK_USES = "lockdown_break_uses_this_session"
-    private const val KEY_BREAK_SESSION_ANCHOR = "lockdown_break_session_anchor"
-    private const val KEY_DAILY_GOAL_MINUTES = "daily_goal_minutes"
+    // ── Drag state ────────────────────────────────────────────────────────────
+    // draggingIndex  = which card is currently being dragged (-1 = none)
+    // dragOffsetY    = how many pixels the card has moved from its original spot
+    // hoverIndex     = which slot the dragged card is currently hovering over
+    var draggingIndex by remember { mutableIntStateOf(-1) }
+    var dragOffsetY   by remember { mutableFloatStateOf(0f) }
+    var hoverIndex    by remember { mutableIntStateOf(-1) }
 
-    private lateinit var prefs: SharedPreferences
-    @Volatile private var initialized = false
+    val listState  = rememberLazyListState()
+    val scope      = rememberCoroutineScope()
+    val density    = LocalDensity.current
 
-    private val _apps = MutableStateFlow<List<BlockedApp>>(emptyList())
-    val apps: StateFlow<List<BlockedApp>> = _apps
-
-    private val _websites = MutableStateFlow<List<BlockedWebsite>>(emptyList())
-    val websites: StateFlow<List<BlockedWebsite>> = _websites
-
-    private val _reelsKillSwitch = MutableStateFlow(false)
-    val reelsKillSwitch: StateFlow<Boolean> = _reelsKillSwitch
-
-    val protectionEnabled: StateFlow<Boolean> = MutableStateFlow(true)
-
-    private val _whitelist = MutableStateFlow<Set<String>>(emptySet())
-    val whitelist: StateFlow<Set<String>> = _whitelist
-
-    private val _schedules = MutableStateFlow<List<LockdownSchedule>>(emptyList())
-    val schedules: StateFlow<List<LockdownSchedule>> = _schedules
-
-    private val _manualLockUntil = MutableStateFlow(0L)
-    val manualLockUntil: StateFlow<Long> = _manualLockUntil
-
-    private val _breakUntil = MutableStateFlow(0L)
-    val breakUntil: StateFlow<Long> = _breakUntil
-
-    private val _breakUsesThisSession = MutableStateFlow(0)
-    val breakUsesThisSession: StateFlow<Int> = _breakUsesThisSession
-
-    private val _strictMode = MutableStateFlow(StrictModeConfig())
-    val strictMode: StateFlow<StrictModeConfig> = _strictMode
-
-    // The list of independent Strict Alarms — see StrictAlarmEntry.kt.
-    private val _strictAlarms = MutableStateFlow<List<StrictAlarmEntry>>(emptyList())
-    val strictAlarms: StateFlow<List<StrictAlarmEntry>> = _strictAlarms
-
-    private val opensToday = HashMap<String, Int>()
-    private val lastUseAt = HashMap<String, Long>()
-
-    fun init(context: Context) {
-        if (initialized) return
-        prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        load()
-        initialized = true
-    }
-
-    val isInitialized: Boolean get() = initialized
-
-    private fun load() {
-        rolloverDayIfNeeded()
-        _reelsKillSwitch.value = prefs.getBoolean(KEY_REELS, false)
-        _manualLockUntil.value = prefs.getLong(KEY_MANUAL_LOCK_UNTIL, 0L)
-        _breakUntil.value = prefs.getLong(KEY_BREAK_UNTIL, 0L)
-        _breakUsesThisSession.value = prefs.getInt(KEY_BREAK_USES, 0)
-
-        val list = mutableListOf<BlockedApp>()
-        prefs.getString(KEY_APPS, null)?.let { raw ->
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) list.add(BlockedApp.fromJson(arr.getJSONObject(i)))
+    // Delete dialog
+    if (pendingDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("Delete alarm?") },
+            text  = { Text("This alarm will be removed and cancelled.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val id = pendingDeleteId!!
+                    val toDelete = alarms.firstOrNull { it.id == id }
+                    BlockerRepository.removeStrictAlarmEntry(id)
+                    if (toDelete != null) AlarmScheduler.cancel(context, toDelete)
+                    else AlarmScheduler.cancel(context, id)
+                    pendingDeleteId = null
+                }) { Text("Delete", color = AccentRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel") }
             }
-        }
-        _apps.value = list
-
-        val websiteList = mutableListOf<BlockedWebsite>()
-        prefs.getString(KEY_WEBSITES, null)?.let { raw ->
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) websiteList.add(BlockedWebsite.fromJson(arr.getJSONObject(i)))
-            }
-        }
-        _websites.value = websiteList
-
-        val wl = mutableSetOf<String>()
-        prefs.getString(KEY_WHITELIST, null)?.let { raw ->
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) wl.add(arr.getString(i))
-            }
-        }
-        _whitelist.value = wl
-
-        val sched = mutableListOf<LockdownSchedule>()
-        prefs.getString(KEY_SCHEDULES, null)?.let { raw ->
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) sched.add(LockdownSchedule.fromJson(arr.getJSONObject(i)))
-            }
-        }
-        _schedules.value = sched
-
-        prefs.getString(KEY_STRICT_MODE, null)?.let { raw ->
-            runCatching { _strictMode.value = StrictModeConfig.fromJson(JSONObject(raw)) }
-        }
-
-        val alarmEntries = mutableListOf<StrictAlarmEntry>()
-        prefs.getString(KEY_STRICT_ALARMS_LIST, null)?.let { raw ->
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) alarmEntries.add(StrictAlarmEntry.fromJson(arr.getJSONObject(i)))
-            }
-        }
-        _strictAlarms.value = alarmEntries
-
-        loadCounter(KEY_OPENS, opensToday)
-        loadLongCounter(KEY_LAST_USE, lastUseAt)
-    }
-
-    fun upsertApp(app: BlockedApp) {
-        val list = _apps.value.toMutableList()
-        val idx = list.indexOfFirst { it.packageName == app.packageName }
-        if (idx >= 0) list[idx] = app else list.add(app)
-        _apps.value = list
-        persistApps()
-    }
-
-    fun removeApp(packageName: String) {
-        _apps.value = _apps.value.filterNot { it.packageName == packageName }
-        persistApps()
-    }
-
-    fun appFor(packageName: String): BlockedApp? =
-        _apps.value.firstOrNull { it.packageName == packageName }
-
-    private fun persistApps() {
-        val arr = JSONArray()
-        _apps.value.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(KEY_APPS, arr.toString()).apply()
-    }
-
-    fun upsertWebsite(website: BlockedWebsite) {
-        val list = _websites.value.toMutableList()
-        val idx = list.indexOfFirst { it.domain == website.domain }
-        if (idx >= 0) list[idx] = website else list.add(website)
-        _websites.value = list
-        persistWebsites()
-    }
-
-    fun removeWebsite(domain: String) {
-        _websites.value = _websites.value.filterNot { it.domain == domain }
-        persistWebsites()
-    }
-
-    fun websiteFor(domain: String): BlockedWebsite? =
-        _websites.value.firstOrNull { it.domain == domain }
-
-    fun isWebsiteBlocked(domain: String): Boolean {
-        if (domain.isBlank()) return false
-        return _websites.value.any { entry ->
-            entry.enabled && (domain == entry.domain || domain.endsWith("." + entry.domain))
-        }
-    }
-
-    private fun persistWebsites() {
-        val arr = JSONArray()
-        _websites.value.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(KEY_WEBSITES, arr.toString()).apply()
-    }
-
-    fun setReelsKillSwitch(on: Boolean) {
-        _reelsKillSwitch.value = on
-        prefs.edit().putBoolean(KEY_REELS, on).apply()
-    }
-
-    fun addToWhitelist(pkg: String) {
-        _whitelist.value = _whitelist.value + pkg
-        persistWhitelist()
-    }
-
-    fun removeFromWhitelist(pkg: String) {
-        _whitelist.value = _whitelist.value - pkg
-        persistWhitelist()
-    }
-
-    fun isWhitelisted(pkg: String): Boolean = _whitelist.value.contains(pkg)
-
-    private fun persistWhitelist() {
-        prefs.edit().putString(KEY_WHITELIST, JSONArray(_whitelist.value.toList()).toString()).apply()
-    }
-
-    fun addSchedule(schedule: LockdownSchedule) {
-        _schedules.value = _schedules.value + schedule
-        persistSchedules()
-    }
-
-    fun updateSchedule(updated: LockdownSchedule) {
-        _schedules.value = _schedules.value.map { if (it.id == updated.id) updated else it }
-        persistSchedules()
-    }
-
-    fun removeSchedule(id: String) {
-        _schedules.value = _schedules.value.filterNot { it.id == id }
-        persistSchedules()
-    }
-
-    private fun persistSchedules() {
-        val arr = JSONArray()
-        _schedules.value.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(KEY_SCHEDULES, arr.toString()).apply()
-    }
-
-    fun newScheduleId(): String = UUID.randomUUID().toString()
-
-    fun startManualLock(minutes: Int) {
-        val until = System.currentTimeMillis() + minutes * 60_000L
-        _manualLockUntil.value = until
-        prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, until).apply()
-        resetBreaksForNewSession()
-    }
-
-    fun startManualLockIndefinite() {
-        _manualLockUntil.value = Long.MAX_VALUE
-        prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, Long.MAX_VALUE).apply()
-        resetBreaksForNewSession()
-    }
-
-    fun endManualLock() {
-        _manualLockUntil.value = 0L
-        prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, 0L).apply()
-        endBreakNow()
-    }
-
-    // Break settings are now read from StrictModeConfig so the user can
-    // configure them from the Strict Mode settings screen.
-    fun maxBreaksPerSession(): Int = _strictMode.value.maxBreaksPerSession
-    fun breakDurationSeconds(): Long = _strictMode.value.breakDurationMinutes * 60L
-
-    fun breaksRemaining(): Int =
-        (maxBreaksPerSession() - _breakUsesThisSession.value).coerceAtLeast(0)
-
-    fun canStartBreak(): Boolean =
-        breaksRemaining() > 0 && _breakUntil.value <= System.currentTimeMillis()
-
-    fun startEmergencyBreak(): Boolean {
-        if (!canStartBreak()) return false
-        val until = System.currentTimeMillis() + breakDurationSeconds() * 1000L
-        _breakUntil.value = until
-        val newCount = _breakUsesThisSession.value + 1
-        _breakUsesThisSession.value = newCount
-        prefs.edit()
-            .putLong(KEY_BREAK_UNTIL, until)
-            .putInt(KEY_BREAK_USES, newCount)
-            .apply()
-        return true
-    }
-
-    fun endBreakNow() {
-        if (_breakUntil.value == 0L) return
-        _breakUntil.value = 0L
-        prefs.edit().putLong(KEY_BREAK_UNTIL, 0L).apply()
-    }
-
-    fun resetBreaksForNewSession() {
-        _breakUsesThisSession.value = 0
-        _breakUntil.value = 0L
-        prefs.edit()
-            .putInt(KEY_BREAK_USES, 0)
-            .putLong(KEY_BREAK_UNTIL, 0L)
-            .apply()
-    }
-
-    fun maybeResetBreaksForScheduledSession(sessionEndsAtMillis: Long) {
-        if (sessionEndsAtMillis <= 0) return
-        if (prefs.getLong(KEY_BREAK_SESSION_ANCHOR, -1L) == sessionEndsAtMillis) return
-        prefs.edit().putLong(KEY_BREAK_SESSION_ANCHOR, sessionEndsAtMillis).apply()
-        resetBreaksForNewSession()
-    }
-
-    fun setStrictMode(config: StrictModeConfig) {
-        _strictMode.value = config
-        prefs.edit().putString(KEY_STRICT_MODE, config.toJson().toString()).apply()
-    }
-
-    /**
-     * Starts (or extends) an Active Plan countdown for Strict Mode. [durationMillis]
-     * is clamped to [StrictModeConfig.MAX_CUSTOM_PLAN_DAYS] here as well as in the
-     * UI, so there's no path — including a future screen someone adds later — that
-     * can sneak past the cap and create a runaway lock with no end time.
-     */
-    fun startStrictPlan(durationMillis: Long, label: String) {
-        val maxMillis = StrictModeConfig.MAX_CUSTOM_PLAN_DAYS * 24L * 60 * 60 * 1000
-        val clamped = durationMillis.coerceIn(1L, maxMillis)
-        val current = _strictMode.value
-        setStrictMode(
-            current.copy(
-                activeFrictions = current.activeFrictions + FrictionType.PLAN_LOCK,
-                planActiveUntil = System.currentTimeMillis() + clamped,
-                planLabel = label
-            )
         )
     }
 
-    // List-based CRUD, mirrors addSchedule/updateSchedule/removeSchedule above.
-
-    fun addStrictAlarmEntry(entry: StrictAlarmEntry) {
-        _strictAlarms.value = _strictAlarms.value + entry
-        persistStrictAlarms()
-    }
-
-    fun updateStrictAlarmEntry(updated: StrictAlarmEntry) {
-        _strictAlarms.value = _strictAlarms.value.map { if (it.id == updated.id) updated else it }
-        persistStrictAlarms()
-    }
-
-    fun removeStrictAlarmEntry(id: String) {
-        _strictAlarms.value = _strictAlarms.value.filterNot { it.id == id }
-        persistStrictAlarms()
-    }
-
-    fun setStrictAlarmEntryEnabled(id: String, enabled: Boolean) {
-        _strictAlarms.value = _strictAlarms.value.map {
-            if (it.id == id) it.copy(enabled = enabled) else it
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Alarms", style = MaterialTheme.typography.titleLarge) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSleepCalculator) {
+                        Icon(Icons.Filled.Bedtime, contentDescription = "Sleep calculator")
+                    }
+                    IconButton(onClick = onAddAlarm) {
+                        Icon(Icons.Filled.Add, contentDescription = "Add alarm")
+                    }
+                }
+            )
         }
-        persistStrictAlarms()
+    ) { pad ->
+
+        if (alarms.isEmpty()) {
+            EmptyAlarmsState(
+                modifier  = Modifier.padding(pad).fillMaxSize(),
+                onAddAlarm = onAddAlarm
+            )
+            return@Scaffold
+        }
+
+        // We keep a local mutable copy while dragging so the list animates
+        // in real-time; we only commit to the repository when the finger lifts.
+        var orderedAlarms by remember(alarms) { mutableStateOf(alarms) }
+
+        LazyColumn(
+            state   = listState,
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                // ── Drag gesture — long-press then drag ───────────────────
+                .pointerInput(orderedAlarms) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            // Figure out which card the finger is over
+                            val itemInfo = listState.layoutInfo.visibleItemsInfo
+                            val item = itemInfo.firstOrNull { info ->
+                                offset.y.toInt() in info.offset..(info.offset + info.size)
+                            }
+                            if (item != null) {
+                                draggingIndex = item.index
+                                hoverIndex    = item.index
+                                dragOffsetY   = 0f
+                            }
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            dragOffsetY += dragAmount.y
+
+                            // Work out which slot the card is hovering over now
+                            val itemInfo = listState.layoutInfo.visibleItemsInfo
+                            val draggingItem = itemInfo.firstOrNull { it.index == draggingIndex }
+                            if (draggingItem != null) {
+                                val centerY = draggingItem.offset + draggingItem.size / 2 + dragOffsetY
+                                val newHover = itemInfo.minByOrNull { info ->
+                                    val c = info.offset + info.size / 2
+                                    kotlin.math.abs(c - centerY)
+                                }?.index ?: hoverIndex
+
+                                if (newHover != hoverIndex) {
+                                    // Swap in the local list
+                                    val mutable = orderedAlarms.toMutableList()
+                                    val fromIdx = hoverIndex.coerceIn(0, mutable.lastIndex)
+                                    val toIdx   = newHover.coerceIn(0, mutable.lastIndex)
+                                    val item    = mutable.removeAt(fromIdx)
+                                    mutable.add(toIdx, item)
+                                    orderedAlarms = mutable
+                                    dragOffsetY  += (draggingItem.offset - (itemInfo.firstOrNull { it.index == newHover }?.offset ?: draggingItem.offset))
+                                    hoverIndex    = newHover
+                                }
+                            }
+
+                            // Auto-scroll near edges
+                            val viewportHeight = listState.layoutInfo.viewportEndOffset.toFloat()
+                            val edgeZone = with(density) { 60.dp.toPx() }
+                            val finger = change.position.y
+                            scope.launch {
+                                when {
+                                    finger < edgeZone           -> listState.scrollBy(-12f)
+                                    finger > viewportHeight - edgeZone -> listState.scrollBy(12f)
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            // Commit the new order to the repository
+                            BlockerRepository.reorderStrictAlarms(orderedAlarms)
+                            draggingIndex = -1
+                            dragOffsetY   = 0f
+                            hoverIndex    = -1
+                        },
+                        onDragCancel = {
+                            draggingIndex = -1
+                            dragOffsetY   = 0f
+                            hoverIndex    = -1
+                        }
+                    )
+                },
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            itemsIndexed(orderedAlarms, key = { _, entry -> entry.id }) { index, entry ->
+                val isDragging = index == draggingIndex
+
+                // Elevation and scale animate up when dragging this card
+                val elevation by animateDpAsState(
+                    targetValue    = if (isDragging) 12.dp else 2.dp,
+                    animationSpec  = tween(150, easing = FastOutSlowInEasing),
+                    label          = "cardElevation"
+                )
+                val scale by animateFloatAsState(
+                    targetValue   = if (isDragging) 1.03f else 1f,
+                    animationSpec = tween(150, easing = FastOutSlowInEasing),
+                    label         = "cardScale"
+                )
+
+                AlarmCard(
+                    entry      = entry,
+                    isDragging = isDragging,
+                    elevation  = elevation,
+                    scale      = scale,
+                    dragOffsetY = if (isDragging) dragOffsetY else 0f,
+                    onToggle   = { checked ->
+                        BlockerRepository.setStrictAlarmEntryEnabled(entry.id, checked)
+                        AlarmScheduler.schedule(context, entry.copy(enabled = checked))
+                    },
+                    onClick    = { onEditAlarm(entry.id) },
+                    onDelete   = { pendingDeleteId = entry.id }
+                )
+            }
+
+            item { Spacer(Modifier.height(24.dp)) }
+        }
     }
-
-    /** Saves a new ordering of the alarm list (from drag-to-reorder). */
-    fun reorderStrictAlarms(reordered: List<StrictAlarmEntry>) {
-        _strictAlarms.value = reordered
-        persistStrictAlarms()
-    }
-
-    private fun persistStrictAlarms() {
-        val arr = JSONArray()
-        _strictAlarms.value.forEach { arr.put(it.toJson()) }
-        prefs.edit().putString(KEY_STRICT_ALARMS_LIST, arr.toString()).apply()
-    }
-
-    fun newStrictAlarmId(): String = UUID.randomUUID().toString()
-
-/**
- * Returns the next available request code for a new alarm.
- * We find the highest requestCode already in use and add 1,
- * so every alarm gets a permanently unique number.
- */
-fun nextAlarmRequestCode(): Int {
-    val existing = _strictAlarms.value
-    return if (existing.isEmpty()) 1
-    else existing.maxOf { it.requestCode } + 1
 }
 
-    fun opensToday(pkg: String): Int {
-        rolloverDayIfNeeded()
-        return opensToday[pkg] ?: 0
-    }
+@Composable
+private fun AlarmCard(
+    entry: StrictAlarmEntry,
+    isDragging: Boolean,
+    elevation: androidx.compose.ui.unit.Dp,
+    scale: Float,
+    dragOffsetY: Float,
+    onToggle: (Boolean) -> Unit,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val slotCount = entry.effectiveAlarmCount()
 
-    fun recordOpen(pkg: String) {
-        rolloverDayIfNeeded()
-        opensToday[pkg] = (opensToday[pkg] ?: 0) + 1
-        saveCounter(KEY_OPENS, opensToday)
-    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX          = scale
+                scaleY          = scale
+                translationY    = dragOffsetY
+                shadowElevation = if (isDragging) 24f else 0f
+            }
+            .shadow(elevation, RoundedCornerShape(20.dp), clip = false)
+            .background(CardSurface, RoundedCornerShape(20.dp))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Tap anywhere on the card (except the toggle / delete) to edit
+                .then(
+                    Modifier.pointerInput(onClick) {
+                        androidx.compose.foundation.gestures.detectTapGestures(onTap = { onClick() })
+                    }
+                )
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+        ) {
+            // ── Top row: time + drag handle ───────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text      = formatAlarmTime(entry.hour, entry.minute),
+                    style     = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color     = if (entry.enabled) MaterialTheme.colorScheme.onBackground else TextMuted,
+                    modifier  = Modifier.weight(1f)
+                )
 
-    fun lastUse(pkg: String): Long = lastUseAt[pkg] ?: 0L
+                // Drag handle — the visual cue that this card is draggable
+                Icon(
+                    imageVector        = Icons.Filled.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint               = TextMuted,
+                    modifier           = Modifier.size(24.dp)
+                )
+            }
 
-    fun recordUse(pkg: String, whenMillis: Long) {
-        lastUseAt[pkg] = whenMillis
-        saveLongCounter(KEY_LAST_USE, lastUseAt)
-    }
+            Spacer(Modifier.height(4.dp))
 
-    fun dailyGoalMinutes(): Int {
-        if (!::prefs.isInitialized) return 0
-        return prefs.getInt(KEY_DAILY_GOAL_MINUTES, 0)
-    }
+            // ── Repeat-days summary ───────────────────────────────────────
+            val repeatLabel = repeatSummary(entry.daysOfWeek)
+            val burstLabel  = if (slotCount > 1) "  ·  ${slotCount}× snooze burst" else ""
+            Text(
+                text  = repeatLabel + burstLabel,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (entry.enabled) TextSecondary else TextMuted
+            )
 
-    fun setDailyGoalMinutes(minutes: Int) {
-        val clamped = minutes.coerceIn(0, 1440)
-        prefs.edit().putInt(KEY_DAILY_GOAL_MINUTES, clamped).apply()
-    }
+            // ── Burst sub-times (compact) ─────────────────────────────────
+            if (slotCount > 1) {
+                Spacer(Modifier.height(6.dp))
+                val times = (0 until slotCount).joinToString("  ·  ") { i ->
+                    val total = entry.hour * 60 + entry.minute + i * STRICT_ALARM_INTERVAL_MINUTES
+                    formatAlarmTime((total / 60) % 24, total % 60)
+                }
+                Text(
+                    text  = times,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+            }
 
-    private fun rolloverDayIfNeeded() {
-        if (!::prefs.isInitialized) return
-        val today = dayKey()
-        if (prefs.getInt(KEY_DAY, -1) != today) {
-            opensToday.clear()
-            prefs.edit()
-                .putInt(KEY_DAY, today)
-                .remove(KEY_OPENS)
-                .apply()
-        }
-    }
+            Spacer(Modifier.height(14.dp))
 
-    private fun dayKey(): Int {
-        val c = Calendar.getInstance()
-        return c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR)
-    }
+            // ── Bottom row: label (if any) + delete + toggle ──────────────
+            Row(
+                modifier          = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (entry.label.isNotBlank()) {
+                    Text(
+                        text   = entry.label,
+                        style  = MaterialTheme.typography.labelMedium,
+                        color  = TextSecondary,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
 
-    private fun loadCounter(key: String, into: HashMap<String, Int>) {
-        into.clear()
-        prefs.getString(key, null)?.let { raw ->
-            runCatching {
-                val o = JSONObject(raw)
-                o.keys().forEach { into[it] = o.getInt(it) }
+                // Delete icon
+                IconButton(
+                    onClick  = onDelete,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "Delete alarm",
+                        tint               = AccentRed.copy(alpha = 0.7f),
+                        modifier           = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                // On/off toggle
+                Switch(
+                    checked       = entry.enabled,
+                    onCheckedChange = { checked ->
+                        // Stop the tap-to-edit from firing when toggle is used
+                        onToggle(checked)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AccentBlue
+                    )
+                )
             }
         }
     }
+}
 
-    private fun saveCounter(key: String, map: HashMap<String, Int>) {
-        val o = JSONObject()
-        map.forEach { (k, v) -> o.put(k, v) }
-        prefs.edit().putString(key, o.toString()).apply()
-    }
-
-    private fun loadLongCounter(key: String, into: HashMap<String, Long>) {
-        into.clear()
-        prefs.getString(key, null)?.let { raw ->
-            runCatching {
-                val o = JSONObject(raw)
-                o.keys().forEach { into[it] = o.getLong(it) }
+@Composable
+private fun EmptyAlarmsState(modifier: Modifier = Modifier, onAddAlarm: () -> Unit) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.Alarm,
+                contentDescription = null,
+                tint     = TextMuted,
+                modifier = Modifier.size(56.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "No alarms yet",
+                style      = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Tap the + button to add your first strict alarm.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary
+            )
+            Spacer(Modifier.height(20.dp))
+            Box(
+                modifier = Modifier
+                    .background(AccentBlue, CircleShape)
+                    .pointerInput(onAddAlarm) {
+                        androidx.compose.foundation.gestures.detectTapGestures(onTap = { onAddAlarm() })
+                    }
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White)
+                    Spacer(Modifier.size(6.dp))
+                    Text("Add alarm", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
+}
 
-    private fun saveLongCounter(key: String, map: HashMap<String, Long>) {
-        val o = JSONObject()
-        map.forEach { (k, v) -> o.put(k, v) }
-        prefs.edit().putString(key, o.toString()).apply()
+private fun repeatSummary(daysOfWeek: Set<Int>): String {
+    if (daysOfWeek.isEmpty()) return "Once"
+    if (daysOfWeek.size == 7) return "Every day"
+    val weekdays = setOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY)
+    val weekend  = setOf(Calendar.SATURDAY, Calendar.SUNDAY)
+    if (daysOfWeek == weekdays) return "Weekdays"
+    if (daysOfWeek == weekend)  return "Weekends"
+    val order = listOf(
+        Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
+        Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
+        Calendar.SUNDAY to "Sun"
+    )
+    return order.filter { it.first in daysOfWeek }.joinToString(", ") { it.second }
+}
+
+private fun formatAlarmTime(hour: Int, minute: Int): String {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
     }
+    return java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(cal.time)
 }
