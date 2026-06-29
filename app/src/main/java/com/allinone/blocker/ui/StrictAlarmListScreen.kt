@@ -64,6 +64,7 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
+import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
@@ -290,12 +291,10 @@ private fun AlarmCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                // Tap anywhere on the card (except the toggle / delete) to edit
-                .then(
-                    Modifier.pointerInput(onClick) {
-                        androidx.compose.foundation.gestures.detectTapGestures(onTap = { onClick() })
-                    }
-                )
+                // pressable gives the card a tactile 4% squeeze on tap,
+                // with no ripple — same feel as every other card in the app.
+                // It handles the click so we no longer need a pointerInput block.
+                .pressable(onClick = onClick)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
             // ── Top row: time + drag handle ───────────────────────────────
