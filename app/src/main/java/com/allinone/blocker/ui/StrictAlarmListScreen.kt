@@ -82,15 +82,20 @@ fun StrictAlarmListScreen(
             title = { Text("Delete alarm?") },
             text = { Text("This alarm will be removed and cancelled.") },
             confirmButton = {
-                TextButton(onClick = {
-                    val id = pendingDeleteId!!
-                    BlockerRepository.removeStrictAlarmEntry(id)
-                    AlarmScheduler.cancel(context, id)
-                    pendingDeleteId = null
-                }) {
-                    Text("Delete", color = AccentRed)
-                }
-            },
+    TextButton(onClick = {
+        val id = pendingDeleteId!!
+        val alarmToDelete = alarms.firstOrNull { it.id == id }
+        BlockerRepository.removeStrictAlarmEntry(id)
+        if (alarmToDelete != null) {
+            AlarmScheduler.cancel(context, alarmToDelete)
+        } else {
+            AlarmScheduler.cancel(context, id)
+        }
+        pendingDeleteId = null
+    }) {
+        Text("Delete", color = AccentRed)
+    }
+},
             dismissButton = {
                 TextButton(onClick = { pendingDeleteId = null }) {
                     Text("Cancel")
