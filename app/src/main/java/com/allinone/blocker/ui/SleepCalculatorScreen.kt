@@ -97,13 +97,33 @@ private data class SleepOption(
 @Composable
 fun SleepCalculatorScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val alarm by BlockerRepository.strictAlarm.collectAsState()
+    val allAlarms by BlockerRepository.strictAlarms.collectAsState()
+
+    // "The" alarm this screen seeds from / writes to: the soonest-firing
+    // enabled entry, or just the first entry if none are enabled, or a
+    // fresh blank one if there are no alarms at all yet. This keeps the
+    // "set my wake-up alarm" shortcut feeling like it has one obvious
+    // target, the same way it did back when there was only ever one alarm.
+    val seedAlarm = remember(allAlarms) {
+        allAlarms.filter { it.enabled }.minByOrNull { it.hour * 60 + it.minute }
+            ?: allAlarms.firstOrNull()
+            ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault()
+    }
+
+    fun saveAlarm(updated: com.allinone.blocker.data.StrictAlarmEntry) {
+        if (allAlarms.any { it.id == updated.id }) {
+            BlockerRepository.updateStrictAlarmEntry(updated)
+        } else {
+            BlockerRepository.addStrictAlarmEntry(updated)
+        }
+        AlarmScheduler.schedule(context, updated)
+    }
 
     var mode by remember { mutableStateOf(CalcMode.WAKE_AT) }
 
-    // Wake-at target — seeded from the user's current strict alarm time.
-    var wakeHour by remember { mutableIntStateOf(alarm.hour) }
-    var wakeMinute by remember { mutableIntStateOf(alarm.minute) }
+    // Wake-at target — seeded from the seed alarm's time.
+    var wakeHour by remember { mutableIntStateOf(seedAlarm.hour) }
+    var wakeMinute by remember { mutableIntStateOf(seedAlarm.minute) }
 
     // Sleep-at base — seeded to "now".
     val nowCal = remember { Calendar.getInstance() }
@@ -141,13 +161,12 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
                             val cal = Calendar.getInstance().apply {
                                 add(Calendar.MINUTE, BED_NOW_ALARM_MINUTES)
                             }
-                            val updated = alarm.copy(
+                            val updated = seedAlarm.copy(
                                 enabled = true,
                                 hour = cal.get(Calendar.HOUR_OF_DAY),
                                 minute = cal.get(Calendar.MINUTE)
                             )
-                            BlockerRepository.setStrictAlarm(updated)
-                            AlarmScheduler.schedule(context, updated)
+                            saveAlarm(updated)
                             Toast.makeText(
                                 context,
                                 "Alarm set for ${formatClock(updated.hour, updated.minute)}",
@@ -214,13 +233,12 @@ Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             option = option,
                             isWakeResult = mode == CalcMode.SLEEP_AT,
                             onSetAlarm = {
-                                val updated = alarm.copy(
+                                val updated = seedAlarm.copy(
                                     enabled = true,
                                     hour = option.hour,
                                     minute = option.minute
                                 )
-                                BlockerRepository.setStrictAlarm(updated)
-                                AlarmScheduler.schedule(context, updated)
+                                saveAlarm(updated)
                                 Toast.makeText(
                                     context,
                                     "Alarm set for ${formatClock(option.hour, option.minute)}",
