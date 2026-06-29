@@ -79,7 +79,8 @@ import com.allinone.blocker.ui.theme.ThemePreference
 
 enum class Screen {
     HOME, PERMISSIONS, BLOCKED_APPS, BLOCKED_WEBSITES, APP_PICKER, APP_RULES,
-    LOCKDOWN, WHITELIST, STRICT_MODE, STATS, SETTINGS, STRICT_ALARM, SLEEP_CALCULATOR, PROFILE, STREAKS
+    LOCKDOWN, WHITELIST, STRICT_MODE, STATS, SETTINGS,
+    STRICT_ALARM_LIST, STRICT_ALARM_EDIT, SLEEP_CALCULATOR, PROFILE, STREAKS
 }
 
 data class NavTab(
@@ -139,17 +140,18 @@ class MainActivity : ComponentActivity() {
                             android.os.Handler(mainLooper).postDelayed({ backPressedOnce = false }, 2_000)
                         }
                     }
-                    Screen.BLOCKED_APPS     -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.BLOCKED_WEBSITES -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.APP_PICKER       -> { currentScreen.value = Screen.BLOCKED_APPS; backPressedOnce = false }
-                    Screen.APP_RULES        -> { currentScreen.value = Screen.BLOCKED_APPS; backPressedOnce = false }
-                    Screen.WHITELIST        -> { currentScreen.value = Screen.LOCKDOWN;     backPressedOnce = false }
-                    Screen.STRICT_ALARM     -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.SLEEP_CALCULATOR -> { currentScreen.value = Screen.STRICT_ALARM; backPressedOnce = false }
-                    Screen.STREAKS          -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.PERMISSIONS      -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.SETTINGS         -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
-                    Screen.PROFILE          -> { currentScreen.value = Screen.HOME;         backPressedOnce = false }
+                    Screen.BLOCKED_APPS     -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.BLOCKED_WEBSITES -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.APP_PICKER       -> { currentScreen.value = Screen.BLOCKED_APPS;     backPressedOnce = false }
+                    Screen.APP_RULES        -> { currentScreen.value = Screen.BLOCKED_APPS;     backPressedOnce = false }
+                    Screen.WHITELIST        -> { currentScreen.value = Screen.LOCKDOWN;         backPressedOnce = false }
+                    Screen.STRICT_ALARM_LIST -> { currentScreen.value = Screen.HOME;            backPressedOnce = false }
+                    Screen.STRICT_ALARM_EDIT -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
+                    Screen.SLEEP_CALCULATOR -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
+                    Screen.STREAKS          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.PERMISSIONS      -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.SETTINGS         -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.PROFILE          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     else -> { currentScreen.value = Screen.HOME; backPressedOnce = false }
                 }
             }
@@ -209,6 +211,8 @@ fun AppRoot(
 ) {
     var screen by screenState
     var selectedPackage by remember { mutableStateOf<String?>(null) }
+    var selectedAlarmId by remember { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val pendingAction by StrictModeGate.pendingAction.collectAsState()
     val strictConfig  by BlockerRepository.strictMode.collectAsState()
@@ -227,8 +231,8 @@ fun AppRoot(
     // navigation actually reads as movement, instead of a hard cut.
     val subScreens = setOf(
         Screen.BLOCKED_APPS, Screen.BLOCKED_WEBSITES, Screen.APP_PICKER, Screen.APP_RULES,
-        Screen.WHITELIST, Screen.STRICT_ALARM, Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS,
-        Screen.SETTINGS, Screen.STREAKS
+        Screen.WHITELIST, Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT,
+        Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS, Screen.SETTINGS, Screen.STREAKS
     )
     if (screen in subScreens) {
         com.allinone.blocker.ui.motion.ScreenPush(targetState = screen) { current ->
@@ -248,11 +252,28 @@ fun AppRoot(
                     onBack = { screen = Screen.BLOCKED_APPS }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
-                Screen.STRICT_ALARM -> StrictAlarmScreen(
-                    onBack = { screen = Screen.STRICT_MODE },
-                    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
+                Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
+                    onBack = { screen = Screen.HOME },
+                    onAddAlarm = {
+                        val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault()
+                        selectedAlarmId = fresh.id
+                        screen = Screen.STRICT_ALARM_EDIT
+                    },
+                    onEditAlarm = { alarmId ->
+                        selectedAlarmId = alarmId
+                        screen = Screen.STRICT_ALARM_EDIT
+                    }
                 )
-                Screen.SLEEP_CALCULATOR -> SleepCalculatorScreen(onBack = { screen = Screen.STRICT_ALARM })
+                Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
+                    alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault().id,
+                    onBack = { screen = Screen.STRICT_ALARM_LIST },
+                    onDelete = { alarmId ->
+                        BlockerRepository.removeStrictAlarmEntry(alarmId)
+                        com.allinone.blocker.data.AlarmScheduler.cancel(context, alarmId)
+                        screen = Screen.STRICT_ALARM_LIST
+                    }
+                )
+                Screen.SLEEP_CALCULATOR -> SleepCalculatorScreen(onBack = { screen = Screen.STRICT_ALARM_LIST })
                 Screen.PERMISSIONS -> PermissionsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
                 Screen.SETTINGS -> SettingsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
                 Screen.STREAKS -> StreaksScreen(onBack = { screen = Screen.HOME })
@@ -280,7 +301,7 @@ fun AppRoot(
                 onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
                 onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
                 onSettings            = { screen = Screen.SETTINGS },
-                onAlarmClick          = { screen = Screen.STRICT_ALARM },
+                onAlarmClick          = { screen = Screen.STRICT_ALARM_LIST },
                 onOpenStreaks         = { screen = Screen.STREAKS },
                 onOpenStats           = { screen = Screen.STATS },
                 isDarkTheme           = isDarkTheme,
