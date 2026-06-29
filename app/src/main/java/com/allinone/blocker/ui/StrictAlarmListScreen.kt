@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,13 +62,15 @@ import java.util.Locale
  *                          an editor for it.
  * @param onEditAlarm       a row was tapped — caller should navigate to an
  *                          editor for this entry's id.
+ * @param onOpenSleepCalculator  the sleep calculator icon was tapped.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StrictAlarmListScreen(
     onBack: () -> Unit,
     onAddAlarm: () -> Unit = {},
-    onEditAlarm: (String) -> Unit = {}
+    onEditAlarm: (String) -> Unit = {},
+    onOpenSleepCalculator: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
@@ -82,6 +85,9 @@ fun StrictAlarmListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenSleepCalculator) {
+                        Icon(Icons.Filled.Bedtime, contentDescription = "Sleep calculator")
+                    }
                     IconButton(onClick = onAddAlarm) {
                         Icon(Icons.Filled.Add, contentDescription = "Add alarm")
                     }
