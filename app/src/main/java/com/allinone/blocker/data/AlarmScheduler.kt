@@ -12,11 +12,10 @@ import com.allinone.blocker.receiver.AlarmTriggerReceiver
  * Talks to Android's built-in alarm-scheduling system (AlarmManager) on
  * behalf of every Strict Alarm entry in the list.
  *
- * SESSION 2 of the multi-alarm rework: this file now schedules each
- * [StrictAlarmEntry] independently instead of one single alarm. Each entry
- * gets its own private block of request codes (10 slots each, for its
- * burst), built from a stable number derived from the entry's id, so two
- * different alarms never collide or cancel each other.
+ * Each entry is scheduled independently and gets its own private block of
+ * request codes (10 slots each, for its burst), built from a stable number
+ * derived from the entry's id, so two different alarms never collide or
+ * cancel each other.
  */
 object AlarmScheduler {
 
@@ -111,46 +110,6 @@ object AlarmScheduler {
             cancelIndex(context, alarmId, index)
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // LEGACY single-alarm overloads.
-    //
-    // SleepCalculatorScreen.kt and StrictAlarmScreen.kt still use the old
-    // single StrictAlarm object (not the new list) — they're scheduled to
-    // be migrated to the new alarm list screen in a later session, not
-    // this one. These overloads keep them compiling and working exactly as
-    // before, by routing the old StrictAlarm through the same scheduling
-    // code under one fixed, reserved id so it never collides with any real
-    // entry in the new list.
-    // ─────────────────────────────────────────────────────────────────────
-
-    private const val LEGACY_SINGLE_ALARM_ID = "__legacy_single_strict_alarm__"
-
-    /** Legacy overload for the old single-alarm screens. */
-    fun schedule(context: Context, alarm: StrictAlarm) {
-        schedule(context, alarm.toEntry())
-    }
-
-    /** Legacy overload for the old single-alarm screens. */
-    fun scheduleIndex(context: Context, alarm: StrictAlarm, index: Int) {
-        scheduleIndex(context, alarm.toEntry(), index)
-    }
-
-    /** Legacy overload for the old single-alarm screens. */
-    fun cancel(context: Context) {
-        cancel(context, LEGACY_SINGLE_ALARM_ID)
-    }
-
-    private fun StrictAlarm.toEntry(): StrictAlarmEntry = StrictAlarmEntry(
-        id = LEGACY_SINGLE_ALARM_ID,
-        enabled = enabled,
-        hour = hour,
-        minute = minute,
-        daysOfWeek = daysOfWeek,
-        label = label,
-        multiAlarmEnabled = multiAlarmEnabled,
-        alarmCount = alarmCount
-    )
 
     private fun cancelIndex(context: Context, alarmId: String, index: Int) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
