@@ -644,22 +644,42 @@ private fun CustomFrictionSheet(
         }
     }
 
-    AlertDialog(
+    androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
-        containerColor = BgDarkest,
-        modifier = Modifier.fillMaxWidth(),
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(Icons.Filled.Settings, contentDescription = null, tint = TextTertiary, modifier = Modifier.size(18.dp))
-                Text("Build your own", fontWeight = FontWeight.Bold, color = TextPrimary)
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Scaffold(
+            containerColor = BgDarkest,
+            topBar = {
+                TopAppBar(
+                    title = { Text("Build your own", fontWeight = FontWeight.Bold, color = TextPrimary) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                        }
+                    },
+                    actions = {
+                        Button(
+                            onClick = onDismiss,
+                            modifier = Modifier.padding(end = 8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+                        ) {
+                            Text("Done", fontWeight = FontWeight.SemiBold)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
+                )
             }
-        },
-        text = {
+        ) { innerPad ->
             Column(
-                Modifier.verticalScroll(rememberScrollState()),
+                Modifier
+                    .padding(innerPad)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
@@ -804,14 +824,11 @@ private fun CustomFrictionSheet(
                         Text("Edit phrase", fontWeight = FontWeight.SemiBold)
                     }
                 }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)) {
-                Text("Done", fontWeight = FontWeight.SemiBold)
+
+                Spacer(Modifier.height(16.dp))
             }
         }
-    )
+    }
 
     if (showPinSetup) {
         PinSetupDialog(
