@@ -59,18 +59,11 @@ import java.util.Calendar
 import java.util.Locale
 
 /**
- * SESSION 4 of the multi-alarm rework.
- *
- * Redesigned, card-less editor for ONE [StrictAlarmEntry] — big clean time
- * display you tap to change, a row of small squarish "Repeat on" day chips
- * (white, soft shadow, pressable, fill with the accent color when selected),
- * and a toggle for the multi-alarm burst. No boxed Card backgrounds; content
+ * Card-less editor for ONE [StrictAlarmEntry] — a big clean time display
+ * you tap to change, a row of small squarish "Repeat on" day chips (white,
+ * soft shadow, pressable, fill with the accent color when selected), and a
+ * toggle for the multi-alarm burst. No boxed Card backgrounds; content
  * floats directly on the screen background, sectioned by spacing only.
- *
- * NOT WIRED INTO NAVIGATION YET. Builds and is safe to drop in, but nothing
- * currently routes to it — the old StrictAlarmScreen.kt (single alarm) is
- * still what's shown today. Hooking this + StrictAlarmListScreen together
- * happens in the next session.
  *
  * @param alarmId          which entry to edit. If it's not found in
  *                         BlockerRepository.strictAlarms (e.g. the "+" button
