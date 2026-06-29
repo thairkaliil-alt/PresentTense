@@ -6,7 +6,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -421,7 +423,8 @@ private fun EmptyAlarmsState(modifier: Modifier = Modifier, onAddAlarm: () -> Un
                 modifier = Modifier
                     .background(AccentBlue, CircleShape)
                     .pointerInput(onAddAlarm) {
-                        androidx.compose.foundation.gestures.detectTapGestures(onTap = { onAddAlarm() })
+                        detectTapGestures(onTap = { onAddAlarm() })
+import androidx.compose.foundation.gestures.detectTapGestures
                     }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
