@@ -345,6 +345,12 @@ object BlockerRepository {
         persistStrictAlarms()
     }
 
+    /** Saves a new ordering of the alarm list (from drag-to-reorder). */
+    fun reorderStrictAlarms(reordered: List<StrictAlarmEntry>) {
+        _strictAlarms.value = reordered
+        persistStrictAlarms()
+    }
+
     private fun persistStrictAlarms() {
         val arr = JSONArray()
         _strictAlarms.value.forEach { arr.put(it.toJson()) }
