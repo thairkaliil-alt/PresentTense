@@ -1,6 +1,5 @@
 package com.allinone.blocker.ui
 
-import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -66,7 +65,6 @@ import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.data.StreakRepository
-import com.allinone.blocker.service.BlockerForegroundService
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.BlockerTheme
@@ -116,7 +114,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         BlockerRepository.init(this)
-        startService(Intent(this, BlockerForegroundService::class.java))
+        // BlockerForegroundService (and its persistent notification) is no
+        // longer started here. Blocking runs entirely off the accessibility
+        // service, which needs no notification — see
+        // AppBlockerAccessibilityService.onServiceConnected() for details.
 
         isDarkTheme = mutableStateOf(ThemePreference.isDarkMode(this))
 
