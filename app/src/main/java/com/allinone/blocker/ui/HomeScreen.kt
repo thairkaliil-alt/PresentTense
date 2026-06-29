@@ -107,12 +107,15 @@ fun HomeScreen(
     val streak      by StreakRepository.streak.collectAsState()
     val brokenToday by StreakRepository.brokenToday.collectAsState()
 
-    val totalScreenMinutes = remember(refreshKey) {
+   val totalScreenMinutes = remember(refreshKey) {
         // Force a reconcile so the cache is warm on every home visit
         ScreenTimeTracker.reconcile(context, force = true)
         ScreenTimeTracker.todayTotalMinutes(context)
     }
 
+    val dailyGoalMinutes = remember(refreshKey) {
+        BlockerRepository.dailyGoalMinutes()
+    }
     val onReelsChange: (Boolean) -> Unit = remember {
         { BlockerRepository.setReelsKillSwitch(it) }
     }
@@ -204,6 +207,7 @@ fun HomeScreen(
 
                 ScreenTimeCard(
                     totalMinutes = totalScreenMinutes,
+                    goalMinutes = dailyGoalMinutes,
                     streak = streak,
                     brokenToday = brokenToday,
                     onShowStats = onOpenStats,
@@ -394,39 +398,46 @@ fun HomeSectionHeader(text: String) {
 @Composable
 fun ScreenTimeCard(
     totalMinutes: Int,
+    goalMinutes: Int,
     streak: Int,
     brokenToday: Boolean,
     onShowStats: () -> Unit,
     onStreakClick: () -> Unit
 ) {
+    val hasGoal = goalMinutes > 0
+
     val usageRatio by animateFloatAsState(
-        targetValue = (totalMinutes / 180f).coerceIn(0f, 1f),
+        targetValue = if (hasGoal) (totalMinutes.toFloat() / goalMinutes.toFloat()).coerceIn(0f, 1f)
+                      else (totalMinutes / 180f).coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 900),
         label = "usageBar"
     )
 
     val noData = totalMinutes == 0
 
-    // Colour encodes urgency — green when low, blue when moderate, amber when heavy
+    // Colour encodes urgency — thresholds use the real goal if one is set
+    val threshold1 = if (hasGoal) goalMinutes else 180
+    val threshold2 = if (hasGoal) (goalMinutes * 0.33).toInt() else 60
     val accentColor: Color = when {
-        totalMinutes >= 180 -> AccentAmber
-        totalMinutes >= 60  -> AccentBlue
-        else                -> AccentTeal
+        totalMinutes >= threshold1 -> AccentAmber
+        totalMinutes >= threshold2 -> AccentBlue
+        else                       -> AccentTeal
     }
 
     val mutedColor = Color(0xFF8A8FA8)
 
     // Single inline label sitting just below the big number
     val statusLabel = when {
-        noData                  -> "No data yet"
-        totalMinutes < 60       -> "Light day"
-        totalMinutes in 60..179 -> "Moderate"
-        else                    -> "Heavy day"
+        noData                                     -> "No data yet"
+        hasGoal && totalMinutes >= goalMinutes      -> "Goal reached"
+        hasGoal                                    -> "${goalMinutes - totalMinutes} min left"
+        totalMinutes < 60                          -> "Light day"
+        totalMinutes in 60..179                    -> "Moderate"
+        else                                       -> "Heavy day"
     }
 
-    // Percentage of the 3h daily goal — shown inline, not as a separate caption
-    val goalPercent = ((totalMinutes / 180f) * 100).toInt().coerceAtMost(100)
-
+    // Percentage of the actual saved goal (0 = no goal set)
+    val goalPercent = if (hasGoal) ((totalMinutes.toFloat() / goalMinutes.toFloat()) * 100).toInt().coerceAtMost(100) else 0
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -459,7 +470,8 @@ fun ScreenTimeCard(
             // ── 3. Status + goal — one quiet line below the number ────────
             Text(
                 text = if (noData) "Tracking will start shortly"
-                       else "$statusLabel · $goalPercent% of daily goal",
+                      else if (hasGoal) "$statusLabel · $goalPercent% of goal"
+                       else statusLabel,
                 style = MaterialTheme.typography.bodySmall,
                 color = mutedColor
             )
