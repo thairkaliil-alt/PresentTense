@@ -610,9 +610,9 @@ private fun HistorySection(history: List<Pair<Int, Boolean>>) {
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(7),
-            modifier = Modifier.height((rows * 52).dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.height((rows * 56).dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Empty cells before first day
             items(firstDayOfWeek) {
@@ -651,7 +651,7 @@ private fun HistorySection(history: List<Pair<Int, Boolean>>) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 AppFlame(
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(16.dp),
                     desaturated = false
                 )
                 Text("Streak day", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
@@ -660,7 +660,7 @@ private fun HistorySection(history: List<Pair<Int, Boolean>>) {
                 Box(
                     modifier = Modifier
                         .size(14.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .clip(CircleShape)
                         .background(AccentRed.copy(alpha = 0.45f))
                 )
                 Text("Broken day", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
@@ -668,6 +668,20 @@ private fun HistorySection(history: List<Pair<Int, Boolean>>) {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CALENDAR DAY CELL — Duolingo-style "number sitting inside the flame"
+//
+// PLAIN-ENGLISH SUMMARY:
+// On a streak day, the flame isn't a tiny icon floating above the number —
+// it's drawn big, filling almost the whole cell, and the day number sits
+// on top of it near the bottom (right where the flame's hot core is), so it
+// looks like the number is glowing out of the fire — same as Duolingo's
+// calendar badges.
+//
+// On a non-streak day, there's no flame at all — just a plain muted circle
+// (or nothing, for days with no data yet) with the number on top.
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun CalendarDayCell(
@@ -677,47 +691,81 @@ private fun CalendarDayCell(
     isClean: Boolean,
     hasData: Boolean
 ) {
+    val isStreakDay = hasData && isClean && !isFuture
+    val isBrokenDay = hasData && !isClean && !isFuture
+
     Box(
         modifier = Modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                when {
-                    isToday -> AccentAmber.copy(alpha = 0.15f)
-                    isFuture -> Color.Transparent
-                    hasData && isClean -> AccentTeal.copy(alpha = 0.12f)
-                    hasData && !isClean -> AccentRed.copy(alpha = 0.12f)
-                    else -> Color.Transparent
-                }
-            ),
+            .padding(1.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            // Show flame icon on clean days (streak days)
-            if (hasData && isClean && !isFuture) {
-                AppFlame(
-                    modifier = Modifier.size(18.dp),
-                    desaturated = false
-                )
-                Spacer(Modifier.height(2.dp))
+        when {
+            // ── Streak day: big flame fills the cell, number sits inside it ──
+            isStreakDay -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AppFlame(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .scale(1.35f), // flame overflows the cell slightly, like Duolingo's badge
+                        desaturated = false
+                    )
+                    Text(
+                        text = "$dayNumber",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .padding(top = 8.dp) // nudge down toward the flame's hot core
+                    )
+                }
             }
-            
-            // Day number
-            Text(
-                text = "$dayNumber",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                color = when {
-                    isFuture -> TextTertiary.copy(alpha = 0.4f)
-                    isToday -> AccentAmber
-                    hasData && !isClean -> AccentRed
-                    else -> TextPrimary
-                },
-                fontSize = 11.sp
-            )
+
+            // ── Broken day: plain muted red circle, no flame ─────────────────
+            isBrokenDay -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize(0.78f)
+                        .clip(CircleShape)
+                        .background(AccentRed.copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$dayNumber",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Normal,
+                        color = AccentRed,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            // ── Today, no result yet / future / no data: plain background ───
+            else -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize(0.78f)
+                        .clip(CircleShape)
+                        .background(
+                            if (isToday) AccentAmber.copy(alpha = 0.15f) else Color.Transparent
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$dayNumber",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isFuture) TextTertiary.copy(alpha = 0.4f)
+                                else if (isToday) AccentAmber
+                                else TextPrimary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
         }
     }
 }
