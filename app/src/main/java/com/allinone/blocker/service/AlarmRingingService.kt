@@ -36,26 +36,16 @@ class AlarmRingingService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         startRinging()
 
-        // SESSION 2 of the multi-alarm rework: look up WHICH alarm entry
-        // fired (by id) from the list, instead of assuming there's only
-        // one alarm. Re-arm only the slot that just fired so the rest of
-        // that entry's multi-alarm burst (e.g. +3 min, +6 min) still rings
-        // today. We do this now rather than on dismiss, so it's re-armed
-        // even if the user never dismisses it (e.g. phone dies, app killed).
-        //
-        // SleepCalculatorScreen.kt and StrictAlarmScreen.kt still schedule
-        // through the legacy single-alarm overload (see AlarmScheduler),
-        // so if no matching entry is found in the new list, fall back to
-        // re-arming the legacy single alarm instead — otherwise that one
-        // would stop re-arming itself the moment this file changed.
+        // Look up WHICH alarm entry fired (by id) from the list. Re-arm
+        // only the slot that just fired so the rest of that entry's
+        // multi-alarm burst (e.g. +3 min, +6 min) still rings today. We do
+        // this now rather than on dismiss, so it's re-armed even if the
+        // user never dismisses it (e.g. phone dies, app killed).
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         val index = intent?.getIntExtra(AlarmScheduler.EXTRA_ALARM_INDEX, 0) ?: 0
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
             AlarmScheduler.scheduleIndex(applicationContext, alarm, index)
-        } else {
-            val legacyAlarm = BlockerRepository.strictAlarm.value
-            AlarmScheduler.scheduleIndex(applicationContext, legacyAlarm, index)
         }
 
         return START_NOT_STICKY
