@@ -1,6 +1,7 @@
 package com.allinone.blocker.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,43 +28,38 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
 import com.allinone.blocker.ui.motion.StaggeredColumn
-import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextSecondary
 import java.util.Calendar
 import java.util.Locale
 
 /**
- * The "all alarms" list screen — shows every [StrictAlarmEntry] as a clean,
- * card-less row (big time, short repeat-days summary, a toggle on the
- * right), closest in spirit to a normal phone clock app's alarm list.
- * Tapping a row opens the editor for that one alarm; tapping "+" creates a
- * new one and opens the editor for it.
- *
- * @param onBack            back arrow in the top bar.
- * @param onAddAlarm        "+" button tapped — caller should create a new
- *                          entry (e.g. via BlockerRepository.newStrictAlarmId()
- *                          + StrictAlarmEntry.newDefault()) and navigate to
- *                          an editor for it.
- * @param onEditAlarm       a row was tapped — caller should navigate to an
- *                          editor for this entry's id.
- * @param onOpenSleepCalculator  the sleep calculator icon was tapped.
+ * The "all alarms" list screen. Each StrictAlarmEntry appears as one or more
+ * rows depending on its multi-alarm count — so if you set 3 alarms at 7:00 AM,
+ * you see three rows: 7:00, 7:03, 7:06, all grouped under the same entry.
+ * Each row has its own toggle. Long-pressing any row shows a delete dialog.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,6 +71,33 @@ fun StrictAlarmListScreen(
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
+
+    // Which alarm entry the user long-pressed (null = no dialog showing)
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+
+    // Delete confirmation dialog
+    if (pendingDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("Delete alarm?") },
+            text = { Text("This alarm will be removed and cancelled.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val id = pendingDeleteId!!
+                    BlockerRepository.removeStrictAlarmEntry(id)
+                    AlarmScheduler.cancel(context, id)
+                    pendingDeleteId = null
+                }) {
+                    Text("Delete", color = AccentRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -115,17 +139,52 @@ fun StrictAlarmListScreen(
             val sorted = remember(alarms) {
                 alarms.sortedWith(compareBy({ it.hour }, { it.minute }))
             }
-            StaggeredColumn(items = sorted, spacing = 0.dp) { entry ->
-                AlarmRow(
-                    entry = entry,
-                    onToggle = { checked ->
-                        BlockerRepository.setStrictAlarmEntryEnabled(entry.id, checked)
-                        val updated = entry.copy(enabled = checked)
-                        AlarmScheduler.schedule(context, updated)
-                    },
-                    onClick = { onEditAlarm(entry.id) }
-                )
+
+            // Each entry expands into one row per burst slot
+            sorted.forEach { entry ->
+                val slotCount = entry.effectiveAlarmCount()
+                for (slotIndex in 0 until slotCount) {
+                    val slotMinuteOffset = slotIndex * STRICT_ALARM_INTERVAL_MINUTES
+                    val totalMinutes = entry.hour * 60 + entry.minute + slotMinuteOffset
+                    val displayHour = (totalMinutes / 60) % 24
+                    val displayMinute = totalMinutes % 60
+
+                    // For burst rows after the first, show a subtle "part of N" label
+                    val subLabel = when {
+                        slotCount == 1 -> repeatSummary(entry.daysOfWeek)
+                        slotIndex == 0 -> repeatSummary(entry.daysOfWeek) + "  ·  ${slotCount}× burst"
+                        else -> "+${slotMinuteOffset} min"
+                    }
+
+                    AlarmRow(
+                        hour = displayHour,
+                        minute = displayMinute,
+                        subLabel = subLabel,
+                        enabled = entry.enabled,
+                        // Only the first slot row shows the toggle (controls the whole entry)
+                        showToggle = slotIndex == 0,
+                        onToggle = { checked ->
+                            BlockerRepository.setStrictAlarmEntryEnabled(entry.id, checked)
+                            val updated = entry.copy(enabled = checked)
+                            AlarmScheduler.schedule(context, updated)
+                        },
+                        onClick = { onEditAlarm(entry.id) },
+                        onLongPress = { pendingDeleteId = entry.id }
+                    )
+                }
+
+                // Thin divider between different alarm entries
+                if (entry != sorted.last()) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .padding(horizontal = 4.dp)
+                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f))
+                    )
+                }
             }
+
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -133,39 +192,54 @@ fun StrictAlarmListScreen(
 
 @Composable
 private fun AlarmRow(
-    entry: StrictAlarmEntry,
+    hour: Int,
+    minute: Int,
+    subLabel: String,
+    enabled: Boolean,
+    showToggle: Boolean,
     onToggle: (Boolean) -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .pressable(onClick = onClick)
-            .padding(vertical = 18.dp),
+            .pointerInput(onClick, onLongPress) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongPress() }
+                )
+            }
+            .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                text = formatTime(entry.hour, entry.minute),
+                text = formatTime(hour, minute),
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
-                color = if (entry.enabled) MaterialTheme.colorScheme.onBackground else TextMuted
+                color = if (enabled) MaterialTheme.colorScheme.onBackground else TextMuted
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = repeatSummary(entry.daysOfWeek),
+                text = subLabel,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (entry.enabled) TextSecondary else TextMuted
+                color = if (enabled) TextSecondary else TextMuted
             )
         }
-        Switch(
-            checked = entry.enabled,
-            onCheckedChange = onToggle,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = AccentBlue
+        if (showToggle) {
+            Switch(
+                checked = enabled,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AccentBlue
+                )
             )
-        )
+        } else {
+            // Placeholder so the row width stays consistent
+            Spacer(Modifier.size(52.dp))
+        }
     }
 }
 
@@ -195,7 +269,9 @@ private fun EmptyAlarmsState(modifier: Modifier = Modifier, onAddAlarm: () -> Un
             Box(
                 modifier = Modifier
                     .background(AccentBlue, CircleShape)
-                    .pressable(onClick = onAddAlarm)
+                    .pointerInput(onAddAlarm) {
+                        detectTapGestures(onTap = { onAddAlarm() })
+                    }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
