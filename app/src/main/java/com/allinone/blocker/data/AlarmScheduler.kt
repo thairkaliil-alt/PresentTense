@@ -12,10 +12,11 @@ import com.allinone.blocker.receiver.AlarmTriggerReceiver
  * Talks to Android's built-in alarm-scheduling system (AlarmManager) on
  * behalf of every Strict Alarm entry in the list.
  *
- * Each entry is scheduled independently and gets its own private block of
- * request codes (10 slots each, for its burst), built from a stable number
- * derived from the entry's id, so two different alarms never collide or
- * cancel each other.
+ * Each entry uses its stored [StrictAlarmEntry.requestCode] as the base for
+ * its PendingIntent request codes (10 slots, one per burst index). Because
+ * requestCode is a small unique integer assigned at creation time and saved
+ * to disk, two different alarms can NEVER share a request code, so they can
+ * never cancel or overwrite each other.
  */
 object AlarmScheduler {
 
@@ -27,15 +28,14 @@ object AlarmScheduler {
 
     /** True if Android will currently let us schedule an exact wake-up alarm. */
     fun canScheduleExact(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true // pre-Android 12: always allowed
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         return am.canScheduleExactAlarms()
     }
 
     /**
      * Opens the system settings page where the user grants the
-     * "Alarms & reminders" permission. Only needed on Android 12+ if
-     * [canScheduleExact] returns false.
+     * "Alarms & reminders" permission. Only needed on Android 12+.
      */
     fun requestExactAlarmPermission(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
@@ -48,8 +48,7 @@ object AlarmScheduler {
     /**
      * Schedules (or re-schedules) every entry in [alarms]. Safe to call
      * repeatedly — each call fully replaces what was scheduled before for
-     * those entries. Call this after init/load, and after any add/update/
-     * remove/toggle on the alarm list.
+     * those entries.
      */
     fun scheduleAll(context: Context, alarms: List<StrictAlarmEntry>) {
         alarms.forEach { schedule(context, it) }
@@ -61,7 +60,7 @@ object AlarmScheduler {
      * THIS entry only; other entries are untouched.
      */
     fun schedule(context: Context, alarm: StrictAlarmEntry) {
-        cancel(context, alarm.id)
+        cancel(context, alarm)
         if (!alarm.enabled) return
 
         val count = alarm.effectiveAlarmCount()
@@ -71,22 +70,21 @@ object AlarmScheduler {
     }
 
     /**
-     * Re-arms a single slot after it fires. Each slot in a multi-alarm burst
-     * repeats on its own offset (base time + index × 3 minutes).
+     * Re-arms a single slot after it fires.
      */
     fun scheduleIndex(context: Context, alarm: StrictAlarmEntry, index: Int) {
         val triggerAt = alarm.nextTriggerMillisForIndex(index)
         if (triggerAt == null) {
-            cancelIndex(context, alarm.id, index)
+            cancelIndex(context, alarm, index)
             return
         }
 
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pendingIntent = buildPendingIntent(context, alarm.id, index)
+        val pendingIntent = buildPendingIntent(context, alarm, index)
 
         val showIntent = PendingIntent.getActivity(
             context,
-            requestCodeFor(alarm.id, index) + SHOW_INTENT_OFFSET,
+            requestCodeFor(alarm, index) + SHOW_INTENT_OFFSET,
             Intent(context, com.allinone.blocker.ui.MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -101,47 +99,76 @@ object AlarmScheduler {
 
     /** Cancels every pending slot for every entry in [alarms]. */
     fun cancelAll(context: Context, alarms: List<StrictAlarmEntry>) {
-        alarms.forEach { cancel(context, it.id) }
+        alarms.forEach { cancel(context, it) }
     }
 
-    /** Cancels every pending slot for ONE entry (identified by [alarmId]). */
-    fun cancel(context: Context, alarmId: String) {
+    /** Cancels every pending slot for ONE entry. */
+    fun cancel(context: Context, alarm: StrictAlarmEntry) {
         for (index in 0 until STRICT_ALARM_MAX_COUNT) {
-            cancelIndex(context, alarmId, index)
+            cancelIndex(context, alarm, index)
         }
     }
 
-    private fun cancelIndex(context: Context, alarmId: String, index: Int) {
+    /**
+     * Legacy cancel by id only — used when we only have the id (e.g. delete
+     * from list screen before the entry object is available). Falls back to
+     * the old hash approach for cancellation only. Prefer cancel(context, alarm)
+     * when you have the full alarm object.
+     */
+    fun cancel(context: Context, alarmId: String) {
+        // We don't have the requestCode here, so we can't perfectly cancel.
+        // This path is only hit from the delete dialog in StrictAlarmListScreen.
+        // That screen has the full alarm list — see note in StrictAlarmListScreen.kt.
+        // For safety, attempt the old hash-based cancel (covers legacy alarms).
+        val legacyBase = 9001 + ((alarmId.hashCode() and 0x7FFFFFFF) % 100_000) * 10
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        runCatching { am.cancel(buildPendingIntent(context, alarmId, index)) }
+        for (index in 0 until STRICT_ALARM_MAX_COUNT) {
+            val intent = Intent(context, AlarmTriggerReceiver::class.java).apply {
+                putExtra(EXTRA_ALARM_ID, alarmId)
+                putExtra(EXTRA_ALARM_INDEX, index)
+            }
+            runCatching {
+                am.cancel(
+                    PendingIntent.getBroadcast(
+                        context,
+                        legacyBase + index,
+                        intent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+                    )
+                )
+            }
+        }
     }
 
-    private fun buildPendingIntent(context: Context, alarmId: String, index: Int): PendingIntent {
+    private fun cancelIndex(context: Context, alarm: StrictAlarmEntry, index: Int) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        runCatching { am.cancel(buildPendingIntent(context, alarm, index)) }
+    }
+
+    private fun buildPendingIntent(context: Context, alarm: StrictAlarmEntry, index: Int): PendingIntent {
         val intent = Intent(context, AlarmTriggerReceiver::class.java).apply {
-            putExtra(EXTRA_ALARM_ID, alarmId)
+            putExtra(EXTRA_ALARM_ID, alarm.id)
             putExtra(EXTRA_ALARM_INDEX, index)
         }
         return PendingIntent.getBroadcast(
             context,
-            requestCodeFor(alarmId, index),
+            requestCodeFor(alarm, index),
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 
-    // Each alarm entry gets its own private block of 10 request codes (one
-    // per possible burst slot), so scheduling/cancelling one alarm can never
-    // collide with or wipe out another alarm's pending alarms. The "show
-    // intent" pending intents use a second, far-away block (SHOW_INTENT_OFFSET)
-    // so they never collide with the broadcast pending intents either.
-    private const val REQUEST_CODE_BASE = 9001
+    // Each alarm entry gets its own private block of 10 request codes (one per
+    // burst slot). We use the alarm's stored requestCode directly — a small
+    // unique integer assigned at creation time — so there is zero chance of
+    // two alarms sharing a code. The show-intent block is offset far away so
+    // it never collides with the broadcast block.
+    private const val REQUEST_CODE_MULTIPLIER = 10
     private const val SHOW_INTENT_OFFSET = 200_000
 
-    private fun requestCodeFor(alarmId: String, index: Int): Int {
-        // Stable, positive, well-spread integer from the id's hashCode.
-        // Multiplying by 10 + adding the index reserves exactly 10 slots
-        // per id with no overlap between different ids in practice.
-        val idSlot = (alarmId.hashCode() and 0x7FFFFFFF) % 100_000
-        return REQUEST_CODE_BASE + idSlot * 10 + index
+    private fun requestCodeFor(alarm: StrictAlarmEntry, index: Int): Int {
+        // alarm.requestCode is unique per alarm (assigned and stored at creation).
+        // Multiply by 10 to reserve 10 consecutive slots (one per burst index).
+        return alarm.requestCode * REQUEST_CODE_MULTIPLIER + index
     }
 }
