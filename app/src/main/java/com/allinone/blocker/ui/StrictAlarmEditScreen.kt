@@ -89,9 +89,13 @@ fun StrictAlarmEditScreen(
     val canScheduleExact = remember { AlarmScheduler.canScheduleExact(context) }
 
     fun save(updated: StrictAlarmEntry) {
+        // The alarm is always pre-saved to the list before this screen opens
+        // (onAddAlarm in MainActivity calls addStrictAlarmEntry first).
+        // So we always update — never add — which prevents duplicate entries.
         if (allAlarms.any { it.id == updated.id }) {
             BlockerRepository.updateStrictAlarmEntry(updated)
         } else {
+            // Fallback: shouldn't happen normally, but handle it gracefully
             BlockerRepository.addStrictAlarmEntry(updated)
         }
         AlarmScheduler.schedule(context, updated)
@@ -206,12 +210,12 @@ fun StrictAlarmEditScreen(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Ring multiple times",
+                        "Snooze burst",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "Each ring is $STRICT_ALARM_INTERVAL_MINUTES min after the last — harder to ignore.",
+                        "This alarm re-rings every $STRICT_ALARM_INTERVAL_MINUTES min. To add a separate alarm at a different time, tap + on the alarms list.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
