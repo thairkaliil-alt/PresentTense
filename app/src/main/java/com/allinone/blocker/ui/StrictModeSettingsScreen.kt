@@ -234,7 +234,8 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                 .padding(pad)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp)
+                .padding(top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // ── Master toggle ────────────────────────────────────────────────
