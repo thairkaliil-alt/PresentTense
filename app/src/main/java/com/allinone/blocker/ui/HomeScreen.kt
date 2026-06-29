@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.AlarmOn
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideocamOff
@@ -74,6 +75,7 @@ import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentGreen
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -111,6 +113,10 @@ fun HomeScreen(
         // Force a reconcile so the cache is warm on every home visit
         ScreenTimeTracker.reconcile(context, force = true)
         ScreenTimeTracker.todayTotalMinutes(context)
+    }
+
+    val yesterdayScreenMinutes = remember(refreshKey) {
+        ScreenTimeTracker.yesterdayTotalMinutes(context)
     }
 
     val dailyGoalMinutes = remember(refreshKey) {
@@ -207,6 +213,7 @@ fun HomeScreen(
 
                 ScreenTimeCard(
                     totalMinutes = totalScreenMinutes,
+                    yesterdayMinutes = yesterdayScreenMinutes,
                     goalMinutes = dailyGoalMinutes,
                     streak = streak,
                     brokenToday = brokenToday,
@@ -398,6 +405,7 @@ fun HomeSectionHeader(text: String) {
 @Composable
 fun ScreenTimeCard(
     totalMinutes: Int,
+    yesterdayMinutes: Int = 0,
     goalMinutes: Int,
     streak: Int,
     brokenToday: Boolean,
@@ -438,6 +446,15 @@ fun ScreenTimeCard(
 
     // Percentage of the actual saved goal (0 = no goal set)
     val goalPercent = if (hasGoal) ((totalMinutes.toFloat() / goalMinutes.toFloat()) * 100).toInt().coerceAtMost(100) else 0
+
+    // Quiet positive-only comparison vs. yesterday. Only ever shows improvement -
+    // if today is equal to or higher than yesterday, this is simply null and the
+    // pill doesn't render. No red state, no "worse than yesterday" message ever.
+    val improvementPercent: Int? = if (yesterdayMinutes > 0 && totalMinutes < yesterdayMinutes) {
+        (((yesterdayMinutes - totalMinutes).toFloat() / yesterdayMinutes.toFloat()) * 100)
+            .toInt()
+            .coerceIn(1, 99)
+    } else null
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -450,12 +467,38 @@ fun ScreenTimeCard(
                 .padding(horizontal = 20.dp, vertical = 18.dp)
         ) {
 
-            // ── 1. Small section label ────────────────────────────────────
-            Text(
-                text = "Screen time today",
-                style = MaterialTheme.typography.labelMedium,
-                color = mutedColor
-            )
+            // ── 1. Small section label + quiet positive comparison ────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Screen time today",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = mutedColor
+                )
+
+                if (improvementPercent != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = AccentGreen,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "$improvementPercent% vs yesterday",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = AccentGreen
+                        )
+                    }
+                }
+            }
 
             Spacer(Modifier.height(8.dp))
 
