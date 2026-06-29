@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">الحاضر</string>
+    <string name="accessibility_label">الحاضر</string>
+    <string name="accessibility_description">يكتشف فتح التطبيقات المحظورة ويعرض شاشة الحظر. لا تغادر أي بيانات جهازك.</string>
+    <string name="notif_channel_name">الحظر مفعّل</string>
+    <string name="notif_title">الحاضر يعمل</string>
+    <string name="notif_text">يحمي تركيزك في الخلفية.</string>
+    <string name="alarm_channel_name">المنبه الصارم</string>
+    <string name="alarm_notif_title">المنبه الصارم يرن الآن</string>
+    <string name="alarm_notif_text">حل اللغز لإيقافه.</string>
+</resources>

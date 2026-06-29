@@ -1,0 +1,724 @@
+package com.allinone.blocker.ui
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.AlarmOn
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import java.util.Calendar
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.ScreenTimeTracker
+import com.allinone.blocker.data.StreakRepository
+import com.allinone.blocker.ui.theme.AccentAmber
+import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentRed
+import com.allinone.blocker.ui.theme.AccentTeal
+import com.allinone.blocker.ui.theme.BgDarkest
+import com.allinone.blocker.ui.theme.BgScreen
+import com.allinone.blocker.ui.theme.CardSurface
+import com.allinone.blocker.ui.theme.TextPrimary
+import com.allinone.blocker.ui.theme.TextSecondary
+import com.allinone.blocker.ui.theme.TextTertiary
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    refreshKey: Int,
+    onPermissions: () -> Unit,
+    onOpenBlockedApps: () -> Unit,
+    onOpenBlockedWebsites: () -> Unit,
+    onSettings: () -> Unit,
+    onAlarmClick: () -> Unit = {},
+    onOpenStreaks: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
+    isDarkTheme: Boolean,
+    onThemeToggle: (Boolean) -> Unit
+) {
+    val context = LocalContext.current
+
+    val apps     by BlockerRepository.apps.collectAsState()
+    val websites by BlockerRepository.websites.collectAsState()
+    val reels    by BlockerRepository.reelsKillSwitch.collectAsState()
+
+    val streak      by StreakRepository.streak.collectAsState()
+    val brokenToday by StreakRepository.brokenToday.collectAsState()
+
+    val totalScreenMinutes = remember(refreshKey) {
+        // Force a reconcile so the cache is warm on every home visit
+        ScreenTimeTracker.reconcile(context, force = true)
+        ScreenTimeTracker.todayTotalMinutes(context)
+    }
+
+    val onReelsChange: (Boolean) -> Unit = remember {
+        { BlockerRepository.setReelsKillSwitch(it) }
+    }
+
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            AppDrawerContent(
+                onAlarmClick = {
+                    scope.launch {
+                        drawerState.close()
+                        onAlarmClick()
+                    }
+                },
+                onSettingsClick = {
+                    scope.launch {
+                        drawerState.close()
+                        onSettings()
+                    }
+                }
+            )
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { scope.launch { drawerState.open() } }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Menu,
+                                    contentDescription = "Open menu",
+                                    tint = TextPrimary
+                                )
+                            }
+                            StreakBadge(
+                                streak = streak,
+                                brokenToday = brokenToday,
+                                onClick = onOpenStreaks
+                            )
+                        }
+                    },
+                    title = {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Home",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        }
+                    },
+                    actions = {
+                        ThemeToggleSwitch(
+                            checked = isDarkTheme,
+                            onCheckedChange = onThemeToggle,
+                            trackWidth = 38.dp,
+                            trackHeight = 21.dp,
+                            modifier = Modifier.padding(end = 16.dp)
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = BgScreen,
+                        scrolledContainerColor = BgScreen
+                    )
+                )
+            },
+            containerColor = BgScreen
+        ) { pad ->
+            Column(
+                modifier = Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Spacer(Modifier.height(4.dp))
+
+                GreetingHeader(userName = "Arthur")
+
+                ScreenTimeCard(
+                    totalMinutes = totalScreenMinutes,
+                    streak = streak,
+                    brokenToday = brokenToday,
+                    onShowStats = onOpenStats,
+                    onStreakClick = onOpenStreaks
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HomeSectionHeader(text = "Shortcuts")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ShortcutCard(
+                            modifier = Modifier.weight(1f),
+                            icon = Icons.Filled.Apps,
+                            count = apps.size,
+                            label = "Blocked Apps",
+                            accentColor = AccentBlue,
+                            onClick = onOpenBlockedApps
+                        )
+                        ShortcutCard(
+                            modifier = Modifier.weight(1f),
+                            icon = Icons.Filled.Language,
+                            count = websites.size,
+                            label = "Blocked Websites",
+                            accentColor = AccentTeal,
+                            onClick = onOpenBlockedWebsites
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HomeSectionHeader(text = "Quick Controls")
+                    ToggleCard(
+                        title = "Reels & Shorts",
+                        subtitle = "Instantly block Instagram, YouTube & TikTok feeds",
+                        checked = reels,
+                        accentColor = AccentRed,
+                        icon = Icons.Filled.VideocamOff,
+                        onChange = onReelsChange
+                    )
+                }
+
+                PresetsSection()
+
+                Spacer(Modifier.height(80.dp))
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAK BADGE (top bar)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun StreakBadge(
+    streak: Int,
+    brokenToday: Boolean,
+    onClick: () -> Unit
+) {
+    val flameColor = if (brokenToday && streak == 0) TextTertiary else AccentAmber
+
+    val numScale = remember { Animatable(1f) }
+    val streakVersion = remember { mutableIntStateOf(0) }
+    LaunchedEffect(streak) {
+        streakVersion.intValue++
+        if (streakVersion.intValue > 1) {
+            numScale.snapTo(1.4f)
+            numScale.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness    = Spring.StiffnessMedium
+                )
+            )
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .padding(start = 2.dp, end = 8.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .background(flameColor.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        AppFlame(
+            modifier = Modifier.size(18.dp),
+            desaturated = brokenToday && streak == 0,
+            pulseKey = streak
+        )
+        Text(
+            text = "$streak",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = flameColor,
+            modifier = Modifier.scale(numScale.value)
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIDE DRAWER
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit) {
+    ModalDrawerSheet(
+        drawerContainerColor = BgDarkest,
+        modifier = Modifier
+            .width(280.dp)
+            .fillMaxHeight()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 24.dp, horizontal = 20.dp)
+        ) {
+            Text(
+                text = "AllinOne Blocker",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Text(
+                text = "Menu",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
+            Spacer(Modifier.height(20.dp))
+            DrawerItem(icon = Icons.Filled.AlarmOn, label = "Strict Alarm", onClick = onAlarmClick)
+            Spacer(Modifier.height(8.dp))
+            DrawerItem(icon = Icons.Filled.Settings, label = "Settings",     onClick = onSettingsClick)
+        }
+    }
+}
+
+@Composable
+fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Icon(imageVector = icon, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(22.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
+    }
+}
+
+@Composable
+fun HomeSectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = TextPrimary
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN TIME HERO CARD
+//
+// Three fixes applied here vs. previous version:
+//
+// FIX 1 — STREAK: Always show the streak row. When streak == 0 it shows
+//   "Day 1 – keep it up!" instead of being invisible. The top-bar badge
+//   already hides contextually; the card should always give feedback.
+//
+// FIX 2 — "Show me →": Promoted from labelMedium to bodyMedium + SemiBold
+//   with a solid tinted pill background so it reads as a real tappable
+//   element, not just small text.
+//
+// FIX 3 — BAR: When totalMinutes == 0 the bar now shows a faint shimmer
+//   "ghost" fill (15% of bar width) so it never looks broken. A "No usage
+//   recorded yet" sub-label appears below to explain why. The bar itself
+//   also animates in on composition so the user sees it load.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun ScreenTimeCard(
+    totalMinutes: Int,
+    streak: Int,
+    brokenToday: Boolean,
+    onShowStats: () -> Unit,
+    onStreakClick: () -> Unit
+) {
+    val usageRatio by animateFloatAsState(
+        targetValue = (totalMinutes / 180f).coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 900),
+        label = "usageBar"
+    )
+
+    val noData = totalMinutes == 0
+
+    // Colour encodes urgency — green when low, blue when moderate, amber when heavy
+    val accentColor: Color = when {
+        totalMinutes >= 180 -> AccentAmber
+        totalMinutes >= 60  -> AccentBlue
+        else                -> AccentTeal
+    }
+
+    val mutedColor = Color(0xFF8A8FA8)
+
+    // Single inline label sitting just below the big number
+    val statusLabel = when {
+        noData                  -> "No data yet"
+        totalMinutes < 60       -> "Light day"
+        totalMinutes in 60..179 -> "Moderate"
+        else                    -> "Heavy day"
+    }
+
+    // Percentage of the 3h daily goal — shown inline, not as a separate caption
+    val goalPercent = ((totalMinutes / 180f) * 100).toInt().coerceAtMost(100)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp)
+        ) {
+
+            // ── 1. Small section label ────────────────────────────────────
+            Text(
+                text = "Screen time today",
+                style = MaterialTheme.typography.labelMedium,
+                color = mutedColor
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // ── 2. Big number — the only hero element ─────────────────────
+            Text(
+                text = if (noData) "–" else formatMinutes(totalMinutes),
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.Bold,
+                color = if (noData) mutedColor else accentColor
+            )
+
+            // ── 3. Status + goal — one quiet line below the number ────────
+            Text(
+                text = if (noData) "Tracking will start shortly"
+                       else "$statusLabel · $goalPercent% of daily goal",
+                style = MaterialTheme.typography.bodySmall,
+                color = mutedColor
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── 4. Thin progress bar — 4dp, solid colour, no gradient ─────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(accentColor.copy(alpha = 0.12f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(if (noData) 0f else usageRatio)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(accentColor)
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── 5. Bottom row: streak (left) + Details link (right) ───────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Streak — tappable, always visible
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onStreakClick)
+                        .padding(horizontal = 2.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    AppFlame(
+                        modifier = Modifier.size(14.dp),
+                        flicker = false,
+                        desaturated = brokenToday && streak == 0
+                    )
+                    Text(
+                        text = when {
+                            streak == 0 && !brokenToday -> "Start your streak"
+                            streak == 0 && brokenToday  -> "Streak lost"
+                            streak == 1                 -> "1 day streak"
+                            else                        -> "$streak day streak"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (brokenToday && streak == 0) mutedColor else AccentAmber
+                    )
+                }
+
+                // Details link — plain text, no pill/background
+                Text(
+                    text = "Details →",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = accentColor,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onShowStats)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTCUT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun ShortcutCard(
+    modifier: Modifier = Modifier,
+    icon: ImageVector,
+    count: Int,
+    label: String,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier.aspectRatio(0.9f),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.Top
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(accentColor.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = TextSecondary
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOGGLE CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun ToggleCard(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    accentColor: Color,
+    icon: ImageVector,
+    onChange: (Boolean) -> Unit,
+    useSunMoonSwitch: Boolean = false
+) {
+    val cardBg by animateColorAsState(
+        targetValue = if (checked) accentColor.copy(alpha = 0.18f) else CardSurface,
+        animationSpec = tween(350),
+        label = "toggleBg"
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (checked) accentColor else TextTertiary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title,    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,  color = TextSecondary)
+            }
+            if (useSunMoonSwitch) {
+                ThemeToggleSwitch(checked = checked, onCheckedChange = onChange)
+            } else {
+                Switch(
+                    checked = checked,
+                    onCheckedChange = onChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor    = Color.White,
+                        checkedTrackColor    = accentColor,
+                        checkedBorderColor   = accentColor,
+                        uncheckedThumbColor  = TextTertiary,
+                        uncheckedTrackColor  = MaterialTheme.colorScheme.surfaceVariant,
+                        uncheckedBorderColor = TextTertiary
+                    )
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GREETING HEADER
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun GreetingHeader(userName: String) {
+    val hour      = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    val dayOfYear = remember { Calendar.getInstance().get(Calendar.DAY_OF_YEAR) }
+
+    val (greetingPrefix, showName) = remember(hour) {
+        when (hour) {
+            in 5..11  -> Pair("Good morning,",   true)
+            in 12..16 -> Pair("Good afternoon,", true)
+            in 17..20 -> Pair("Good evening,",   true)
+            else      -> Pair("Working late, are we?", false)
+        }
+    }
+
+    val followUpQuestion: String? = remember(hour, dayOfYear) {
+        when (hour) {
+            in 5..11  -> listOf("How are we doing today?", "What are we working on today?")[dayOfYear % 2]
+            in 12..20 -> listOf("How was your day so far?", "Everything going according to plan?")[dayOfYear % 2]
+            else      -> null
+        }
+    }
+
+    val greetingText = buildAnnotatedString {
+        withStyle(SpanStyle(color = TextPrimary)) { append(greetingPrefix) }
+        if (showName) {
+            append(" ")
+            withStyle(SpanStyle(color = AccentBlue)) { append(userName) }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = greetingText,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            lineHeight = MaterialTheme.typography.headlineMedium.fontSize * 1.1
+        )
+        if (followUpQuestion != null) {
+            Text(
+                text = followUpQuestion,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Normal,
+                color = TextSecondary
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+private fun formatMinutes(minutes: Int): String {
+    if (minutes < 60) return "${minutes}m"
+    val h = minutes / 60
+    val m = minutes % 60
+    return if (m == 0) "${h}h" else "${h}h ${m}m"
+}

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════╗
+ ║  Present Tense — Material 3 Color Tokens                            ║
+  ║                                                                      ║
+  ║  SEED COLORS (reference only — do not use directly in layouts)       ║
+  ║    Light primary seed : #0F2A43   Dark primary seed : #5C9CC4        ║
+  ║    Light primary-light: #3B6E91   Dark primary-dim : #3B6E91         ║
+  ║    Light background   : #F7F6F3   Dark background  : #15171A         ║
+  ║    Light surface      : #E7E5E0   Dark surface     : #222529         ║
+  ║    Light error        : #D9663B   Dark error       : #E4895F         ║
+  ║                                                                      ║
+  ║  HOW TO USE                                                          ║
+  ║    In Compose  → MaterialTheme.colorScheme.primary / .surface / etc. ║
+  ║    In XML      → ?attr/colorPrimary / ?attr/colorSurface / etc.      ║
+  ║    Never hard-code hex values in screens — always reference a token. ║
+  ╚══════════════════════════════════════════════════════════════════════╝
+-->
+<resources>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         LIGHT MODE TOKENS
+         ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Primary -->
+    <color name="md_theme_light_primary">#0F2A43</color>
+    <color name="md_theme_light_onPrimary">#FFFFFF</color>
+    <color name="md_theme_light_primaryContainer">#C8E0F4</color>
+    <color name="md_theme_light_onPrimaryContainer">#001829</color>
+
+    <!-- Primary variant (used for tonal surfaces, tabs, nav indicator) -->
+    <color name="md_theme_light_primaryLight">#3B6E91</color>
+
+    <!-- Secondary — warm slate, pairs with the navy primary -->
+    <color name="md_theme_light_secondary">#4A6178</color>
+    <color name="md_theme_light_onSecondary">#FFFFFF</color>
+    <color name="md_theme_light_secondaryContainer">#CDE3F5</color>
+    <color name="md_theme_light_onSecondaryContainer">#071E2E</color>
+
+    <!-- Tertiary — muted teal accent for positive/active states -->
+    <color name="md_theme_light_tertiary">#2D6E6A</color>
+    <color name="md_theme_light_onTertiary">#FFFFFF</color>
+    <color name="md_theme_light_tertiaryContainer">#B0EDE8</color>
+    <color name="md_theme_light_onTertiaryContainer">#00201F</color>
+
+    <!-- Error -->
+    <color name="md_theme_light_error">#D9663B</color>
+    <color name="md_theme_light_onError">#FFFFFF</color>
+    <color name="md_theme_light_errorContainer">#FFDAD2</color>
+    <color name="md_theme_light_onErrorContainer">#3B0D00</color>
+
+    <!-- Background & Surface -->
+    <color name="md_theme_light_background">#F7F6F3</color>
+    <color name="md_theme_light_onBackground">#191C1E</color>
+    <color name="md_theme_light_surface">#E7E5E0</color>
+    <color name="md_theme_light_onSurface">#191C1E</color>
+    <color name="md_theme_light_surfaceVariant">#D8DCE0</color>
+    <color name="md_theme_light_onSurfaceVariant">#41484D</color>
+
+    <!-- Outline & Inverse -->
+    <color name="md_theme_light_outline">#71787D</color>
+    <color name="md_theme_light_outlineVariant">#C1C7CC</color>
+    <color name="md_theme_light_inverseSurface">#2E3133</color>
+    <color name="md_theme_light_inverseOnSurface">#EFF1F3</color>
+    <color name="md_theme_light_inversePrimary">#8BBFD8</color>
+
+    <!-- Scrim (modal/dialog backdrop) -->
+    <color name="md_theme_light_scrim">#000000</color>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         DARK MODE TOKENS
+         ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Primary -->
+    <color name="md_theme_dark_primary">#5C9CC4</color>
+    <color name="md_theme_dark_onPrimary">#00304E</color>
+    <color name="md_theme_dark_primaryContainer">#06466D</color>
+    <color name="md_theme_dark_onPrimaryContainer">#C8E0F4</color>
+
+    <!-- Primary dim (mid-tone — used for nav indicators, tonal fills) -->
+    <color name="md_theme_dark_primaryDim">#3B6E91</color>
+
+    <!-- Secondary -->
+    <color name="md_theme_dark_secondary">#A0BFCF</color>
+    <color name="md_theme_dark_onSecondary">#1B3445</color>
+    <color name="md_theme_dark_secondaryContainer">#324A5C</color>
+    <color name="md_theme_dark_onSecondaryContainer">#CDE3F5</color>
+
+    <!-- Tertiary -->
+    <color name="md_theme_dark_tertiary">#94D1CC</color>
+    <color name="md_theme_dark_onTertiary">#003735</color>
+    <color name="md_theme_dark_tertiaryContainer">#1B524F</color>
+    <color name="md_theme_dark_onTertiaryContainer">#B0EDE8</color>
+
+    <!-- Error -->
+    <color name="md_theme_dark_error">#E4895F</color>
+    <color name="md_theme_dark_onError">#5C1900</color>
+    <color name="md_theme_dark_errorContainer">#7C3015</color>
+    <color name="md_theme_dark_onErrorContainer">#FFDAD2</color>
+
+    <!-- Background & Surface -->
+    <color name="md_theme_dark_background">#15171A</color>
+    <color name="md_theme_dark_onBackground">#E2E2E5</color>
+    <color name="md_theme_dark_surface">#222529</color>
+    <color name="md_theme_dark_onSurface">#E2E2E5</color>
+    <color name="md_theme_dark_surfaceVariant">#2C3036</color>
+    <color name="md_theme_dark_onSurfaceVariant">#C1C7CC</color>
+
+    <!-- Outline & Inverse -->
+    <color name="md_theme_dark_outline">#8B9198</color>
+    <color name="md_theme_dark_outlineVariant">#41484D</color>
+    <color name="md_theme_dark_inverseSurface">#E2E2E5</color>
+    <color name="md_theme_dark_inverseOnSurface">#2E3133</color>
+    <color name="md_theme_dark_inversePrimary">#0F2A43</color>
+
+    <!-- Scrim -->
+    <color name="md_theme_dark_scrim">#000000</color>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         ACCENT PALETTE
+         These are the vivid semantic colors used throughout the app
+         for specific roles (blocked = red, active = teal, stats = amber).
+         Always reference these by name, never by hex.
+         ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Used for: focus/blocking active, primary interactive elements -->
+    <color name="accent_blue">#5C9CC4</color>
+    <color name="accent_blue_soft">#B0D4EA</color>
+    <color name="accent_blue_container">#06466D</color>
+
+    <!-- Used for: success, whitelisted, teal states -->
+    <color name="accent_teal">#2DB8A0</color>
+    <color name="accent_teal_soft">#A8E8DC</color>
+    <color name="accent_teal_container">#1B524F</color>
+
+    <!-- Used for: blocked, error, danger, reels kill-switch -->
+    <color name="accent_red">#E4895F</color>
+    <color name="accent_red_soft">#FFDAD2</color>
+    <color name="accent_red_container">#7C3015</color>
+
+    <!-- Used for: streaks, highlights, screen-time warning -->
+    <color name="accent_amber">#F4A33C</color>
+    <color name="accent_amber_soft">#FFDEA3</color>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         TEXT PALETTE
+         Use these for text on dark surfaces (dark mode).
+         In light mode, onSurface / onBackground from M3 tokens apply.
+         ═══════════════════════════════════════════════════════════ -->
+
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#C4CBDA</color>
+    <color name="text_tertiary">#8A97B0</color>
+    <color name="text_muted">#6B7590</color>
+
+    <!-- Launcher adaptive-icon background (matches the logo's blue tile) -->
+    <color name="ic_launcher_background">#9BA4AB</color>
+
+</resources>
