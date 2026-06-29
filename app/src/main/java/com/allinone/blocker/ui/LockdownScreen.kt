@@ -1,11 +1,15 @@
 package com.allinone.blocker.ui
 
 import android.app.TimePickerDialog
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -486,10 +490,54 @@ private fun WhitelistAppRow(
     whitelisted : Boolean,
     onToggle    : (Boolean) -> Unit
 ) {
+    // ── Animated card background color ──────────────────────────────────────
+    val cardBg by animateColorAsState(
+        targetValue = if (whitelisted) AccentTeal.copy(alpha = 0.10f)
+                      else             AccentRed.copy(alpha  = 0.10f),
+        animationSpec = tween(durationMillis = 500),
+        label = "cardBg"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (whitelisted) AccentTeal.copy(alpha = 0.30f)
+                      else             AccentRed.copy(alpha  = 0.25f),
+        animationSpec = tween(durationMillis = 500),
+        label = "borderColor"
+    )
+
+    // ── Subtle scale spring on toggle ────────────────────────────────────────
+    val cardScale by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = spring(
+            dampingRatio    = Spring.DampingRatioMediumBouncy,
+            stiffness       = Spring.StiffnessMedium
+        ),
+        label = "cardScale"
+    )
+
+    // ── Blinking dot for blocked state ───────────────────────────────────────
+    val dotAlpha by if (!whitelisted) {
+        val infinite = rememberInfiniteTransition(label = "dot_blink")
+        infinite.animateFloat(
+            initialValue   = 1f,
+            targetValue    = 0.25f,
+            animationSpec  = infiniteRepeatable(
+                animation  = tween(900, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "dotBlink"
+        )
+    } else {
+        androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(1f) }
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        shape    = RoundedCornerShape(16.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurface),
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .scale(cardScale),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = cardBg),
+        border    = BorderStroke(1.5.dp, borderColor),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
         Row(
@@ -500,11 +548,28 @@ private fun WhitelistAppRow(
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                Text(
-                    if (whitelisted) "Allowed during lockdown" else "Blocked during lockdown",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (whitelisted) AccentTeal else TextSecondary
-                )
+                // ── Status dot + label (no text sentence) ───────────────────
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                color = (if (whitelisted) AccentTeal else AccentRed)
+                                    .copy(alpha = dotAlpha.let {
+                                        if (it is androidx.compose.runtime.State<*>)
+                                            (it.value as Float)
+                                        else it as Float
+                                    })
+                            )
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        text  = if (whitelisted) "Allowed in lockdown" else "Blocked in lockdown",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (whitelisted) AccentTeal else AccentRed
+                    )
+                }
             }
             Switch(
                 checked         = whitelisted,
