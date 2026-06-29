@@ -353,6 +353,17 @@ object BlockerRepository {
 
     fun newStrictAlarmId(): String = UUID.randomUUID().toString()
 
+/**
+ * Returns the next available request code for a new alarm.
+ * We find the highest requestCode already in use and add 1,
+ * so every alarm gets a permanently unique number.
+ */
+fun nextAlarmRequestCode(): Int {
+    val existing = _strictAlarms.value
+    return if (existing.isEmpty()) 1
+    else existing.maxOf { it.requestCode } + 1
+}
+
     fun opensToday(pkg: String): Int {
         rolloverDayIfNeeded()
         return opensToday[pkg] ?: 0
