@@ -252,28 +252,37 @@ fun AppRoot(
                     onBack = { screen = Screen.BLOCKED_APPS }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
-                Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
-                    onBack = { screen = Screen.HOME },
-                    onAddAlarm = {
-                        val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault()
-                        selectedAlarmId = fresh.id
-                        screen = Screen.STRICT_ALARM_EDIT
-                    },
-                    onEditAlarm = { alarmId ->
-                        selectedAlarmId = alarmId
-                        screen = Screen.STRICT_ALARM_EDIT
-                    },
-                    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
-                )
-                Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
-                    alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault().id,
-                    onBack = { screen = Screen.STRICT_ALARM_LIST },
-                    onDelete = { alarmId ->
-                        BlockerRepository.removeStrictAlarmEntry(alarmId)
-                        com.allinone.blocker.data.AlarmScheduler.cancel(context, alarmId)
-                        screen = Screen.STRICT_ALARM_LIST
-                    }
-                )
+               Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
+    onBack = { screen = Screen.HOME },
+    onAddAlarm = {
+        val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault(
+            BlockerRepository.nextAlarmRequestCode()
+        )
+        selectedAlarmId = fresh.id
+        screen = Screen.STRICT_ALARM_EDIT
+    },
+    onEditAlarm = { alarmId ->
+        selectedAlarmId = alarmId
+        screen = Screen.STRICT_ALARM_EDIT
+    },
+    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
+)
+Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
+    alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(
+        BlockerRepository.nextAlarmRequestCode()
+    ).id,
+    onBack = { screen = Screen.STRICT_ALARM_LIST },
+    onDelete = { alarmId ->
+        val alarmToDelete = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
+        BlockerRepository.removeStrictAlarmEntry(alarmId)
+        if (alarmToDelete != null) {
+            com.allinone.blocker.data.AlarmScheduler.cancel(context, alarmToDelete)
+        } else {
+            com.allinone.blocker.data.AlarmScheduler.cancel(context, alarmId)
+        }
+        screen = Screen.STRICT_ALARM_LIST
+    }
+)
                 Screen.SLEEP_CALCULATOR -> SleepCalculatorScreen(onBack = { screen = Screen.STRICT_ALARM_LIST })
                 Screen.PERMISSIONS -> PermissionsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
                 Screen.SETTINGS -> SettingsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
