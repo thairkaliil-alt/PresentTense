@@ -107,8 +107,7 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
     val seedAlarm = remember(allAlarms) {
         allAlarms.filter { it.enabled }.minByOrNull { it.hour * 60 + it.minute }
             ?: allAlarms.firstOrNull()
-            ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault()
-    }
+?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(BlockerRepository.nextAlarmRequestCode())    }
 
     fun saveAlarm(updated: com.allinone.blocker.data.StrictAlarmEntry) {
         if (allAlarms.any { it.id == updated.id }) {
