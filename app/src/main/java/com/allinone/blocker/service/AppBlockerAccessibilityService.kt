@@ -45,9 +45,16 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
         overlay = OverlayManager(this)
-        runCatching {
-            startService(Intent(this, BlockerForegroundService::class.java))
-        }
+        // NOTE: BlockerForegroundService (and its persistent "Protecting your
+        // focus" notification) is intentionally NOT started here anymore.
+        // All real blocking (app blocks, lockdown, strict mode, reels kill
+        // switch) happens right here in this accessibility service, which
+        // Android keeps running without requiring any notification. The
+        // foreground service's only other job — a steady 60-second screen-time
+        // tick — is no longer needed: reconcile() already runs on every app
+        // switch (see onAccessibilityEvent below), so usage data stays
+        // accurate, just possibly a bit delayed during long single-app
+        // sessions instead of updating every 60 seconds.
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
