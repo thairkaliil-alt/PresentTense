@@ -23,11 +23,6 @@ object BlockerRepository {
     private const val KEY_SCHEDULES = "lockdown_schedules"
     private const val KEY_MANUAL_LOCK_UNTIL = "manual_lock_until"
     private const val KEY_STRICT_MODE = "strict_mode"
-    private const val KEY_STRICT_ALARM = "strict_alarm"
-    // SESSION 1 of the multi-alarm rework: new list-based storage, lives
-    // alongside the old single-alarm KEY_STRICT_ALARM above for now. The old
-    // one still does the real scheduling until it's migrated in a later
-    // session — see StrictAlarmEntry.kt for details.
     private const val KEY_STRICT_ALARMS_LIST = "strict_alarms_list"
     private const val KEY_BREAK_UNTIL = "lockdown_break_until"
     private const val KEY_BREAK_USES = "lockdown_break_uses_this_session"
@@ -66,12 +61,7 @@ object BlockerRepository {
     private val _strictMode = MutableStateFlow(StrictModeConfig())
     val strictMode: StateFlow<StrictModeConfig> = _strictMode
 
-    private val _strictAlarm = MutableStateFlow(StrictAlarm())
-    val strictAlarm: StateFlow<StrictAlarm> = _strictAlarm
-
-    // SESSION 1 of the multi-alarm rework: the new list of independent
-    // alarms. Not read by the scheduler/ringing-service yet — that wiring
-    // happens in a later session. Safe to use from new screens already.
+    // The list of independent Strict Alarms — see StrictAlarmEntry.kt.
     private val _strictAlarms = MutableStateFlow<List<StrictAlarmEntry>>(emptyList())
     val strictAlarms: StateFlow<List<StrictAlarmEntry>> = _strictAlarms
 
@@ -132,10 +122,6 @@ object BlockerRepository {
 
         prefs.getString(KEY_STRICT_MODE, null)?.let { raw ->
             runCatching { _strictMode.value = StrictModeConfig.fromJson(JSONObject(raw)) }
-        }
-
-        prefs.getString(KEY_STRICT_ALARM, null)?.let { raw ->
-            runCatching { _strictAlarm.value = StrictAlarm.fromJson(JSONObject(raw)) }
         }
 
         val alarmEntries = mutableListOf<StrictAlarmEntry>()
@@ -335,13 +321,7 @@ object BlockerRepository {
         )
     }
 
-    fun setStrictAlarm(alarm: StrictAlarm) {
-        _strictAlarm.value = alarm
-        prefs.edit().putString(KEY_STRICT_ALARM, alarm.toJson().toString()).apply()
-    }
-
-    // SESSION 1 of the multi-alarm rework — list-based CRUD, mirrors
-    // addSchedule/updateSchedule/removeSchedule above exactly.
+    // List-based CRUD, mirrors addSchedule/updateSchedule/removeSchedule above.
 
     fun addStrictAlarmEntry(entry: StrictAlarmEntry) {
         _strictAlarms.value = _strictAlarms.value + entry
