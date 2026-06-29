@@ -8,7 +8,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -419,15 +418,16 @@ private fun EmptyAlarmsState(modifier: Modifier = Modifier, onAddAlarm: () -> Un
                 color = TextSecondary
             )
             Spacer(Modifier.height(20.dp))
-            Box(
-                modifier = Modifier
-                    .background(AccentBlue, CircleShape)
-                    .pointerInput(onAddAlarm) {
-                        detectTapGestures(onTap = { onAddAlarm() })
-import androidx.compose.foundation.gestures.detectTapGestures
-                    }
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
-            ) {
+           Box(
+    modifier = Modifier
+        .background(AccentBlue, CircleShape)
+        .pointerInput(onAddAlarm) {
+            detectTapGestures(
+                onTap = { onAddAlarm() }
+            )
+        }
+        .padding(horizontal = 24.dp, vertical = 12.dp)
+) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White)
                     Spacer(Modifier.size(6.dp))
