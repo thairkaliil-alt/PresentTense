@@ -550,17 +550,13 @@ private fun WhitelistAppRow(
                 Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                 // ── Status dot + label (no text sentence) ───────────────────
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
+                  Box(
                         modifier = Modifier
                             .size(7.dp)
                             .clip(CircleShape)
                             .background(
                                 color = (if (whitelisted) AccentTeal else AccentRed)
-                                    .copy(alpha = dotAlpha.let {
-                                        if (it is androidx.compose.runtime.State<*>)
-                                            (it.value as Float)
-                                        else it as Float
-                                    })
+                                    .copy(alpha = dotAlpha)
                             )
                     )
                     Spacer(Modifier.size(6.dp))
