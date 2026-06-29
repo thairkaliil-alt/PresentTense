@@ -6,7 +6,8 @@ app/build/
 
 # Local config
 local.properties
-*.keystore
+# Allow debug.keystore to be committed for consistent CI builds
+# *.keystore
 *.jks
 
 # Android Studio / IntelliJ
