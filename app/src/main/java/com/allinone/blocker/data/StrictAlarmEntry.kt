@@ -16,11 +16,16 @@ const val STRICT_ALARM_MAX_COUNT = 10
  * toggle, and its own optional "burst" (multi-ring) setting — the same way
  * a normal phone clock app's alarm list works.
  *
+ * [requestCode] is a small, stable, UNIQUE integer stored with this alarm
+ * and used as Android's PendingIntent request code. Using a stored integer
+ * instead of a hash of the UUID prevents collisions between alarms.
+ *
  * [daysOfWeek] uses java.util.Calendar values: Calendar.SUNDAY(1) ..
  * Calendar.SATURDAY(7), same as every other day-of-week set in this app.
  */
 data class StrictAlarmEntry(
     val id: String,
+    val requestCode: Int,          // unique stable int for Android scheduling
     val enabled: Boolean = true,
     val hour: Int = 7,
     val minute: Int = 0,
@@ -34,6 +39,7 @@ data class StrictAlarmEntry(
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
+        put("requestCode", requestCode)
         put("enabled", enabled)
         put("hour", hour)
         put("minute", minute)
@@ -52,8 +58,13 @@ data class StrictAlarmEntry(
             } else {
                 days.addAll(1..7)
             }
+            // Legacy alarms saved before this field existed get a requestCode
+            // derived from their id hash — same as the old behaviour, but now
+            // it's stored and stable rather than recomputed each time.
+            val legacyCode = (o.getString("id").hashCode() and 0x7FFFFFFF) % 100_000
             return StrictAlarmEntry(
                 id = o.getString("id"),
+                requestCode = o.optInt("requestCode", legacyCode),
                 enabled = o.optBoolean("enabled", true),
                 hour = o.optInt("hour", 7),
                 minute = o.optInt("minute", 0),
@@ -65,8 +76,9 @@ data class StrictAlarmEntry(
         }
 
         /** A fresh blank alarm, ready to be edited — used by the "+" add button. */
-        fun newDefault(): StrictAlarmEntry = StrictAlarmEntry(
-            id = java.util.UUID.randomUUID().toString()
+        fun newDefault(requestCode: Int): StrictAlarmEntry = StrictAlarmEntry(
+            id = java.util.UUID.randomUUID().toString(),
+            requestCode = requestCode
         )
     }
 }
