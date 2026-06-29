@@ -262,7 +262,8 @@ fun AppRoot(
                     onEditAlarm = { alarmId ->
                         selectedAlarmId = alarmId
                         screen = Screen.STRICT_ALARM_EDIT
-                    }
+                    },
+                    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
                 )
                 Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault().id,
