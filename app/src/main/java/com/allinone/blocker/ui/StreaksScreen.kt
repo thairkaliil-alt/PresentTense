@@ -550,13 +550,13 @@ private fun HistorySection(history: List<Pair<Int, Boolean>>) {
             modifier   = Modifier.padding(bottom = 10.dp)
         )
 
-        if (history.isEmpty()) {
+         if (history.isEmpty()) {
             Text(
-                "Your history will start filling in from tomorrow.",
+                "No streak days recorded yet — keep going!",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
+                color = TextSecondary,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-            return
         }
 
         // Convert history to a map for easy lookup
