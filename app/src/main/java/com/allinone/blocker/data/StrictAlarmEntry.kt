@@ -4,27 +4,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 
+/** Minutes between each alarm when multi-alarm mode is on. */
+const val STRICT_ALARM_INTERVAL_MINUTES = 3
+
+/** Maximum number of alarms in one multi-alarm burst. */
+const val STRICT_ALARM_MAX_COUNT = 10
+
 /**
- * SESSION 1 OF THE MULTI-ALARM REWORK.
- *
- * This is the NEW alarm model: instead of one single [StrictAlarm] config,
- * the app will hold a LIST of [StrictAlarmEntry] — each one its own
- * independent alarm with its own time, its own repeat days, its own on/off
- * toggle, and its own optional "burst" (multi-ring) setting. This is what
- * lets the alarm screen show several different alarms, exactly like a
- * normal phone clock app.
- *
- * This file is intentionally a close copy of [LockdownSchedule] in
- * Models.kt and the old [StrictAlarm] in StrictAlarm.kt — same field names,
- * same toJson()/fromJson() shape — so the rest of the codebase (scheduling,
- * the ringing service, boot restore) can be migrated over in a later
- * session with the smallest possible diff.
- *
- * IMPORTANT: as of this session, NOTHING else in the app uses this class
- * yet. The old single-alarm [StrictAlarm] is still what actually schedules
- * and rings alarms. This file (plus the matching list storage added to
- * BlockerRepository) is just the new foundation — wiring it up to the
- * screens and the alarm scheduler happens in the next session.
+ * One independent Strict Alarm. The app holds a LIST of these — each one
+ * its own alarm with its own time, its own repeat days, its own on/off
+ * toggle, and its own optional "burst" (multi-ring) setting — the same way
+ * a normal phone clock app's alarm list works.
  *
  * [daysOfWeek] uses java.util.Calendar values: Calendar.SUNDAY(1) ..
  * Calendar.SATURDAY(7), same as every other day-of-week set in this app.
