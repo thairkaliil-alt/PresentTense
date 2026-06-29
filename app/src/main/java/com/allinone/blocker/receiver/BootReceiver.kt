@@ -8,7 +8,6 @@ import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.ScreenTimeTracker
-import com.allinone.blocker.service.BlockerForegroundService
 import kotlin.concurrent.thread
 
 /** Re-arms the background service after a reboot (README 12: RECEIVE_BOOT_COMPLETED). */
@@ -31,12 +30,9 @@ class BootReceiver : BroadcastReceiver() {
         // the lock silently stops working after every restart.
         GeofenceManager.rearm(context)
 
-        if (BlockerRepository.protectionEnabled.value) {
-            runCatching {
-                context.startForegroundService(
-                    Intent(context, BlockerForegroundService::class.java)
-                )
-            }
-        }
+        // BlockerForegroundService is no longer restarted here — blocking
+        // runs entirely through the accessibility service, which Android
+        // re-enables on its own after reboot (as long as Accessibility
+        // permission was granted) and needs no persistent notification.
     }
 }
