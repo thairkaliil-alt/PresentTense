@@ -15,6 +15,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +86,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlin.math.absoluteValue
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.ScreenTimeTracker
+import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -95,7 +98,6 @@ import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
 import com.allinone.blocker.ui.motion.AnimatedAppearance
-import com.allinone.blocker.ui.motion.AnimatedCount
 import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.animatedCountAsState
@@ -124,8 +126,7 @@ data class AppUsageStat(
     val packageName: String,
     val appName: String,
     val todayMillis: Long,
-    val blockedAttempts: Int = 0,
-    val streakDays: Int = 0
+    val blockedAttempts: Int = 0
 )
 
 // Per-domain (per-website) usage — what the "Browsing Time" tab actually shows.
@@ -154,7 +155,7 @@ private val BROWSER_PACKAGES = setOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen(onBack: () -> Unit) {
+fun StatsScreen(onBack: () -> Unit, onOpenStreaks: () -> Unit = {}) {
     val context = LocalContext.current
 
     var totalTodayMinutes    by remember { mutableIntStateOf(0) }
@@ -182,6 +183,15 @@ fun StatsScreen(onBack: () -> Unit) {
     // row (even ones scrolling back into view) renders instantly, no replay.
     var entranceAnimationPlayed by remember { mutableStateOf(false) }
 
+    // ── ONE streak system ────────────────────────────────────────────────────
+    // This used to compute its own separate "per-app blocked streak" here,
+    // which was a totally different number from the flame streak on the Home
+    // screen and Streaks screen — two unrelated things both called "streak"
+    // was confusing. Now the Stats tab just reads the same global streak
+    // everyone else reads, so there's exactly one number in the whole app.
+    val streak      by StreakRepository.streak.collectAsState()
+    val brokenToday by StreakRepository.brokenToday.collectAsState()
+
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -204,13 +214,10 @@ fun StatsScreen(onBack: () -> Unit) {
                 val attempts = blockedMap[pkg] ?: 0
                 if (millis <= 0L && attempts == 0) return@mapNotNull null
                 val name = blockedPkgs[pkg] ?: InstalledApps.labelFor(context, pkg)
-                AppUsageStat(pkg, name, millis, attempts, 0)
+                AppUsageStat(pkg, name, millis, attempts)
             }.sortedByDescending { it.todayMillis }
 
-            val blockedPkgList = rawStats.filter { it.packageName in blockedPkgs }.map { it.packageName }
-            val streaks = ScreenTimeTracker.streaksForPackages(context, blockedPkgList)
-
-            val allStats = rawStats.map { it.copy(streakDays = streaks[it.packageName] ?: 0) }
+            val allStats = rawStats
 
             browserStats  = allStats.filter { it.packageName in BROWSER_PACKAGES }
             appStats      = allStats.filter { it.packageName !in BROWSER_PACKAGES }
@@ -289,17 +296,21 @@ fun StatsScreen(onBack: () -> Unit) {
                     AnimatedAppearance(delayMs = 0) {
                         TodayTotalCard(
                             totalMinutes = totalTodayMinutes,
-                            topStreakDays = appStats.map { it.streakDays }.maxOrNull() ?: 0,
+                            streak = streak,
+                            brokenToday = brokenToday,
                             goalMinutes = goalMinutes,
-                            onEditGoal = { showGoalDialog = true }
+                            onEditGoal = { showGoalDialog = true },
+                            onStreakClick = onOpenStreaks
                         )
                     }
                 } else {
                     TodayTotalCard(
                         totalMinutes = totalTodayMinutes,
-                        topStreakDays = appStats.map { it.streakDays }.maxOrNull() ?: 0,
+                        streak = streak,
+                        brokenToday = brokenToday,
                         goalMinutes = goalMinutes,
-                        onEditGoal = { showGoalDialog = true }
+                        onEditGoal = { showGoalDialog = true },
+                        onStreakClick = onOpenStreaks
                     )
                 }
             }
@@ -460,9 +471,11 @@ fun StatsScreen(onBack: () -> Unit) {
 @Composable
 private fun TodayTotalCard(
     totalMinutes: Int,
-    topStreakDays: Int,
+    streak: Int,
+    brokenToday: Boolean,
     goalMinutes: Int,
-    onEditGoal: () -> Unit
+    onEditGoal: () -> Unit,
+    onStreakClick: () -> Unit = {}
 ) {
     val hasGoal = goalMinutes > 0
     val currentHour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
@@ -763,29 +776,29 @@ private fun TodayTotalCard(
 
                     Spacer(Modifier.height(4.dp))
 
-                    // ── Streak pill — real data from blocked apps ──────────
-                    if (topStreakDays > 0) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(AccentAmber.copy(alpha = 0.10f))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment     = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            AppFlame(modifier = Modifier.size(16.dp), flicker = false, desaturated = false)
-                            AnimatedCount(
-                                value      = topStreakDays,
-                                suffix     = " day streak",
-                                style      = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color      = AccentAmber
-                            )
-                        }
-                    } else {
+                    // ── Streak pill — the ONE streak, same source as Home and
+                    // Streaks screen. Tappable, like Duolingo/Snapchat —
+                    // tapping the streak count opens the full streak detail.
+                    val streakDesaturated = brokenToday && streak == 0
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background((if (streakDesaturated) TextMuted else AccentAmber).copy(alpha = 0.10f))
+                            .clickable(onClick = onStreakClick)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AppFlame(modifier = Modifier.size(16.dp), flicker = false, desaturated = streakDesaturated)
                         Text(
-                            text  = "Block an app to start a streak",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
+                            text = when {
+                                streak == 0 && brokenToday -> "Streak lost"
+                                streak == 0                -> "Start your streak"
+                                streak == 1                -> "1 day streak"
+                                else                        -> "$streak day streak"
+                            },
+                            style      = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color      = if (streakDesaturated) TextMuted else AccentAmber
                         )
                     }
                 }
@@ -1003,23 +1016,6 @@ private fun AppStatRow(stat: AppUsageStat, maxMillis: Long) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(stat.appName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    if (stat.streakDays > 0) {
-                        Spacer(Modifier.height(2.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            AppFlame(
-                                modifier = Modifier.size(12.dp),
-                                desaturated = false
-                            )
-                            Text(
-                                "${stat.streakDays} day streak",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AccentAmber
-                            )
-                        }
-                    }
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     if (minutes > 0) {
