@@ -152,6 +152,13 @@ fun StrictAlarmQuickAddScreen(
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            SaveButton(
+                state   = if (isCreating) SaveState.Loading else SaveState.Idle,
+                onClick = { createAll() },
+                onReset = {}
+            )
         }
     ) { pad ->
         Column(
@@ -162,7 +169,6 @@ fun StrictAlarmQuickAddScreen(
                 .padding(horizontal = 24.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
             Text(
                 text  = "Creates several independent alarms a few minutes apart — " +
                         "each one its own card you can edit or delete separately.",
@@ -219,16 +225,10 @@ fun StrictAlarmQuickAddScreen(
             Spacer(Modifier.height(12.dp))
             PreviewList(times = previewTimes)
 
-            Spacer(Modifier.height(36.dp))
+           Spacer(Modifier.height(36.dp))
 
-            // ── Create button ─────────────────────────────────────────────
-            SaveButton(
-                state   = if (isCreating) SaveState.Loading else SaveState.Idle,
-                onClick = { createAll() },
-                onReset = {}
-            )
-
-            Spacer(Modifier.height(24.dp))
+            // ── Bottom padding so content clears the FAB ──────────────────
+            Spacer(Modifier.height(88.dp))
         }
     }
 }
