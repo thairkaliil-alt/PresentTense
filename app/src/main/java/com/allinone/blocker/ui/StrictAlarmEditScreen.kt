@@ -25,8 +25,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -48,21 +46,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
-import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
-import com.allinone.blocker.data.STRICT_ALARM_MAX_COUNT
 import com.allinone.blocker.data.StrictAlarmEntry
-import com.allinone.blocker.data.allNextTriggerMillis
+import com.allinone.blocker.data.nextTriggerMillis
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
-import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextSecondary
 import java.util.Calendar
 import java.util.Locale
 
 /**
- * Card-less editor for ONE [StrictAlarmEntry].
+ * Editor for ONE [StrictAlarmEntry].
  *
  * Changes are held locally until the user taps Save — nothing is written to
  * the repository or the alarm scheduler until that moment. The Save button
@@ -74,7 +69,7 @@ import java.util.Locale
  *
  * @param isNew  true when opened from the + button — means the entry does NOT
  *               exist in the repository yet. Back without saving discards
- *               the draft silently. False when editing an existing alarm.
+ *               the draft silently.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,7 +114,6 @@ fun StrictAlarmEditScreen(
     }
 
     // ── Immediate save for the enabled toggle — only for existing alarms ──
-    // If this is a new alarm that hasn't been saved yet, just update the draft.
     fun saveEnabled(checked: Boolean) {
         val updated = draft.copy(enabled = checked)
         draft = updated
@@ -183,9 +177,9 @@ fun StrictAlarmEditScreen(
 
             Spacer(Modifier.height(28.dp))
 
-            // ── Big time display — tap to change, updates draft only ───────
+            // ── Big time display — tap to change ──────────────────────────
             Text(
-                text = formatTime(draft.hour, draft.minute),
+                text = formatEditTime(draft.hour, draft.minute),
                 style = MaterialTheme.typography.displayLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -202,7 +196,7 @@ fun StrictAlarmEditScreen(
 
             Spacer(Modifier.height(36.dp))
 
-            // ── Repeat days — updates draft only ──────────────────────────
+            // ── Repeat days ───────────────────────────────────────────────
             Text(
                 "Repeat on",
                 style = MaterialTheme.typography.labelLarge,
@@ -229,92 +223,12 @@ fun StrictAlarmEditScreen(
                 }
             }
 
-            Spacer(Modifier.height(40.dp))
-
-            // ── Snooze burst toggle — updates draft only ──────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Snooze burst",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "This alarm re-rings every $STRICT_ALARM_INTERVAL_MINUTES min. To add a separate alarm at a different time, tap + on the alarms list.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                Switch(
-                    checked = draft.multiAlarmEnabled,
-                    onCheckedChange = { checked -> draft = draft.copy(multiAlarmEnabled = checked) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AccentBlue
-                    )
-                )
-            }
-
-            if (draft.multiAlarmEnabled) {
-                Spacer(Modifier.height(20.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Number of alarms",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = TextSecondary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "${draft.alarmCount}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = AccentBlue
-                    )
-                }
-                Slider(
-                    value = draft.alarmCount.toFloat(),
-                    onValueChange = { value ->
-                        draft = draft.copy(alarmCount = value.toInt().coerceIn(1, STRICT_ALARM_MAX_COUNT))
-                    },
-                    valueRange = 1f..STRICT_ALARM_MAX_COUNT.toFloat(),
-                    steps = STRICT_ALARM_MAX_COUNT - 2,
-                    colors = SliderDefaults.colors(
-                        thumbColor = AccentBlue,
-                        activeTrackColor = AccentBlue,
-                        inactiveTrackColor = AccentBlue.copy(alpha = 0.2f)
-                    )
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("1", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                    Text("$STRICT_ALARM_MAX_COUNT", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                }
-                if (draft.alarmCount > 1) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        buildMultiAlarmPreview(draft),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-            }
-
             if (draft.enabled) {
                 Spacer(Modifier.height(32.dp))
                 NextRingNotice(draft)
             }
 
-            // ── Save button — bottom of the screen ────────────────────────
+            // ── Save button ───────────────────────────────────────────────
             Spacer(Modifier.height(32.dp))
             SaveButton(
                 state   = saveState,
@@ -384,29 +298,17 @@ private fun PermissionNotice(onGrant: () -> Unit) {
 
 @Composable
 private fun NextRingNotice(alarm: StrictAlarmEntry) {
-    val upcoming = remember(alarm) { alarm.allNextTriggerMillis() }
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            when {
-                upcoming.isEmpty() -> "No upcoming alarm — pick at least one day"
-                upcoming.size == 1 -> "Next alarm: ${formatFullDate(upcoming.first())}"
-                else               -> "Next ${upcoming.size} alarms"
-            },
-            style      = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color      = TextSecondary
-        )
-        if (upcoming.size > 1) {
-            Spacer(Modifier.height(4.dp))
-            upcoming.forEachIndexed { index, millis ->
-                Text(
-                    "${index + 1}. ${formatFullDate(millis)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
-            }
-        }
-    }
+    val next = remember(alarm) { alarm.nextTriggerMillis() }
+    Text(
+        text = if (next != null)
+            "Next alarm: ${formatFullDate(next)}"
+        else
+            "No upcoming alarm — pick at least one day",
+        style      = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+        color      = TextSecondary,
+        modifier   = Modifier.fillMaxWidth()
+    )
 }
 
 private val DAY_LABELS = listOf(
@@ -415,17 +317,7 @@ private val DAY_LABELS = listOf(
     Calendar.SUNDAY    to "S"
 )
 
-private fun buildMultiAlarmPreview(alarm: StrictAlarmEntry): String {
-    val times = (0 until alarm.alarmCount).map { index ->
-        val totalMinutes = alarm.hour * 60 + alarm.minute + index * STRICT_ALARM_INTERVAL_MINUTES
-        val h = (totalMinutes / 60) % 24
-        val m = totalMinutes % 60
-        formatTime(h, m)
-    }
-    return times.joinToString("  ·  ")
-}
-
-private fun formatTime(hour: Int, minute: Int): String {
+private fun formatEditTime(hour: Int, minute: Int): String {
     val cal = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, hour)
         set(Calendar.MINUTE, minute)
