@@ -228,7 +228,7 @@ fun <T> ReorderableColumn(
                         placementSpec = spring(
                             dampingRatio = Spring.DampingRatioLowBouncy,
                             stiffness    = Spring.StiffnessMedium,
-                            visibilityThreshold = IntOffset.VisibilityThreshold
+                            visibilityThreshold = IntOffset(1, 1)
                         )
                     )
             }
