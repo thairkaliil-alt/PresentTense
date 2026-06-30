@@ -18,20 +18,6 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.ui.AlarmRingActivity
 
-/**
- * Runs while the Strict Alarm is actively ringing. Plays the ringtone on a
- * loop, vibrates the phone, and shows AlarmRingActivity full-screen in ALL
- * scenarios:
- *
- *  • Phone is asleep / locked  → fullScreenIntent in the notification wakes
- *    the screen and launches the activity over the lock screen.
- *  • Phone is already unlocked → startActivity() with FLAG_ACTIVITY_NEW_TASK
- *    brings the activity directly to the foreground (this is the fix for the
- *    "alarm only works when phone is off" bug).
- *
- * Kept alive as a foreground service so Android doesn't kill it mid-ring.
- * Stopped by AlarmRingActivity once the puzzle is solved.
- */
 class AlarmRingingService : Service() {
 
     private var mediaPlayer: android.media.MediaPlayer? = null
@@ -42,35 +28,31 @@ class AlarmRingingService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         startRinging()
 
-        // Re-arm this alarm for its next occurrence immediately — ensures it
-        // still fires tomorrow even if the user dismisses (or ignores) today's ring.
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
             AlarmScheduler.schedule(applicationContext, alarm)
         }
 
-        // ── KEY FIX: if the screen is already on (user is actively using the
-        // phone), the fullScreenIntent notification shows only as a heads-up
-        // banner — NOT as a full-screen takeover. We must directly start the
-        // activity ourselves to guarantee it appears on top of whatever the
-        // user is doing. ──────────────────────────────────────────────────────
+        // KEY FIX: if the screen is already on and unlocked (user is actively
+        // using the phone), the fullScreenIntent notification only shows as a
+        // heads-up banner. We must directly startActivity() to force the alarm
+        // screen to appear on top of whatever the user is doing.
         val powerManager = getSystemService(PowerManager::class.java)
         val keyguardManager = getSystemService(KeyguardManager::class.java)
         val screenIsOn = powerManager?.isInteractive == true
         val phoneIsUnlocked = keyguardManager?.isKeyguardLocked == false
 
         if (screenIsOn && phoneIsUnlocked) {
-            // Phone is in active use — launch directly over the current app.
             val activityIntent = Intent(this, AlarmRingActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_NO_USER_ACTION or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
             }
             startActivity(activityIntent)
         }
-        // If screen is off or locked, the fullScreenIntent in buildNotification()
-        // handles waking the device and showing the activity.
 
         return START_NOT_STICKY
     }
@@ -95,7 +77,7 @@ class AlarmRingingService : Service() {
 
         runCatching {
             vibrator = getSystemService(Vibrator::class.java)
-            val pattern = longArrayOf(0, 800, 400) // wait, buzz, pause — repeats
+            val pattern = longArrayOf(0, 800, 400)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
             } else {
@@ -105,7 +87,6 @@ class AlarmRingingService : Service() {
         }
     }
 
-    /** Called by AlarmRingActivity once the dismiss puzzle is solved. */
     fun stopRinging() {
         runCatching { mediaPlayer?.stop() }
         runCatching { mediaPlayer?.release() }
@@ -130,7 +111,7 @@ class AlarmRingingService : Service() {
             this,
             0,
             Intent(this, AlarmRingActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -140,7 +121,7 @@ class AlarmRingingService : Service() {
             .setContentText(getString(R.string.alarm_notif_text))
             .setSmallIcon(R.drawable.ic_block)
             .setContentIntent(fullScreenIntent)
-            .setFullScreenIntent(fullScreenIntent, /* highPriority = */ true)
+            .setFullScreenIntent(fullScreenIntent, true)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -157,7 +138,7 @@ class AlarmRingingService : Service() {
             android.app.NotificationManager.IMPORTANCE_HIGH
         ).apply {
             description = getString(R.string.alarm_notif_text)
-            setSound(null, null) // we play the ringtone ourselves via MediaPlayer
+            setSound(null, null)
             setBypassDnd(true)
         }
         nm.createNotificationChannel(channel)
@@ -168,7 +149,6 @@ class AlarmRingingService : Service() {
     companion object {
         const val NOTIF_ID = 2001
         private const val ALARM_CHANNEL_ID = "alarm_ringing"
-
         @Volatile var activeInstance: AlarmRingingService? = null
     }
 }
