@@ -215,6 +215,7 @@ fun AppRoot(
     var isNewApp        by remember { mutableStateOf(false) }
     var selectedAlarmId by remember { mutableStateOf<String?>(null) }
     var isNewAlarm      by remember { mutableStateOf(false) }
+    var justAddedAlarms by remember { mutableStateOf<List<com.allinone.blocker.data.StrictAlarmEntry>?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val pendingAction by StrictModeGate.pendingAction.collectAsState()
@@ -256,15 +257,12 @@ fun AppRoot(
                     onBack      = { screen = Screen.BLOCKED_APPS }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
-            Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
+        Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
     onBack = { screen = Screen.HOME },
     onAddAlarm = {
         val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault(
             BlockerRepository.nextAlarmRequestCode()
         )
-        // Do NOT save yet — only hold the id/requestCode locally so the edit
-        // screen has something to show. The entry is written to the repo
-        // (and scheduled) only when the user taps Save on that screen.
         selectedAlarmId = fresh.id
         isNewAlarm = true
         screen = Screen.STRICT_ALARM_EDIT
@@ -275,11 +273,16 @@ fun AppRoot(
         isNewAlarm = false
         screen = Screen.STRICT_ALARM_EDIT
     },
-    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
+    onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR },
+    justAddedAlarms = justAddedAlarms,
+    onJustAddedAlarmsConsumed = { justAddedAlarms = null }
 )
 Screen.STRICT_ALARM_QUICK_ADD -> StrictAlarmQuickAddScreen(
     onBack = { screen = Screen.STRICT_ALARM_LIST },
-    onDone = { screen = Screen.STRICT_ALARM_LIST }
+    onDone = { createdEntries ->
+        justAddedAlarms = createdEntries
+        screen = Screen.STRICT_ALARM_LIST
+    }
 )
 Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
     alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(
