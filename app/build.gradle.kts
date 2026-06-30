@@ -94,7 +94,14 @@ dependencies {
     // used in values/themes.xml and values-night/themes.xml.
     implementation("com.google.android.material:material:1.12.0")
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    // Bumped from 2024.06.00 so we can use Modifier.animateItem() — the
+    // official Compose API for smooth "slide into place" list reordering
+    // (added in Compose Foundation 1.7, first shipped in BOM 2024.09.00).
+    // Picked the last patch release in that same 1.7.x family (2024.09.03)
+    // to get the feature with the smallest possible version jump — same
+    // Kotlin compiler line (1.5.14 / Kotlin 1.9.24) as before, so nothing
+    // else in the app should be affected.
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
