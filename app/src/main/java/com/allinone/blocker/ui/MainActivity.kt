@@ -78,7 +78,7 @@ import com.allinone.blocker.ui.theme.ThemePreference
 enum class Screen {
     HOME, PERMISSIONS, BLOCKED_APPS, BLOCKED_WEBSITES, APP_PICKER, APP_RULES,
     LOCKDOWN, WHITELIST, STRICT_MODE, STATS, SETTINGS,
-    STRICT_ALARM_LIST, STRICT_ALARM_EDIT, SLEEP_CALCULATOR, PROFILE, STREAKS
+    STRICT_ALARM_LIST, STRICT_ALARM_EDIT, STRICT_ALARM_QUICK_ADD, SLEEP_CALCULATOR, PROFILE, STREAKS
 }
 
 data class NavTab(
@@ -231,9 +231,9 @@ fun AppRoot(
     // Sub-screens are full-screen "pushed" destinations (no bottom nav). Routing
     // them through one ScreenPush gives every push/pop a directional slide so the
     // navigation actually reads as movement, instead of a hard cut.
-    val subScreens = setOf(
+  val subScreens = setOf(
         Screen.BLOCKED_APPS, Screen.BLOCKED_WEBSITES, Screen.APP_PICKER, Screen.APP_RULES,
-        Screen.WHITELIST, Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT,
+        Screen.WHITELIST, Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT, Screen.STRICT_ALARM_QUICK_ADD,
         Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS, Screen.SETTINGS, Screen.STREAKS
     )
     if (screen in subScreens) {
@@ -255,7 +255,7 @@ fun AppRoot(
                     onBack      = { screen = Screen.BLOCKED_APPS }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
-               Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
+            Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
     onBack = { screen = Screen.HOME },
     onAddAlarm = {
         val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault(
@@ -267,11 +267,16 @@ fun AppRoot(
         selectedAlarmId = fresh.id
         screen = Screen.STRICT_ALARM_EDIT
     },
+    onQuickAdd = { screen = Screen.STRICT_ALARM_QUICK_ADD },
     onEditAlarm = { alarmId ->
         selectedAlarmId = alarmId
         screen = Screen.STRICT_ALARM_EDIT
     },
     onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
+)
+Screen.STRICT_ALARM_QUICK_ADD -> StrictAlarmQuickAddScreen(
+    onBack = { screen = Screen.STRICT_ALARM_LIST },
+    onDone = { screen = Screen.STRICT_ALARM_LIST }
 )
 Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
     alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(
