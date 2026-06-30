@@ -97,6 +97,28 @@ object AlarmScheduler {
         }
     }
 
+    /**
+     * Schedules a batch of brand-new, independent alarms one at a time, with
+     * a short pause between each Android scheduling call. This is only about
+     * *how fast we tell Android about each alarm* — it has nothing to do with
+     * when the alarms actually ring (each alarm rings at the exact time the
+     * user picked for it). Spacing the calls out avoids hammering Android's
+     * AlarmManager with a burst of calls back-to-back, which can be flaky on
+     * some devices when many exact alarms are registered in the same instant.
+     *
+     * Runs on a background coroutine so it doesn't block the UI thread.
+     */
+    suspend fun scheduleAllSpaced(
+        context: Context,
+        alarms: List<StrictAlarmEntry>,
+        spacingMillis: Long = 3000L
+    ) {
+        alarms.forEachIndexed { i, alarm ->
+            schedule(context, alarm)
+            if (i != alarms.lastIndex) kotlinx.coroutines.delay(spacingMillis)
+        }
+    }
+
     /** Cancels every pending slot for every entry in [alarms]. */
     fun cancelAll(context: Context, alarms: List<StrictAlarmEntry>) {
         alarms.forEach { cancel(context, it) }
