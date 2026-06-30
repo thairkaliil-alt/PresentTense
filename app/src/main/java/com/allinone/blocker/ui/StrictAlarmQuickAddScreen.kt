@@ -61,6 +61,24 @@ private const val MAX_ALARMS = 10
 private const val MIN_ALARMS = 1
 
 /**
+ * The three repeat presets offered on the multi-add screen. The chosen
+ * option's [days] set is applied to every alarm created in that batch —
+ * the same [java.util.Calendar] day constants used everywhere else
+ * ([StrictAlarmEntry.daysOfWeek]).
+ */
+private enum class MultiAddRepeatOption(val label: String, val days: Set<Int>) {
+    EVERY_DAY("Every day", (1..7).toSet()),
+    WEEKDAYS(
+        "Weekdays",
+        setOf(
+            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+            Calendar.THURSDAY, Calendar.FRIDAY
+        )
+    ),
+    WEEKENDS("Weekends", setOf(Calendar.SATURDAY, Calendar.SUNDAY))
+}
+
+/**
  * "Add multiple alarms" screen.
  *
  * The user picks a START TIME and a COUNT (1–10). The app then creates that
@@ -91,6 +109,7 @@ fun StrictAlarmQuickAddScreen(
     var startHour   by remember { mutableIntStateOf(nowCal.get(Calendar.HOUR_OF_DAY)) }
     var startMinute by remember { mutableIntStateOf(nowCal.get(Calendar.MINUTE)) }
     var alarmCount  by remember { mutableIntStateOf(3) } // sensible default
+    var repeatOption by remember { mutableStateOf(MultiAddRepeatOption.EVERY_DAY) }
     var isCreating  by remember { mutableStateOf(false) }
 
     // ── Derived preview times ─────────────────────────────────────────────
@@ -118,6 +137,7 @@ fun StrictAlarmQuickAddScreen(
                     requestCode = nextCode,
                     hour        = h,
                     minute      = m,
+                    daysOfWeek  = repeatOption.days,
                     label       = if (alarmCount > 1) "Wake up ${i + 1}/$alarmCount" else "Wake up"
                 )
             )
@@ -216,6 +236,16 @@ fun StrictAlarmQuickAddScreen(
                 color = TextMuted,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            // ── Repeat selector ──────────────────────────────────────────
+            SectionLabel("Repeat")
+            Spacer(Modifier.height(12.dp))
+            RepeatSelector(
+                selected = repeatOption,
+                onSelect = { repeatOption = it }
             )
 
             Spacer(Modifier.height(32.dp))
@@ -321,6 +351,49 @@ private fun CountButton(
             contentDescription = null,
             tint               = if (enabled) Color.White else AccentBlue.copy(alpha = 0.4f),
             modifier           = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
+private fun RepeatSelector(selected: MultiAddRepeatOption, onSelect: (MultiAddRepeatOption) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        MultiAddRepeatOption.entries.forEach { option ->
+            RepeatChip(
+                label    = option.label,
+                selected = option == selected,
+                onClick  = { onSelect(option) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RepeatChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(
+                color = if (selected) AccentBlue else CardSurface,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .pressable(pressedScale = 0.96f, onClick = onClick)
+            .padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text       = label,
+            style      = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color      = if (selected) Color.White else TextSecondary
         )
     }
 }
