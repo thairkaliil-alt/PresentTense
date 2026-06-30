@@ -130,57 +130,75 @@ fun StreaksScreen(onBack: () -> Unit) {
 
     val isMilestone = remember(streak) { StreakRepository.isMilestone(streak) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
-                    }
-                },
-                title = {
-                    Text(
-                        "Streak",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+    // ── Confetti trigger ────────────────────────────────────────────────────
+    // Fires once whenever the milestone label actually becomes visible (after
+    // the count-up finishes), not just because isMilestone is true — this way
+    // confetti is timed to the moment the user SEES the achievement, not the
+    // instant the screen opens. BigFlameHero reports this up via the callback.
+    var showConfetti by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                        }
+                    },
+                    title = {
+                        Text(
+                            "Streak",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = BgScreen,
+                        scrolledContainerColor = BgScreen
                     )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = BgScreen,
-                    scrolledContainerColor = BgScreen
                 )
-            )
-        },
-        containerColor = BgScreen
-    ) { pad ->
-        Column(
-            modifier = Modifier
-                .padding(pad)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            Spacer(Modifier.height(8.dp))
+            },
+            containerColor = BgScreen
+        ) { pad ->
+            Column(
+                modifier = Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Spacer(Modifier.height(8.dp))
 
-            BigFlameHero(
-                streak      = streak,
-                brokenToday = brokenToday,
-                isMilestone = isMilestone
-            )
+                BigFlameHero(
+                    streak      = streak,
+                    brokenToday = brokenToday,
+                    isMilestone = isMilestone,
+                    onMilestoneRevealed = { showConfetti = true }
+                )
 
-            StatusLine(streak = streak, brokenToday = brokenToday)
+                StatusLine(streak = streak, brokenToday = brokenToday)
 
-            ShieldsCard(available = shieldsLeft, cap = shieldsCap)
+                ShieldsCard(available = shieldsLeft, cap = shieldsCap)
 
-            HistorySection(history = history)
+                HistorySection(history = history)
 
-            ExplainerCard()
+                ExplainerCard()
 
-            Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(24.dp))
+            }
         }
+
+        // ── Celebration overlay ─────────────────────────────────────────────
+        // Drawn on top of everything, full screen, touches pass through —
+        // purely a visual moment, never blocks the user from scrolling/tapping.
+        ConfettiOverlay(
+            trigger = showConfetti,
+            onFinished = { showConfetti = false }
+        )
     }
 }
 
@@ -189,7 +207,12 @@ fun StreaksScreen(onBack: () -> Unit) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun BigFlameHero(streak: Int, brokenToday: Boolean, isMilestone: Boolean) {
+private fun BigFlameHero(
+    streak: Int,
+    brokenToday: Boolean,
+    isMilestone: Boolean,
+    onMilestoneRevealed: () -> Unit = {}
+) {
     val context    = LocalContext.current
     val flameColor = if (brokenToday && streak == 0) TextTertiary else AccentAmber
     val glowColor  = if (brokenToday && streak == 0) TextTertiary else AccentRed
@@ -263,6 +286,7 @@ private fun BigFlameHero(streak: Int, brokenToday: Boolean, isMilestone: Boolean
         if (isMilestone) {
             delay(400L)
             milestoneVisible = true
+            onMilestoneRevealed()
         }
 
         // ── Save today's date so we don't replay on the next open today ───
@@ -443,7 +467,9 @@ private fun BigFlameHero(streak: Int, brokenToday: Boolean, isMilestone: Boolean
                 style      = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color      = AccentAmber,
+                textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier   = Modifier
+                    .padding(horizontal = 28.dp)
                     .graphicsLayer {
                         scaleX = milestoneScale.value
                         scaleY = milestoneScale.value
@@ -813,11 +839,11 @@ private fun ExplainerCard() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun milestoneCopy(days: Int): String = when (days) {
-    3   -> "🔥 3 days! Great start"
-    7   -> "🔥 One week! You're on fire"
-    14  -> "🔥 Two weeks strong"
-    30  -> "🔥 30 days — legendary"
-    60  -> "🔥 60 days. Unreal."
-    100 -> "🔥 100 days. Unstoppable."
-    else -> "🔥 $days days!"
+    3   -> "🔥 3 days in. You showed up — that's the hardest part."
+    7   -> "🔥 A full week! You're building something real."
+    14  -> "🔥 Two weeks strong. This is becoming who you are."
+    30  -> "🔥 30 days. A month of choosing yourself — that's huge."
+    60  -> "🔥 60 days. You're not trying anymore — you're doing it."
+    100 -> "🔥 100 days. However it started, this is just who you are now."
+    else -> "🔥 $days days strong. Keep going."
 }
