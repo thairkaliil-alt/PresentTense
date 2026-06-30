@@ -57,6 +57,7 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
+import com.allinone.blocker.data.effectiveAlarmCount
 import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
