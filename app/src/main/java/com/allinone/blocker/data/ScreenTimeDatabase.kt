@@ -80,18 +80,13 @@ class ScreenTimeDatabase private constructor(context: Context) :
         )
         db.execSQL("CREATE INDEX idx_hourly_totals_day ON hourly_totals(day_key)")
 
-        // Consecutive-days streak per app: how many days in a row that app was
-        // never successfully opened (i.e. it was blocked or just not used at all).
-        // streak_days resets to 0 the day an app is successfully launched past the block.
-        db.execSQL(
-            """
-            CREATE TABLE app_streaks (
-                package_name TEXT PRIMARY KEY,
-                streak_days INTEGER NOT NULL DEFAULT 0,
-                last_updated_day_key INTEGER NOT NULL DEFAULT 0
-            )
-            """.trimIndent()
-        )
+        // NOTE: there used to be a per-app "app_streaks" table created here.
+        // It was leftover from an old, abandoned per-app streak idea that
+        // never got wired up to any screen — the app now has exactly ONE
+        // streak system (see StreakRepository.kt), so that dead table was
+        // removed. If you're upgrading from an older install, onUpgrade()
+        // below still creates it harmlessly for compatibility, but it's
+        // simply unused.
 
         createDomainTables(db)
     }
