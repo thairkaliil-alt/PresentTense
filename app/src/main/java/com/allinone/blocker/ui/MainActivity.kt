@@ -213,6 +213,7 @@ fun AppRoot(
     var screen by screenState
     var selectedPackage by remember { mutableStateOf<String?>(null) }
     var selectedAlarmId by remember { mutableStateOf<String?>(null) }
+    var isNewAlarm      by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val pendingAction by StrictModeGate.pendingAction.collectAsState()
@@ -256,17 +257,19 @@ fun AppRoot(
                Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
     onBack = { screen = Screen.HOME },
     onAddAlarm = {
+        // Generate a fresh entry but do NOT save it yet — the edit screen
+        // holds it as a draft and only commits when the user taps Save.
+        // This prevents orphan blank alarms when the user taps + then Back.
         val fresh = com.allinone.blocker.data.StrictAlarmEntry.newDefault(
             BlockerRepository.nextAlarmRequestCode()
         )
-        // Pre-save before navigating so the edit screen finds it by ID
-        // and nextAlarmRequestCode() sees it next time (prevents overwriting)
-        BlockerRepository.addStrictAlarmEntry(fresh)
         selectedAlarmId = fresh.id
+        isNewAlarm      = true
         screen = Screen.STRICT_ALARM_EDIT
     },
     onEditAlarm = { alarmId ->
         selectedAlarmId = alarmId
+        isNewAlarm      = false
         screen = Screen.STRICT_ALARM_EDIT
     },
     onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR }
@@ -275,7 +278,8 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
     alarmId = selectedAlarmId ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(
         BlockerRepository.nextAlarmRequestCode()
     ).id,
-    onBack = { screen = Screen.STRICT_ALARM_LIST },
+    isNew   = isNewAlarm,
+    onBack  = { screen = Screen.STRICT_ALARM_LIST },
     onDelete = { alarmId ->
         val alarmToDelete = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         BlockerRepository.removeStrictAlarmEntry(alarmId)
