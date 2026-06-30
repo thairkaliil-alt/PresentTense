@@ -20,8 +20,7 @@ import com.allinone.blocker.ui.AlarmRingActivity
  * Runs while the Strict Alarm is actively ringing. Plays the ringtone on a
  * loop, vibrates the phone, shows AlarmRingActivity full-screen (even over
  * the lock screen), and keeps itself alive as a foreground service so
- * Android doesn't kill it mid-ring — the same survival trick
- * BlockerForegroundService already uses for blocking.
+ * Android doesn't kill it mid-ring.
  *
  * This service is stopped by AlarmRingActivity once the puzzle is solved
  * (see AlarmRingActivity.dismiss()).
@@ -36,16 +35,13 @@ class AlarmRingingService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         startRinging()
 
-        // Look up WHICH alarm entry fired (by id) from the list. Re-arm
-        // only the slot that just fired so the rest of that entry's
-        // multi-alarm burst (e.g. +3 min, +6 min) still rings today. We do
-        // this now rather than on dismiss, so it's re-armed even if the
-        // user never dismisses it (e.g. phone dies, app killed).
+        // Re-arm this alarm for the next occurrence right away — so it still
+        // rings tomorrow (or next week) even if the user never gets to the
+        // dismiss puzzle (e.g. phone dies, app is killed mid-ring).
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
-        val index = intent?.getIntExtra(AlarmScheduler.EXTRA_ALARM_INDEX, 0) ?: 0
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
-            AlarmScheduler.scheduleIndex(applicationContext, alarm, index)
+            AlarmScheduler.schedule(applicationContext, alarm)
         }
 
         return START_NOT_STICKY
@@ -102,12 +98,6 @@ class AlarmRingingService : Service() {
     private fun buildNotification(): Notification {
         ensureAlarmChannel()
 
-        // This is the part that actually puts AlarmRingActivity on screen,
-        // even over a locked phone. A plain startActivity() call from a
-        // service is blocked by Android's background-activity-start rules;
-        // a full-screen intent attached to a high-priority notification is
-        // the documented exception Android grants specifically to alarm and
-        // calling apps.
         val fullScreenIntent = PendingIntent.getActivity(
             this,
             0,
@@ -130,13 +120,6 @@ class AlarmRingingService : Service() {
             .build()
     }
 
-    /**
-     * The alarm needs its OWN notification channel, separate from the
-     * existing "blocking_active" one — that one is set to low importance
-     * (so it doesn't buzz constantly while blocking is just sitting there
-     * running), but a ringing alarm needs IMPORTANCE_HIGH or the system
-     * will suppress the heads-up/full-screen behavior entirely.
-     */
     private fun ensureAlarmChannel() {
         val nm = getSystemService(android.app.NotificationManager::class.java)
         if (nm.getNotificationChannel(ALARM_CHANNEL_ID) != null) return
