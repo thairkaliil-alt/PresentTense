@@ -32,9 +32,12 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -59,20 +62,15 @@ import java.util.Calendar
 import java.util.Locale
 
 /**
- * Card-less editor for ONE [StrictAlarmEntry] — a big clean time display
- * you tap to change, a row of small squarish "Repeat on" day chips (white,
- * soft shadow, pressable, fill with the accent color when selected), and a
- * toggle for the multi-alarm burst. No boxed Card backgrounds; content
- * floats directly on the screen background, sectioned by spacing only.
+ * Card-less editor for ONE [StrictAlarmEntry].
  *
- * @param alarmId          which entry to edit. If it's not found in
- *                         BlockerRepository.strictAlarms (e.g. the "+" button
- *                         was tapped before the new entry was saved), a fresh
- *                         default StrictAlarmEntry with this id is edited
- *                         instead, and saving will add it as new.
- * @param onBack           back / done button.
- * @param onDelete         delete button tapped — caller should remove this
- *                         entry and navigate back.
+ * Changes are held locally until the user taps Save — nothing is written to
+ * the repository or the alarm scheduler until that moment. The Save button
+ * cycles through Idle → Loading → Done, then auto-resets.
+ *
+ * The on/off toggle at the top is the only thing that still saves immediately,
+ * because toggling an alarm on/off is a deliberate one-tap action that should
+ * take effect right away (same pattern as the list screen).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,23 +79,45 @@ fun StrictAlarmEditScreen(
     onBack: () -> Unit,
     onDelete: (String) -> Unit = {}
 ) {
-    val context = LocalContext.current
+    val context   = LocalContext.current
     val allAlarms by BlockerRepository.strictAlarms.collectAsState()
-    val alarm = remember(allAlarms, alarmId) {
-       allAlarms.firstOrNull { it.id == alarmId } ?: StrictAlarmEntry(id = alarmId, requestCode = BlockerRepository.nextAlarmRequestCode())
+
+    // ── Source of truth from the repository ──────────────────────────────
+    val savedAlarm = remember(allAlarms, alarmId) {
+        allAlarms.firstOrNull { it.id == alarmId }
+            ?: StrictAlarmEntry(id = alarmId, requestCode = BlockerRepository.nextAlarmRequestCode())
     }
+
+    // ── Local draft — only written to repo when Save is tapped ───────────
+    var draft by remember(savedAlarm) { mutableStateOf(savedAlarm) }
+
+    // Keep draft in sync if the alarm changes externally (e.g. another screen)
+    // but only when we have no unsaved edits (draft == savedAlarm means untouched)
+    LaunchedEffect(savedAlarm) {
+        if (draft == savedAlarm) draft = savedAlarm
+    }
+
     val canScheduleExact = remember { AlarmScheduler.canScheduleExact(context) }
 
-    fun save(updated: StrictAlarmEntry) {
-        // The alarm is always pre-saved to the list before this screen opens
-        // (onAddAlarm in MainActivity calls addStrictAlarmEntry first).
-        // So we always update — never add — which prevents duplicate entries.
+    // ── Save button state ─────────────────────────────────────────────────
+    var saveState by remember { mutableStateOf(SaveState.Idle) }
+
+    // ── The actual persist function — only called on Save tap ─────────────
+    fun commitSave() {
+        val updated = draft
         if (allAlarms.any { it.id == updated.id }) {
             BlockerRepository.updateStrictAlarmEntry(updated)
         } else {
-            // Fallback: shouldn't happen normally, but handle it gracefully
             BlockerRepository.addStrictAlarmEntry(updated)
         }
+        AlarmScheduler.schedule(context, updated)
+    }
+
+    // ── Immediate save for the enabled toggle only ────────────────────────
+    fun saveEnabled(checked: Boolean) {
+        val updated = draft.copy(enabled = checked)
+        draft = updated
+        BlockerRepository.updateStrictAlarmEntry(updated)
         AlarmScheduler.schedule(context, updated)
     }
 
@@ -111,7 +131,7 @@ fun StrictAlarmEditScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onDelete(alarm.id) }) {
+                    IconButton(onClick = { onDelete(draft.id) }) {
                         Icon(Icons.Filled.Delete, contentDescription = "Delete alarm", tint = AccentRed)
                     }
                 }
@@ -126,7 +146,8 @@ fun StrictAlarmEditScreen(
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── On/off toggle, top of the editor ───────────────────────
+
+            // ── On/off toggle — saves immediately ─────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -138,8 +159,8 @@ fun StrictAlarmEditScreen(
                     fontWeight = FontWeight.SemiBold
                 )
                 Switch(
-                    checked = alarm.enabled,
-                    onCheckedChange = { checked -> save(alarm.copy(enabled = checked)) },
+                    checked = draft.enabled,
+                    onCheckedChange = { checked -> saveEnabled(checked) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = AccentBlue
@@ -154,18 +175,18 @@ fun StrictAlarmEditScreen(
 
             Spacer(Modifier.height(28.dp))
 
-            // ── Big clean time display — tap to change ─────────────────
+            // ── Big time display — tap to change, updates draft only ───────
             Text(
-                text = formatTime(alarm.hour, alarm.minute),
+                text = formatTime(draft.hour, draft.minute),
                 style = MaterialTheme.typography.displayLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.clickable {
                     TimePickerDialog(
                         context,
-                        { _, hour, minute -> save(alarm.copy(hour = hour, minute = minute)) },
-                        alarm.hour,
-                        alarm.minute,
+                        { _, hour, minute -> draft = draft.copy(hour = hour, minute = minute) },
+                        draft.hour,
+                        draft.minute,
                         false
                     ).show()
                 }
@@ -173,7 +194,7 @@ fun StrictAlarmEditScreen(
 
             Spacer(Modifier.height(36.dp))
 
-            // ── Repeat on — small square pressable day chips ───────────
+            // ── Repeat days — updates draft only ──────────────────────────
             Text(
                 "Repeat on",
                 style = MaterialTheme.typography.labelLarge,
@@ -186,15 +207,15 @@ fun StrictAlarmEditScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 DAY_LABELS.forEach { (dayConst, label) ->
-                    val selected = dayConst in alarm.daysOfWeek
+                    val selected = dayConst in draft.daysOfWeek
                     DayChip(
-                        label = label,
+                        label    = label,
                         selected = selected,
-                        onClick = {
-                            val newDays = alarm.daysOfWeek.toMutableSet().apply {
+                        onClick  = {
+                            val newDays = draft.daysOfWeek.toMutableSet().apply {
                                 if (selected) remove(dayConst) else add(dayConst)
                             }
-                            save(alarm.copy(daysOfWeek = newDays))
+                            draft = draft.copy(daysOfWeek = newDays)
                         }
                     )
                 }
@@ -202,7 +223,7 @@ fun StrictAlarmEditScreen(
 
             Spacer(Modifier.height(40.dp))
 
-            // ── Multi-alarm burst ───────────────────────────────────────
+            // ── Snooze burst toggle — updates draft only ──────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -221,8 +242,8 @@ fun StrictAlarmEditScreen(
                     )
                 }
                 Switch(
-                    checked = alarm.multiAlarmEnabled,
-                    onCheckedChange = { checked -> save(alarm.copy(multiAlarmEnabled = checked)) },
+                    checked = draft.multiAlarmEnabled,
+                    onCheckedChange = { checked -> draft = draft.copy(multiAlarmEnabled = checked) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = AccentBlue
@@ -230,7 +251,7 @@ fun StrictAlarmEditScreen(
                 )
             }
 
-            if (alarm.multiAlarmEnabled) {
+            if (draft.multiAlarmEnabled) {
                 Spacer(Modifier.height(20.dp))
                 Row(
                     Modifier.fillMaxWidth(),
@@ -244,17 +265,16 @@ fun StrictAlarmEditScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "${alarm.alarmCount}",
+                        "${draft.alarmCount}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = AccentBlue
                     )
                 }
                 Slider(
-                    value = alarm.alarmCount.toFloat(),
+                    value = draft.alarmCount.toFloat(),
                     onValueChange = { value ->
-                        val count = value.toInt().coerceIn(1, STRICT_ALARM_MAX_COUNT)
-                        save(alarm.copy(alarmCount = count))
+                        draft = draft.copy(alarmCount = value.toInt().coerceIn(1, STRICT_ALARM_MAX_COUNT))
                     },
                     valueRange = 1f..STRICT_ALARM_MAX_COUNT.toFloat(),
                     steps = STRICT_ALARM_MAX_COUNT - 2,
@@ -271,32 +291,37 @@ fun StrictAlarmEditScreen(
                     Text("1", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                     Text("$STRICT_ALARM_MAX_COUNT", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                 }
-                if (alarm.alarmCount > 1) {
+                if (draft.alarmCount > 1) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        buildMultiAlarmPreview(alarm),
+                        buildMultiAlarmPreview(draft),
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
                 }
             }
 
-            if (alarm.enabled) {
+            if (draft.enabled) {
                 Spacer(Modifier.height(32.dp))
-                NextRingNotice(alarm)
+                NextRingNotice(draft)
             }
 
+            // ── Save button — bottom of the screen ────────────────────────
+            Spacer(Modifier.height(32.dp))
+            SaveButton(
+                state   = saveState,
+                onClick = {
+                    saveState = SaveState.Loading
+                    commitSave()
+                    saveState = SaveState.Done
+                },
+                onReset = { saveState = SaveState.Idle }
+            )
             Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-/**
- * One small square day chip — white, soft shadow, rounded corners, scales
- * down slightly on press (via [pressable]), and fills with the accent
- * color + white text when selected. This is the "clean, pressable, changes
- * color when selected" look from the reference design.
- */
 @Composable
 private fun DayChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
@@ -304,22 +329,22 @@ private fun DayChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .size(40.dp)
             .shadow(
                 elevation = if (selected) 0.dp else 3.dp,
-                shape = RoundedCornerShape(10.dp),
-                clip = false
+                shape     = RoundedCornerShape(10.dp),
+                clip      = false
             )
             .background(
-                color = if (selected) AccentBlue else CardSurface,
-                shape = RoundedCornerShape(10.dp)
+                color  = if (selected) AccentBlue else CardSurface,
+                shape  = RoundedCornerShape(10.dp)
             )
             .pressable(pressedScale = 0.92f, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
+            text       = label,
+            style      = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            color = if (selected) Color.White else TextSecondary,
-            textAlign = TextAlign.Center
+            color      = if (selected) Color.White else TextSecondary,
+            textAlign  = TextAlign.Center
         )
     }
 }
@@ -337,7 +362,7 @@ private fun PermissionNotice(onGrant: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 "Permission needed",
-                style = MaterialTheme.typography.titleSmall,
+                style      = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold
             )
             Text(
@@ -357,11 +382,11 @@ private fun NextRingNotice(alarm: StrictAlarmEntry) {
             when {
                 upcoming.isEmpty() -> "No upcoming alarm — pick at least one day"
                 upcoming.size == 1 -> "Next alarm: ${formatFullDate(upcoming.first())}"
-                else -> "Next ${upcoming.size} alarms"
+                else               -> "Next ${upcoming.size} alarms"
             },
-            style = MaterialTheme.typography.bodyMedium,
+            style      = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            color = TextSecondary
+            color      = TextSecondary
         )
         if (upcoming.size > 1) {
             Spacer(Modifier.height(4.dp))
@@ -377,9 +402,9 @@ private fun NextRingNotice(alarm: StrictAlarmEntry) {
 }
 
 private val DAY_LABELS = listOf(
-    Calendar.MONDAY to "M", Calendar.TUESDAY to "T", Calendar.WEDNESDAY to "W",
-    Calendar.THURSDAY to "T", Calendar.FRIDAY to "F", Calendar.SATURDAY to "S",
-    Calendar.SUNDAY to "S"
+    Calendar.MONDAY    to "M", Calendar.TUESDAY   to "T", Calendar.WEDNESDAY to "W",
+    Calendar.THURSDAY  to "T", Calendar.FRIDAY    to "F", Calendar.SATURDAY  to "S",
+    Calendar.SUNDAY    to "S"
 )
 
 private fun buildMultiAlarmPreview(alarm: StrictAlarmEntry): String {
