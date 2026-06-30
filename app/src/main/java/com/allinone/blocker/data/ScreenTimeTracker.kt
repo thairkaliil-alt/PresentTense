@@ -476,67 +476,6 @@ object ScreenTimeTracker {
         }
     }
 
-    /**
-     * Returns the streak (consecutive blocked days) for each package.
-     * A "streak day" = a day where the app was never successfully used past the block.
-     * The streak resets the day the app is actually launched successfully.
-     * We calculate this fresh from the DB each time it's asked for — it's only
-     * called when opening the Stats screen, so performance isn't a concern.
-     */
-    fun streaksForPackages(context: Context, packages: List<String>): Map<String, Int> {
-        if (packages.isEmpty()) return emptyMap()
-        val db = ScreenTimeDatabase.get(context).readableDatabase
-        val result = HashMap<String, Int>()
-
-        // For each package: walk back day by day from yesterday. A day "counts"
-        // toward the streak if the app had blocked_attempts > 0 but daily_totals
-        // shows 0 (or no row) — meaning we tried to open it but never got through.
-        // The streak stops the moment a day has actual usage time > 0.
-        val today = dayKeyFor(System.currentTimeMillis())
-
-        for (pkg in packages) {
-            var streak = 0
-            var dayOffset = 1 // start from yesterday (today isn't over yet)
-            while (dayOffset <= 365) { // cap at a year to avoid infinite loops
-                val dayKey = offsetDayKey(today, -dayOffset)
-
-                // Check if this day had any actual usage
-                val usageMillis = db.query(
-                    "daily_totals", arrayOf("total_millis"),
-                    "day_key = ? AND package_name = ?",
-                    arrayOf(dayKey.toString(), pkg), null, null, null
-                ).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
-
-                if (usageMillis > 0L) {
-                    // App was actually used this day — streak broken
-                    break
-                }
-
-                // Check if this day had any blocked attempts (meaning the app was
-                // blocked and the user tried to open it — counts toward streak)
-                val hadAttempts = db.query(
-                    "blocked_attempts", arrayOf("attempts"),
-                    "day_key = ? AND package_name = ?",
-                    arrayOf(dayKey.toString(), pkg), null, null, null
-                ).use { c -> if (c.moveToFirst()) c.getInt(0) > 0 else false }
-
-                if (hadAttempts) {
-                    streak++
-                    dayOffset++
-                } else {
-                    // No attempts and no usage — day is irrelevant, keep walking back
-                    // but only if streak is already > 0 (gap before we even started tracking)
-                    if (streak > 0) break
-                    dayOffset++
-                    // If no data yet (streak == 0), keep looking back up to 30 days
-                    if (dayOffset > 30) break
-                }
-            }
-            if (streak > 0) result[pkg] = streak
-        }
-        return result
-    }
-
     // ── Per-domain (website) tracking ────────────────────────────────────────
     //
     // Unlike app tracking, there's no OS-level API that tells us "the user
