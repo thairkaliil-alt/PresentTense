@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -70,7 +69,6 @@ class AlarmRingActivity : ComponentActivity() {
         showOverLockScreen()
         blockBackButton()
 
-        // Get the alarm label from the intent if provided (for future use)
         val alarmLabel = intent?.getStringExtra(EXTRA_ALARM_LABEL) ?: "Strict Alarm"
 
         setContent {
@@ -119,26 +117,26 @@ class AlarmRingActivity : ComponentActivity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DATA
+// DATA — named AlarmMathProblem to avoid clash with MathProblem in
+// UnlockChallengeScreen.kt (both are in the same package)
 // ─────────────────────────────────────────────────────────────────────────────
 
-private data class MathProblem(val display: String, val answer: Int)
+private data class AlarmMathProblem(val display: String, val answer: Int)
 
-private fun newProblem(): MathProblem {
+private fun newAlarmProblem(): AlarmMathProblem {
     val a = Random.nextInt(10, 30)
     val b = Random.nextInt(10, 30)
     val c = Random.nextInt(2, 9)
-    // Always: (a + b) × c  — genuinely requires mental arithmetic, no ambiguity
-    return MathProblem("($a + $b) × $c", (a + b) * c)
+    return AlarmMathProblem("($a + $b) × $c", (a + b) * c)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COLORS — alarm-specific palette (dark, urgent, readable)
+// COLORS
 // ─────────────────────────────────────────────────────────────────────────────
 
 private val AlarmBg        = Color(0xFF0A0A14)
 private val AlarmCard      = Color(0xFF16162A)
-private val AlarmAccent    = Color(0xFF7C6AF7)   // soft purple — calm but present
+private val AlarmAccent    = Color(0xFF7C6AF7)
 private val AlarmAccentAlt = Color(0xFF5E5CE6)
 private val AlarmError     = Color(0xFFFF6B6B)
 private val AlarmSuccess   = Color(0xFF4ADE80)
@@ -153,7 +151,6 @@ private val AlarmTextMuted = Color(0xFF6A6A7A)
 @Composable
 private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
 
-    // Live clock
     var timeString by remember {
         mutableStateOf(LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")))
     }
@@ -164,8 +161,7 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
         }
     }
 
-    // Puzzle state — all on this same screen, nothing hidden
-    var problem  by remember { mutableStateOf(newProblem()) }
+    var problem  by remember { mutableStateOf(newAlarmProblem()) }
     var input    by remember { mutableStateOf("") }
     var attempts by remember { mutableIntStateOf(0) }
     var isError  by remember { mutableStateOf(false) }
@@ -182,14 +178,13 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
             isError = true
             input = ""
             attempts++
-            problem = newProblem()
+            problem = newAlarmProblem()
         }
     }
 
-    // Auto-dismiss once puzzle is solved
     LaunchedEffect(isWon) {
         if (isWon) {
-            delay(800) // let the user see the success state briefly
+            delay(800)
             onDismissed()
         }
     }
@@ -203,12 +198,10 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
         ) {
             Spacer(Modifier.height(56.dp))
 
-            // ── Pulsing alarm icon ────────────────────────────────────────────
             PulsingAlarmIcon(won = isWon)
 
             Spacer(Modifier.height(20.dp))
 
-            // ── Live time ────────────────────────────────────────────────────
             Text(
                 text = timeString,
                 fontSize = 64.sp,
@@ -220,7 +213,6 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
-            // ── Alarm label ──────────────────────────────────────────────────
             Text(
                 text = alarmLabel,
                 style = MaterialTheme.typography.titleMedium,
@@ -231,7 +223,6 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
 
             Spacer(Modifier.height(32.dp))
 
-            // ── Puzzle card — problem + answer input on the same screen ───────
             if (!isWon) {
                 PuzzleCard(
                     problem       = problem,
@@ -247,7 +238,6 @@ private fun AlarmRingScreen(alarmLabel: String, onDismissed: () -> Unit) {
 
             Spacer(Modifier.weight(1f))
 
-            // ── Dismiss / confirm button ─────────────────────────────────────
             Button(
                 onClick       = ::checkAnswer,
                 enabled       = input.isNotEmpty() && !isWon,
@@ -314,12 +304,12 @@ private fun PulsingAlarmIcon(won: Boolean) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PUZZLE CARD — problem visible + input field, both on the same card
+// PUZZLE CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun PuzzleCard(
-    problem:       MathProblem,
+    problem:       AlarmMathProblem,
     input:         String,
     isError:       Boolean,
     attempts:      Int,
@@ -335,14 +325,12 @@ private fun PuzzleCard(
         verticalArrangement   = Arrangement.spacedBy(16.dp),
         horizontalAlignment   = Alignment.CenterHorizontally
     ) {
-        // Header label
         Text(
             text  = if (attempts == 0) "Solve to dismiss" else "Try again — new problem",
             style = MaterialTheme.typography.labelLarge,
             color = if (isError) AlarmError else AlarmTextMuted
         )
 
-        // ── The math problem — big, always visible ───────────────────────────
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -365,7 +353,6 @@ private fun PuzzleCard(
             )
         }
 
-        // ── Answer input — directly below the problem, no separate screen ────
         OutlinedTextField(
             value          = input,
             onValueChange  = onInputChange,
@@ -391,7 +378,7 @@ private fun PuzzleCard(
 
         if (isError) {
             Row(
-                verticalAlignment    = Alignment.CenterVertically,
+                verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
                 Text("✕  Wrong — ", color = AlarmError, style = MaterialTheme.typography.bodySmall)
