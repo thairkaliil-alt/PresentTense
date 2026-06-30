@@ -96,7 +96,7 @@ private enum class MultiAddRepeatOption(val label: String, val days: Set<Int>) {
 @Composable
 fun StrictAlarmQuickAddScreen(
     onBack: () -> Unit,
-    onDone: () -> Unit
+    onDone: (List<StrictAlarmEntry>) -> Unit
 ) {
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
@@ -151,7 +151,7 @@ fun StrictAlarmQuickAddScreen(
             // AlarmManager with a burst of exact-alarm registrations at once.
             AlarmScheduler.scheduleAllSpaced(context, newEntries, spacingMillis = 300L)
             isCreating = false
-            onDone()
+            onDone(newEntries)
         }
     }
 
