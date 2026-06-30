@@ -153,19 +153,40 @@ private fun defFor(preset: BlockPreset) = PRESETS.first { it.preset == preset }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
+fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> Unit) {
     val context = LocalContext.current
 
-    // ── Load the saved app once ───────────────────────────────────────────
+    // ── Load existing saved app (null if this is a brand-new addition) ────
     val savedApp = remember {
         packageName?.let { BlockerRepository.appFor(it) }
     }
 
+    // ── For new apps, seed app name/icon from InstalledApps ──────────────
+    val deviceApp = remember(packageName) {
+        packageName?.let { pkg -> InstalledApps.apps.value.firstOrNull { it.packageName == pkg } }
+    }
+
     // ── Local draft — only committed to the repo when Save is tapped ─────
-    var draft by remember { mutableStateOf(savedApp) }
+    // For new apps: start with a sensible blank (no preset selected yet).
+    // For existing apps: start from what's already saved.
+    var draft by remember {
+        mutableStateOf(
+            savedApp ?: packageName?.let { pkg ->
+                BlockedApp(
+                    packageName = pkg,
+                    appName     = deviceApp?.label ?: pkg,
+                    isReels     = InstalledApps.isReels(pkg),
+                    preset      = BlockPreset.FULLY_BLOCKED
+                )
+            }
+        )
+    }
     var showAddRuleDialog by remember { mutableStateOf(false) }
     var customExpanded    by remember { mutableStateOf(false) }
     var saveState         by remember { mutableStateOf(SaveState.Idle) }
+    // For new apps: tracks whether the user has explicitly picked a preset.
+    // Prevents saving a default FULLY_BLOCKED without a conscious choice.
+    var presetChosen      by remember { mutableStateOf(!isNew || savedApp != null) }
 
     val current = draft
     if (current == null) {
@@ -193,6 +214,7 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
                 protection = def.defaultProtection
             )
         )
+        presetChosen = true
         if (def.preset == BlockPreset.CUSTOM) customExpanded = true
     }
 
@@ -229,13 +251,14 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
 
             // Section header
             Text(
-                "How do you want to block this?",
+                if (isNew) "Choose how to block this app" else "How do you want to block this?",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary
             )
             Text(
-                "Pick the option that matches your goal. You can change it any time.",
+                if (isNew) "Pick an option below, then tap Save to add the block."
+                else "Pick the option that matches your goal. You can change it any time.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary
             )
@@ -243,10 +266,11 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
             Spacer(Modifier.height(4.dp))
 
             // ── Preset cards — update draft only ──────────────────────────
+            // For new apps, nothing is pre-selected — user must make a choice.
             PRESETS.forEach { def ->
                 PresetCard(
                     def      = def,
-                    selected = current.preset == def.preset,
+                    selected = (!isNew || savedApp != null) && current.preset == def.preset,
                     onClick  = { applyPreset(def) }
                 )
             }
@@ -288,8 +312,18 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
 
             // ── Save button ───────────────────────────────────────────────
             Spacer(Modifier.height(8.dp))
+            if (isNew && !presetChosen) {
+                Text(
+                    "Choose an option above to continue.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             SaveButton(
                 state   = saveState,
+                enabled = presetChosen,
                 onClick = {
                     saveState = SaveState.Loading
                     BlockerRepository.upsertApp(current)
