@@ -71,11 +71,16 @@ import java.util.Locale
  * The on/off toggle at the top is the only thing that still saves immediately,
  * because toggling an alarm on/off is a deliberate one-tap action that should
  * take effect right away (same pattern as the list screen).
+ *
+ * @param isNew  true when opened from the + button — means the entry does NOT
+ *               exist in the repository yet. Back without saving discards
+ *               the draft silently. False when editing an existing alarm.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StrictAlarmEditScreen(
     alarmId: String,
+    isNew: Boolean = false,
     onBack: () -> Unit,
     onDelete: (String) -> Unit = {}
 ) {
@@ -113,12 +118,15 @@ fun StrictAlarmEditScreen(
         AlarmScheduler.schedule(context, updated)
     }
 
-    // ── Immediate save for the enabled toggle only ────────────────────────
+    // ── Immediate save for the enabled toggle — only for existing alarms ──
+    // If this is a new alarm that hasn't been saved yet, just update the draft.
     fun saveEnabled(checked: Boolean) {
         val updated = draft.copy(enabled = checked)
         draft = updated
-        BlockerRepository.updateStrictAlarmEntry(updated)
-        AlarmScheduler.schedule(context, updated)
+        if (!isNew || allAlarms.any { it.id == updated.id }) {
+            BlockerRepository.updateStrictAlarmEntry(updated)
+            AlarmScheduler.schedule(context, updated)
+        }
     }
 
     Scaffold(
