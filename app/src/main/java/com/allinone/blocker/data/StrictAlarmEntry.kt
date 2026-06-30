@@ -14,6 +14,7 @@ import java.util.Calendar
  * everything else will follow automatically.
  */
 const val MULTI_ALARM_INTERVAL_MINUTES = 3
+const val STRICT_ALARM_INTERVAL_MINUTES = MULTI_ALARM_INTERVAL_MINUTES
 
 /**
  * One independent Strict Alarm. The app holds a LIST of these — each one
@@ -103,4 +104,8 @@ fun StrictAlarmEntry.nextTriggerMillis(nowMillis: Long = System.currentTimeMilli
         if (dayMatches && triggerAt > nowMillis) return triggerAt
     }
     return null
+}
+
+fun StrictAlarmEntry.effectiveAlarmCount(): Int {
+    return 1
 }
