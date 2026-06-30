@@ -1,5 +1,6 @@
 package com.allinone.blocker.service
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -8,6 +9,7 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.core.app.NotificationCompat
@@ -18,12 +20,17 @@ import com.allinone.blocker.ui.AlarmRingActivity
 
 /**
  * Runs while the Strict Alarm is actively ringing. Plays the ringtone on a
- * loop, vibrates the phone, shows AlarmRingActivity full-screen (even over
- * the lock screen), and keeps itself alive as a foreground service so
- * Android doesn't kill it mid-ring.
+ * loop, vibrates the phone, and shows AlarmRingActivity full-screen in ALL
+ * scenarios:
  *
- * This service is stopped by AlarmRingActivity once the puzzle is solved
- * (see AlarmRingActivity.dismiss()).
+ *  • Phone is asleep / locked  → fullScreenIntent in the notification wakes
+ *    the screen and launches the activity over the lock screen.
+ *  • Phone is already unlocked → startActivity() with FLAG_ACTIVITY_NEW_TASK
+ *    brings the activity directly to the foreground (this is the fix for the
+ *    "alarm only works when phone is off" bug).
+ *
+ * Kept alive as a foreground service so Android doesn't kill it mid-ring.
+ * Stopped by AlarmRingActivity once the puzzle is solved.
  */
 class AlarmRingingService : Service() {
 
@@ -35,14 +42,35 @@ class AlarmRingingService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         startRinging()
 
-        // Re-arm this alarm for the next occurrence right away — so it still
-        // rings tomorrow (or next week) even if the user never gets to the
-        // dismiss puzzle (e.g. phone dies, app is killed mid-ring).
+        // Re-arm this alarm for its next occurrence immediately — ensures it
+        // still fires tomorrow even if the user dismisses (or ignores) today's ring.
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
             AlarmScheduler.schedule(applicationContext, alarm)
         }
+
+        // ── KEY FIX: if the screen is already on (user is actively using the
+        // phone), the fullScreenIntent notification shows only as a heads-up
+        // banner — NOT as a full-screen takeover. We must directly start the
+        // activity ourselves to guarantee it appears on top of whatever the
+        // user is doing. ──────────────────────────────────────────────────────
+        val powerManager = getSystemService(PowerManager::class.java)
+        val keyguardManager = getSystemService(KeyguardManager::class.java)
+        val screenIsOn = powerManager?.isInteractive == true
+        val phoneIsUnlocked = keyguardManager?.isKeyguardLocked == false
+
+        if (screenIsOn && phoneIsUnlocked) {
+            // Phone is in active use — launch directly over the current app.
+            val activityIntent = Intent(this, AlarmRingActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            }
+            startActivity(activityIntent)
+        }
+        // If screen is off or locked, the fullScreenIntent in buildNotification()
+        // handles waking the device and showing the activity.
 
         return START_NOT_STICKY
     }
@@ -112,7 +140,7 @@ class AlarmRingingService : Service() {
             .setContentText(getString(R.string.alarm_notif_text))
             .setSmallIcon(R.drawable.ic_block)
             .setContentIntent(fullScreenIntent)
-            .setFullScreenIntent(fullScreenIntent, true)
+            .setFullScreenIntent(fullScreenIntent, /* highPriority = */ true)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -141,9 +169,6 @@ class AlarmRingingService : Service() {
         const val NOTIF_ID = 2001
         private const val ALARM_CHANNEL_ID = "alarm_ringing"
 
-        // Lets AlarmRingActivity reach back into the running service instance
-        // to stop the ringing once the puzzle is solved, without needing a
-        // full bind/unbind dance for something this simple.
         @Volatile var activeInstance: AlarmRingingService? = null
     }
 }
