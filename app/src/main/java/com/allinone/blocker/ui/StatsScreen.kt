@@ -285,7 +285,16 @@ fun StatsScreen(onBack: () -> Unit) {
 
             // ── 1. Today's total card ────────────────────────────────────────
             item(key = "today_total") {
-                AnimatedAppearance(delayMs = 0) {
+                if (!entranceAnimationPlayed) {
+                    AnimatedAppearance(delayMs = 0) {
+                        TodayTotalCard(
+                            totalMinutes = totalTodayMinutes,
+                            topStreakDays = appStats.map { it.streakDays }.maxOrNull() ?: 0,
+                            goalMinutes = goalMinutes,
+                            onEditGoal = { showGoalDialog = true }
+                        )
+                    }
+                } else {
                     TodayTotalCard(
                         totalMinutes = totalTodayMinutes,
                         topStreakDays = appStats.map { it.streakDays }.maxOrNull() ?: 0,
@@ -298,7 +307,14 @@ fun StatsScreen(onBack: () -> Unit) {
             // ── 2. Blocked attempts summary ──────────────────────────────────
             if (totalBlockedToday > 0 || topBlockedApp != null) {
                 item(key = "blocked_attempts") {
-                    AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs) {
+                    if (!entranceAnimationPlayed) {
+                        AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs) {
+                            BlockedAttemptsCard(
+                                totalBlocked = totalBlockedToday,
+                                topApp = topBlockedApp
+                            )
+                        }
+                    } else {
                         BlockedAttemptsCard(
                             totalBlocked = totalBlockedToday,
                             topApp = topBlockedApp
@@ -309,7 +325,14 @@ fun StatsScreen(onBack: () -> Unit) {
 
             // ── 3 & 4. Hourly + Weekly charts — swipeable side-by-side ───────
             item(key = "chart_pager") {
-                AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * 2) {
+                if (!entranceAnimationPlayed) {
+                    AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * 2) {
+                        ChartPager(
+                            hourlyMillis = hourlyMillis,
+                            weeklyMinutes = weeklyMinutes
+                        )
+                    }
+                } else {
                     ChartPager(
                         hourlyMillis = hourlyMillis,
                         weeklyMinutes = weeklyMinutes
@@ -319,7 +342,7 @@ fun StatsScreen(onBack: () -> Unit) {
 
             // ── 5. Tab strip ─────────────────────────────────────────────────
             item(key = "tab_strip") {
-                AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * 3) {
+                val tabStripContent: @Composable () -> Unit = {
                     PrimaryTabRow(
                         selectedTabIndex = selectedTab,
                         containerColor   = CardSurface,
@@ -351,6 +374,11 @@ fun StatsScreen(onBack: () -> Unit) {
                             }
                         )
                     }
+                }
+                if (!entranceAnimationPlayed) {
+                    AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs * 3) { tabStripContent() }
+                } else {
+                    tabStripContent()
                 }
             }
 
