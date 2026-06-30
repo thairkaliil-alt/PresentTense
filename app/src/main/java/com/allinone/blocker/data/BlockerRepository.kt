@@ -351,6 +351,13 @@ object BlockerRepository {
         persistStrictAlarms()
     }
 
+    fun removeStrictAlarmEntries(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val idSet = ids.toSet()
+        _strictAlarms.value = _strictAlarms.value.filterNot { it.id in idSet }
+        persistStrictAlarms()
+    }
+
     fun setStrictAlarmEntryEnabled(id: String, enabled: Boolean) {
         _strictAlarms.value = _strictAlarms.value.map {
             if (it.id == id) it.copy(enabled = enabled) else it
