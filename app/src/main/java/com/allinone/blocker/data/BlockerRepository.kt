@@ -323,8 +323,21 @@ object BlockerRepository {
 
     // List-based CRUD, mirrors addSchedule/updateSchedule/removeSchedule above.
 
-    fun addStrictAlarmEntry(entry: StrictAlarmEntry) {
+  fun addStrictAlarmEntry(entry: StrictAlarmEntry) {
         _strictAlarms.value = _strictAlarms.value + entry
+        persistStrictAlarms()
+    }
+
+    /**
+     * Adds several brand-new, fully independent alarm entries in one go
+     * (used by the "Quick add" multi-time screen). Each entry in [entries]
+     * is a separate alarm — its own card, its own on/off, its own days —
+     * the same as if you had tapped "+" and saved several times in a row.
+     * This just batches the repository write into a single update.
+     */
+    fun addStrictAlarmEntries(entries: List<StrictAlarmEntry>) {
+        if (entries.isEmpty()) return
+        _strictAlarms.value = _strictAlarms.value + entries
         persistStrictAlarms()
     }
 
