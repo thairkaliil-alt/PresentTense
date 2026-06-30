@@ -66,6 +66,7 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
+import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -132,7 +133,7 @@ fun StrictAlarmListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-              actions = {
+                actions = {
                     IconButton(onClick = onOpenSleepCalculator) {
                         Icon(Icons.Filled.Bedtime, contentDescription = "Sleep calculator")
                     }
@@ -195,13 +196,24 @@ fun StrictAlarmListScreen(
                                 }?.index ?: hoverIndex
 
                                 if (newHover != hoverIndex) {
-                                    // Swap in the local list
+                                    // Swap in the local list — this is what makes the
+                                    // OTHER (non-dragged) cards slide into their new
+                                    // slots, via animateItem() on each AlarmCard below.
                                     val mutable = orderedAlarms.toMutableList()
                                     val fromIdx = hoverIndex.coerceIn(0, mutable.lastIndex)
                                     val toIdx   = newHover.coerceIn(0, mutable.lastIndex)
                                     val item    = mutable.removeAt(fromIdx)
                                     mutable.add(toIdx, item)
                                     orderedAlarms = mutable
+
+                                    // The card being dragged now sits at a NEW index,
+                                    // so Compose will lay it out at a different base
+                                    // position next frame. Correct dragOffsetY by that
+                                    // same amount so the card visually stays glued
+                                    // under the finger instead of jumping — this is
+                                    // separate from animateItem (which is deliberately
+                                    // skipped on the dragged card; see itemModifier
+                                    // below) and only concerns the one card under touch.
                                     dragOffsetY  += (draggingItem.offset - (itemInfo.firstOrNull { it.index == newHover }?.offset ?: draggingItem.offset))
                                     hoverIndex    = newHover
                                 }
@@ -249,12 +261,41 @@ fun StrictAlarmListScreen(
                     label         = "cardScale"
                 )
 
+                // ── The actual "smooth reorder" fix ─────────────────────────
+                // Modifier.animateItem() is Compose's own built-in reorder
+                // animation: whenever an item's position in the list changes
+                // (because we just swapped `orderedAlarms` mid-drag), every
+                // OTHER card that got pushed up or down smoothly SLIDES into
+                // its new slot instead of snapping there on the next frame.
+                // Skipped on the card actually being dragged — that one is
+                // already following the finger directly via dragOffsetY, so
+                // animating it too would fight the live drag and feel laggy.
+                // Also skipped entirely if the user has "reduce motion" on.
+                val reducedMotion = LocalReducedMotion.current
+                val itemModifier = if (isDragging || reducedMotion) {
+                    Modifier
+                } else {
+                    // animateItem() needs a FiniteAnimationSpec<IntOffset>.
+                    // StiffnessMedium (not the very stiff tap-feedback spring
+                    // used elsewhere) so the slide is actually visible as the
+                    // card travels several rows — a touch of bounce on
+                    // landing reads as "alive" without feeling floaty.
+                    Modifier.animateItem(
+                        placementSpec = androidx.compose.animation.core.spring(
+                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+                            stiffness    = androidx.compose.animation.core.Spring.StiffnessMedium,
+                            visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold
+                        )
+                    )
+                }
+
                 AlarmCard(
                     entry      = entry,
                     isDragging = isDragging,
                     elevation  = elevation,
                     scale      = scale,
                     dragOffsetY = if (isDragging) dragOffsetY else 0f,
+                    modifier   = itemModifier,
                     onToggle   = { checked ->
                         BlockerRepository.setStrictAlarmEntryEnabled(entry.id, checked)
                         AlarmScheduler.schedule(context, entry.copy(enabled = checked))
@@ -276,6 +317,7 @@ private fun AlarmCard(
     elevation: androidx.compose.ui.unit.Dp,
     scale: Float,
     dragOffsetY: Float,
+    modifier: Modifier = Modifier,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit,
     onDelete: () -> Unit
@@ -283,7 +325,7 @@ private fun AlarmCard(
     val slotCount = entry.effectiveAlarmCount()
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .graphicsLayer {
                 scaleX          = scale
