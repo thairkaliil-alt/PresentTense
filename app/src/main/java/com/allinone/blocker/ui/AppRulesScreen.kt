@@ -237,6 +237,18 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BgScreen, scrolledContainerColor = BgScreen)
             )
         },
+        floatingActionButton = {
+            SaveButton(
+                state   = saveState,
+                enabled = presetChosen,
+                onClick = {
+                    saveState = SaveState.Loading
+                    BlockerRepository.upsertApp(current)
+                    saveState = SaveState.Done
+                },
+                onReset = { saveState = SaveState.Idle }
+            )
+        },
         containerColor = BgScreen
     ) { pad ->
         Column(
@@ -310,8 +322,7 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 }
             )
 
-            // ── Save button ───────────────────────────────────────────────
-            Spacer(Modifier.height(8.dp))
+            // ── Hint shown when preset not yet chosen ─────────────────────
             if (isNew && !presetChosen) {
                 Text(
                     "Choose an option above to continue.",
@@ -319,20 +330,10 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                     color = TextSecondary,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(8.dp))
             }
-            SaveButton(
-                state   = saveState,
-                enabled = presetChosen,
-                onClick = {
-                    saveState = SaveState.Loading
-                    BlockerRepository.upsertApp(current)
-                    saveState = SaveState.Done
-                },
-                onReset = { saveState = SaveState.Idle }
-            )
 
-            Spacer(Modifier.height(24.dp))
+            // ── Bottom padding so content clears the FAB ──────────────────
+            Spacer(Modifier.height(88.dp))
         }
     }
 
