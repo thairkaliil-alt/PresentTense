@@ -33,16 +33,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +62,6 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
-import com.allinone.blocker.data.effectiveAlarmCount
 import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -67,6 +71,8 @@ import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextSecondary
 import java.util.Calendar
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,11 +81,50 @@ fun StrictAlarmListScreen(
     onAddAlarm: () -> Unit = {},
     onQuickAdd: () -> Unit = {},
     onEditAlarm: (String) -> Unit = {},
-    onOpenSleepCalculator: () -> Unit = {}
+    onOpenSleepCalculator: () -> Unit = {},
+    justAddedAlarms: List<StrictAlarmEntry>? = null,
+    onJustAddedAlarmsConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+
+    // ── Undo snackbar for a just-created batch (from Quick Add) ────────────
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(justAddedAlarms) {
+        val created = justAddedAlarms ?: return@LaunchedEffect
+        if (created.isEmpty()) {
+            onJustAddedAlarmsConsumed()
+            return@LaunchedEffect
+        }
+
+        val count = created.size
+        val message = if (count == 1) "1 alarm added" else "$count alarms added"
+
+        // Indefinite duration + a manual 5s timer gives us exact control over
+        // how long it stays up, instead of Material3's fixed Short(~4s)/Long(~10s).
+        scope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message           = message,
+                actionLabel       = "Undo",
+                withDismissAction = false,
+                duration          = androidx.compose.material3.SnackbarDuration.Indefinite
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                val ids = created.map { it.id }
+                BlockerRepository.removeStrictAlarmEntries(ids)
+                AlarmScheduler.cancelAll(context, created)
+            }
+        }
+        scope.launch {
+            delay(5000L)
+            snackbarHostState.currentSnackbarData?.dismiss()
+        }
+
+        onJustAddedAlarmsConsumed()
+    }
 
     // Delete dialog
     if (pendingDeleteId != null) {
@@ -104,6 +149,14 @@ fun StrictAlarmListScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) { data ->
+            Snackbar(
+                snackbarData    = data,
+                containerColor  = CardSurface,
+                contentColor    = MaterialTheme.colorScheme.onBackground,
+                actionColor     = AccentBlue
+            )
+        } },
         topBar = {
             TopAppBar(
                 title = { Text("Alarms", style = MaterialTheme.typography.titleLarge) },
