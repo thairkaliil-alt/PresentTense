@@ -4,17 +4,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 
-/** Minutes between each alarm when multi-alarm mode is on. */
-const val STRICT_ALARM_INTERVAL_MINUTES = 3
-
-/** Maximum number of alarms in one multi-alarm burst. */
-const val STRICT_ALARM_MAX_COUNT = 10
+/**
+ * How many minutes apart the alarms created by the "Add multiple alarms"
+ * feature are spaced. Currently fixed at 3 minutes.
+ *
+ * This constant is the single place to change if you later want to expose
+ * this as a user-configurable setting in Advanced Settings — update this
+ * value (or replace it with a value read from SharedPreferences) and
+ * everything else will follow automatically.
+ */
+const val MULTI_ALARM_INTERVAL_MINUTES = 3
 
 /**
  * One independent Strict Alarm. The app holds a LIST of these — each one
- * its own alarm with its own time, its own repeat days, its own on/off
- * toggle, and its own optional "burst" (multi-ring) setting — the same way
- * a normal phone clock app's alarm list works.
+ * its own alarm with its own time, its own repeat days, and its own on/off
+ * toggle — the same way a normal phone clock app's alarm list works.
  *
  * [requestCode] is a small, stable, UNIQUE integer stored with this alarm
  * and used as Android's PendingIntent request code. Using a stored integer
@@ -30,13 +34,8 @@ data class StrictAlarmEntry(
     val hour: Int = 7,
     val minute: Int = 0,
     val daysOfWeek: Set<Int> = (1..7).toSet(),
-    val label: String = "",
-    val multiAlarmEnabled: Boolean = false,
-    val alarmCount: Int = 1
+    val label: String = ""
 ) {
-    fun effectiveAlarmCount(): Int =
-        if (multiAlarmEnabled) alarmCount.coerceIn(1, STRICT_ALARM_MAX_COUNT) else 1
-
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("requestCode", requestCode)
@@ -45,8 +44,6 @@ data class StrictAlarmEntry(
         put("minute", minute)
         put("daysOfWeek", JSONArray(daysOfWeek.toList()))
         put("label", label)
-        put("multiAlarmEnabled", multiAlarmEnabled)
-        put("alarmCount", alarmCount)
     }
 
     companion object {
@@ -58,43 +55,39 @@ data class StrictAlarmEntry(
             } else {
                 days.addAll(1..7)
             }
-            // Legacy alarms saved before this field existed get a requestCode
-            // derived from their id hash — same as the old behaviour, but now
-            // it's stored and stable rather than recomputed each time.
+            // Legacy alarms saved before requestCode was stored get a code
+            // derived from their id hash — same as the old behaviour, but
+            // now it is stored and stable rather than recomputed each time.
             val legacyCode = (o.getString("id").hashCode() and 0x7FFFFFFF) % 100_000
             return StrictAlarmEntry(
-                id = o.getString("id"),
+                id          = o.getString("id"),
                 requestCode = o.optInt("requestCode", legacyCode),
-                enabled = o.optBoolean("enabled", true),
-                hour = o.optInt("hour", 7),
-                minute = o.optInt("minute", 0),
-                daysOfWeek = days,
-                label = o.optString("label", ""),
-                multiAlarmEnabled = o.optBoolean("multiAlarmEnabled", false),
-                alarmCount = o.optInt("alarmCount", 1).coerceIn(1, STRICT_ALARM_MAX_COUNT)
+                enabled     = o.optBoolean("enabled", true),
+                hour        = o.optInt("hour", 7),
+                minute      = o.optInt("minute", 0),
+                daysOfWeek  = days,
+                label       = o.optString("label", "")
+                // Legacy fields multiAlarmEnabled / alarmCount are intentionally
+                // ignored on load — they belonged to the old burst feature which
+                // has been replaced by true independent alarms.
             )
         }
 
         /** A fresh blank alarm, ready to be edited — used by the "+" add button. */
         fun newDefault(requestCode: Int): StrictAlarmEntry = StrictAlarmEntry(
-            id = java.util.UUID.randomUUID().toString(),
+            id          = java.util.UUID.randomUUID().toString(),
             requestCode = requestCode
         )
     }
 }
 
 /**
- * Next ring time for alarm slot [index] in this entry's burst. Slot 0 is the
- * base time; each slot after that is [STRICT_ALARM_INTERVAL_MINUTES] later.
- * Returns null if the entry is disabled or has no days selected.
+ * Next trigger time for this alarm after [nowMillis].
+ * Returns null if the alarm is disabled or has no days selected.
  */
-fun StrictAlarmEntry.nextTriggerMillisForIndex(
-    index: Int,
-    nowMillis: Long = System.currentTimeMillis()
-): Long? {
+fun StrictAlarmEntry.nextTriggerMillis(nowMillis: Long = System.currentTimeMillis()): Long? {
     if (!enabled || daysOfWeek.isEmpty()) return null
 
-    val offsetMillis = index * STRICT_ALARM_INTERVAL_MINUTES * 60_000L
     val cal = Calendar.getInstance().apply { timeInMillis = nowMillis }
 
     for (dayOffset in 0..7) {
@@ -105,21 +98,9 @@ fun StrictAlarmEntry.nextTriggerMillisForIndex(
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        val triggerAt = candidate.timeInMillis + offsetMillis
-        val baseDayMatches = candidate.get(Calendar.DAY_OF_WEEK) in daysOfWeek
-        if (baseDayMatches && triggerAt > nowMillis) {
-            return triggerAt
-        }
+        val triggerAt = candidate.timeInMillis
+        val dayMatches = candidate.get(Calendar.DAY_OF_WEEK) in daysOfWeek
+        if (dayMatches && triggerAt > nowMillis) return triggerAt
     }
     return null
-}
-
-/** The single next ring time for this entry (slot 0 of its burst). */
-fun StrictAlarmEntry.nextTriggerMillis(nowMillis: Long = System.currentTimeMillis()): Long? =
-    nextTriggerMillisForIndex(0, nowMillis)
-
-/** Upcoming ring times for every slot in this entry's next burst, sorted earliest first. */
-fun StrictAlarmEntry.allNextTriggerMillis(nowMillis: Long = System.currentTimeMillis()): List<Long> {
-    val count = effectiveAlarmCount()
-    return (0 until count).mapNotNull { nextTriggerMillisForIndex(it, nowMillis) }.sorted()
 }
