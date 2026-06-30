@@ -141,6 +141,7 @@ fun SaveButton(
     state: SaveState,
     onClick: () -> Unit,
     onReset: () -> Unit = {},
+    enabled: Boolean = true,
     size: SaveButtonSize = SaveButtonSize.Default,
     variant: SaveButtonVariant = SaveButtonVariant.Filled,
     modifier: Modifier = Modifier
@@ -187,7 +188,7 @@ fun SaveButton(
     // ── Build the button ──────────────────────────────────────────────────
     val shape = RoundedCornerShape(cornerRadius)
     val contentPadding = PaddingValues(horizontal = if (size == SaveButtonSize.Compact) 20.dp else 24.dp)
-    val isEnabled = state == SaveState.Idle
+    val isEnabled = state == SaveState.Idle && enabled
 
     val buttonModifier = widthModifier
         .then(modifier)
