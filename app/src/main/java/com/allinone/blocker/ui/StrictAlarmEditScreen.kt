@@ -123,7 +123,7 @@ fun StrictAlarmEditScreen(
         }
     }
 
-    Scaffold(
+   Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Alarm", style = MaterialTheme.typography.titleLarge) },
@@ -137,6 +137,17 @@ fun StrictAlarmEditScreen(
                         Icon(Icons.Filled.Delete, contentDescription = "Delete alarm", tint = AccentRed)
                     }
                 }
+            )
+        },
+        floatingActionButton = {
+            SaveButton(
+                state   = saveState,
+                onClick = {
+                    saveState = SaveState.Loading
+                    commitSave()
+                    saveState = SaveState.Done
+                },
+                onReset = { saveState = SaveState.Idle }
             )
         }
     ) { pad ->
@@ -228,18 +239,8 @@ fun StrictAlarmEditScreen(
                 NextRingNotice(draft)
             }
 
-            // ── Save button ───────────────────────────────────────────────
-            Spacer(Modifier.height(32.dp))
-            SaveButton(
-                state   = saveState,
-                onClick = {
-                    saveState = SaveState.Loading
-                    commitSave()
-                    saveState = SaveState.Done
-                },
-                onReset = { saveState = SaveState.Idle }
-            )
-            Spacer(Modifier.height(24.dp))
+            // ── Bottom padding so content clears the FAB ──────────────────
+            Spacer(Modifier.height(88.dp))
         }
     }
 }
