@@ -8,30 +8,52 @@ import android.view.accessibility.AccessibilityNodeInfo
  *
  * HOW IT WORKS
  * ─────────────
- * Instagram, YouTube, Facebook, and Snapchat all expose their bottom
- * navigation bars as accessibility nodes with content-descriptions.
- * We walk the node tree looking for known labels that indicate the
- * Reels / Shorts tab is the one currently selected or focused.
+ * Instagram, Facebook, and Snapchat expose their bottom navigation bars
+ * as accessibility nodes with content-descriptions, and we walk the node
+ * tree looking for known labels that indicate the Reels/Spotlight tab is
+ * the one currently selected.
+ *
+ * YouTube is handled differently. YouTube's "Shorts" bottom-nav tab does
+ * NOT reliably report isSelected/isChecked — that's why Shorts used to
+ * slip through. Instead, the Shorts PLAYER itself (the full-screen
+ * vertical video view you land in, whether you tapped the Shorts tab,
+ * tapped a Shorts shelf thumbnail on the homepage, or opened a shared
+ * Shorts link) uses a distinct, stable set of resource IDs across recent
+ * YouTube versions — e.g. "reel_player_page_container", "reel_recycler",
+ * "reel_player_overlay_actions". We check for ANY node with one of those
+ * IDs first, since that catches Shorts however the user got there. The
+ * old tab-label check is kept as a secondary fallback for older/odd
+ * YouTube builds where those IDs might differ.
  *
  * TikTok is short-form only — every screen is "Reels" — so we always
  * return true for it regardless of node content.
- *
- * YouTube Shorts are detected by looking for the "Shorts" tab being
- * selected in the bottom nav — same tab-selection logic as Instagram.
  */
 object ReelsDetector {
 
     // TikTok — the entire app is short-form video
     private const val TIKTOK = "com.zhiliaoapp.musically"
+    private const val YOUTUBE = "com.google.android.youtube"
 
     // Instagram Reels tab content-descriptions (varies by app version/locale)
     private val INSTAGRAM_REELS_LABELS = setOf(
         "reels", "reel"
     )
 
-    // YouTube Shorts tab labels
+    // YouTube Shorts tab labels — used only as a fallback, see class doc above
     private val YOUTUBE_SHORTS_LABELS = setOf(
         "shorts"
+    )
+
+    // Resource-ID fragments that appear on the YouTube Shorts PLAYER itself.
+    // These are checked with "contains" against the node's viewIdResourceName
+    // (e.g. "com.google.android.youtube:id/reel_player_page_container"),
+    // so minor ID renames/suffix changes between app versions still match.
+    private val YOUTUBE_SHORTS_PLAYER_ID_FRAGMENTS = setOf(
+        "reel_player",
+        "reel_recycler",
+        "reel_progress",
+        "shorts_player",
+        "reel_watch_player"
     )
 
     // Facebook Reels tab labels
@@ -58,11 +80,50 @@ object ReelsDetector {
 
         return when (pkg) {
             "com.instagram.android" -> isTabSelected(root, INSTAGRAM_REELS_LABELS)
-            "com.google.android.youtube" -> isTabSelected(root, YOUTUBE_SHORTS_LABELS)
+            YOUTUBE -> isOnYouTubeShorts(root)
             "com.facebook.katana" -> isTabSelected(root, FACEBOOK_REELS_LABELS)
             "com.snapchat.android" -> isTabSelected(root, SNAPCHAT_SPOTLIGHT_LABELS)
             else -> false
         }
+    }
+
+    /**
+     * YouTube-specific check: first looks for the Shorts player's own
+     * resource IDs (catches Shorts opened from the tab, the homepage
+     * shelf, or a shared link), then falls back to the old tab-selected
+     * label check for safety.
+     */
+    private fun isOnYouTubeShorts(root: AccessibilityNodeInfo): Boolean {
+        if (hasMatchingResourceId(root, YOUTUBE_SHORTS_PLAYER_ID_FRAGMENTS)) return true
+        return isTabSelected(root, YOUTUBE_SHORTS_LABELS)
+    }
+
+    /**
+     * BFS traversal looking for any node whose viewIdResourceName contains
+     * one of [idFragments]. Resource IDs are far more stable than visible
+     * text/content-description labels, which get localized and reworded.
+     */
+    private fun hasMatchingResourceId(
+        root: AccessibilityNodeInfo,
+        idFragments: Set<String>
+    ): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+
+            val resId = node.viewIdResourceName?.lowercase()
+            if (resId != null && idFragments.any { resId.contains(it) }) {
+                return true
+            }
+
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+
+        return false
     }
 
     /**
