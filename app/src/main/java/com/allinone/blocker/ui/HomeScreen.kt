@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.AlarmOn
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideocamOff
@@ -61,6 +61,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -402,6 +408,74 @@ fun HomeSectionHeader(text: String) {
 //   also animates in on composition so the user sees it load.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TrendPill — small "you're doing better than yesterday" badge.
+//
+// Design notes (why it looks the way it does):
+//  - Capsule shape with a soft tinted background (10% accent fill) instead of
+//    a bare icon floating in space. This is the same pattern Apple Health,
+//    Oura, and Headspace use for small positive-trend indicators — a single
+//    self-contained "chip" reads as one calm object, not three loose elements.
+//  - The arrow is hand-drawn with Canvas instead of using Android's stock
+//    KeyboardArrowDown glyph. The stock chevron is a generic UI affordance
+//    (used for "expand/collapse" everywhere) and looks cheap here. A short
+//    diagonal line with a small arrowhead is the universal "trend" symbol
+//    used in finance/health apps and immediately reads as "down compared to
+//    before" rather than "tap to open."
+//  - Kept deliberately tiny (10dp arrow, compact text) and low-contrast
+//    background so it never competes with the big number for attention —
+//    it's a quiet confidence boost, not a banner.
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun TrendPill(percent: Int) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(AccentGreen.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TrendDownArrow(
+            color = AccentGreen,
+            modifier = Modifier.size(10.dp)
+        )
+        Text(
+            text = "$percent% vs yesterday",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = AccentGreen
+        )
+    }
+}
+
+@Composable
+private fun TrendDownArrow(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = size.minDimension * 0.16f
+        val stroke = Stroke(
+            width = strokeWidth,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+        )
+
+        // Diagonal line from top-left to bottom-right, like a downward
+        // sloping trend line on a small chart.
+        val start = Offset(size.width * 0.12f, size.height * 0.12f)
+        val end = Offset(size.width * 0.88f, size.height * 0.88f)
+        drawLine(color = color, start = start, end = end, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+
+        // Small arrowhead at the end, pointing down-right.
+        val headLength = size.minDimension * 0.42f
+        val arrowPath = Path().apply {
+            moveTo(end.x, end.y - headLength)
+            lineTo(end.x, end.y)
+            lineTo(end.x - headLength, end.y)
+        }
+        drawPath(path = arrowPath, color = color, style = stroke)
+    }
+}
+
 @Composable
 fun ScreenTimeCard(
     totalMinutes: Int,
@@ -480,23 +554,7 @@ fun ScreenTimeCard(
                 )
 
                 if (improvementPercent != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = AccentGreen,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = "$improvementPercent% vs yesterday",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Medium,
-                            color = AccentGreen
-                        )
-                    }
+                    TrendPill(percent = improvementPercent)
                 }
             }
 
