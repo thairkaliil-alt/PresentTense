@@ -237,7 +237,16 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
-                .padding(top = 8.dp, bottom = 32.dp),
+                // BUGFIX (can't scroll to see last items): the app's custom
+                // bottom nav bar (the 5-icon strip) floats on top of every
+                // root-tab screen's content and is NOT accounted for by
+                // navigationBarsPadding() — that only covers the system
+                // gesture/button bar. 32dp of bottom space wasn't enough to
+                // clear it, so the last card(s) ended up hidden underneath
+                // it even once scrolled all the way down. 100dp matches the
+                // clearance already used on the Stats screen for the same
+                // reason.
+                .padding(top = 8.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // ── Master toggle ────────────────────────────────────────────────
