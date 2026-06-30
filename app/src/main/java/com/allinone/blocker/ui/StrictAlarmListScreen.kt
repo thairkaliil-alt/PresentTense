@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -80,6 +81,7 @@ import java.util.Locale
 fun StrictAlarmListScreen(
     onBack: () -> Unit,
     onAddAlarm: () -> Unit = {},
+    onQuickAdd: () -> Unit = {},
     onEditAlarm: (String) -> Unit = {},
     onOpenSleepCalculator: () -> Unit = {}
 ) {
@@ -130,9 +132,12 @@ fun StrictAlarmListScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                actions = {
+              actions = {
                     IconButton(onClick = onOpenSleepCalculator) {
                         Icon(Icons.Filled.Bedtime, contentDescription = "Sleep calculator")
+                    }
+                    IconButton(onClick = onQuickAdd) {
+                        Icon(Icons.Filled.PlaylistAdd, contentDescription = "Quick add multiple alarms")
                     }
                     IconButton(onClick = onAddAlarm) {
                         Icon(Icons.Filled.Add, contentDescription = "Add alarm")
