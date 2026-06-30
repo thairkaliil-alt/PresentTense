@@ -1,9 +1,11 @@
 package com.allinone.blocker.ui
 
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -284,8 +286,7 @@ fun StrictAlarmListScreen(
                         placementSpec = androidx.compose.animation.core.spring(
                             dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
                             stiffness    = androidx.compose.animation.core.Spring.StiffnessMedium,
-                            visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold
-                        )
+                            visibilityThreshold = IntOffset.VisibilityThreshold                        )
                     )
                 }
 
