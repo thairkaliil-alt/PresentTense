@@ -329,7 +329,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                 onThemeToggle         = onThemeToggle
             )
             Screen.STRICT_MODE -> StrictModeSettingsScreen(onBack = { screen = Screen.HOME })
-            Screen.STATS       -> StatsScreen(onBack = { screen = Screen.HOME })
+            Screen.STATS       -> StatsScreen(onBack = { screen = Screen.HOME }, onOpenStreaks = { screen = Screen.STREAKS })
             Screen.LOCKDOWN    -> LockdownScreen(
                 onBack            = { screen = Screen.HOME },
                 onManageWhitelist = { screen = Screen.WHITELIST }
