@@ -155,13 +155,19 @@ private fun defFor(preset: BlockPreset) = PRESETS.first { it.preset == preset }
 @Composable
 fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
     val context = LocalContext.current
-    var app by remember {
-        mutableStateOf(packageName?.let { BlockerRepository.appFor(it) })
-    }
-    var showAddRuleDialog by remember { mutableStateOf(false) }
-    var customExpanded by remember { mutableStateOf(false) }
 
-    val current = app
+    // ── Load the saved app once ───────────────────────────────────────────
+    val savedApp = remember {
+        packageName?.let { BlockerRepository.appFor(it) }
+    }
+
+    // ── Local draft — only committed to the repo when Save is tapped ─────
+    var draft by remember { mutableStateOf(savedApp) }
+    var showAddRuleDialog by remember { mutableStateOf(false) }
+    var customExpanded    by remember { mutableStateOf(false) }
+    var saveState         by remember { mutableStateOf(SaveState.Idle) }
+
+    val current = draft
     if (current == null) {
         Scaffold(topBar = {
             TopAppBar(
@@ -176,21 +182,17 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
         return
     }
 
-    fun save(updated: BlockedApp) {
-        app = updated
-        BlockerRepository.upsertApp(updated)
-    }
+    // ── Draft helpers — update local state only, no repo touch ───────────
+    fun updateDraft(updated: BlockedApp) { draft = updated }
 
-    // When a preset card is tapped: apply its default rules + protection, save
     fun applyPreset(def: PresetDef) {
-        save(
+        updateDraft(
             current.copy(
                 preset     = def.preset,
                 rules      = if (def.preset == BlockPreset.CUSTOM) current.rules else def.defaultRules,
                 protection = def.defaultProtection
             )
         )
-        // Open the custom rule editor automatically when Custom is picked
         if (def.preset == BlockPreset.CUSTOM) customExpanded = true
     }
 
@@ -240,7 +242,7 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
-            // ── Preset cards ──────────────────────────────────────────────
+            // ── Preset cards — update draft only ──────────────────────────
             PRESETS.forEach { def ->
                 PresetCard(
                     def      = def,
@@ -260,28 +262,40 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
                     onChangeRule   = { index, updated ->
                         val newRules = current.rules.toMutableList()
                         newRules[index] = updated
-                        save(current.copy(rules = newRules))
+                        updateDraft(current.copy(rules = newRules))
                     },
                     onDeleteRule   = { index ->
                         val newRules = current.rules.toMutableList()
                         newRules.removeAt(index)
-                        save(current.copy(rules = newRules))
+                        updateDraft(current.copy(rules = newRules))
                     },
                     context = context
                 )
             }
 
-            // ── Hard-to-undo toggle ───────────────────────────────────────
+            // ── Hard-to-undo toggle — updates draft only ──────────────────
             Spacer(Modifier.height(4.dp))
             HardToUndoCard(
-                checked   = hardToUndoOn,
-                onChange  = { wantsHard ->
-                    save(
+                checked  = hardToUndoOn,
+                onChange = { wantsHard ->
+                    updateDraft(
                         current.copy(
                             protection = if (wantsHard) ProtectionLevel.STRICT else ProtectionLevel.SOFT
                         )
                     )
                 }
+            )
+
+            // ── Save button ───────────────────────────────────────────────
+            Spacer(Modifier.height(8.dp))
+            SaveButton(
+                state   = saveState,
+                onClick = {
+                    saveState = SaveState.Loading
+                    BlockerRepository.upsertApp(current)
+                    saveState = SaveState.Done
+                },
+                onReset = { saveState = SaveState.Idle }
             )
 
             Spacer(Modifier.height(24.dp))
@@ -295,7 +309,7 @@ fun AppRulesScreen(packageName: String?, onBack: () -> Unit) {
                 showAddRuleDialog = false
                 val newRules = current.rules.toMutableList()
                 newRules.add(BlockRule(type = type))
-                save(current.copy(rules = newRules))
+                updateDraft(current.copy(rules = newRules))
             }
         )
     }
