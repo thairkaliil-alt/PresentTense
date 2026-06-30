@@ -46,8 +46,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.allinone.blocker.data.BlockPreset
-import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -113,15 +111,9 @@ fun AppPickerScreen(onBack: () -> Unit, onPicked: (String) -> Unit) {
         base
     }
 
+    // Just navigate — do NOT save here. AppRulesScreen holds the draft and
+    // only commits to the repo when the user taps Save. Back = nothing added.
     fun pick(device: DeviceApp) {
-        BlockerRepository.upsertApp(
-            BlockedApp(
-                packageName = device.packageName,
-                appName     = device.label,
-                isReels     = InstalledApps.isReels(device.packageName),
-                preset      = BlockPreset.FULLY_BLOCKED
-            )
-        )
         onPicked(device.packageName)
     }
 
