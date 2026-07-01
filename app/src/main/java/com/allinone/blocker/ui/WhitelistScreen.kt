@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -210,6 +211,7 @@ private fun WhitelistToggleRow(
     whitelisted : Boolean,
     onToggle    : (Boolean) -> Unit
 ) {
+    val haptics = rememberHaptics()
     val cardBg by animateColorAsState(
         targetValue   = if (whitelisted) AccentTeal.copy(alpha = 0.10f) else AccentRed.copy(alpha = 0.10f),
         animationSpec = tween(durationMillis = 400),
@@ -268,7 +270,7 @@ private fun WhitelistToggleRow(
             }
             Switch(
                 checked         = whitelisted,
-                onCheckedChange = onToggle,
+                onCheckedChange = { checked -> haptics.toggleTick(); onToggle(checked) },
                 colors          = SwitchDefaults.colors(
                     checkedThumbColor    = Color.White,
                     checkedTrackColor    = AccentTeal,
