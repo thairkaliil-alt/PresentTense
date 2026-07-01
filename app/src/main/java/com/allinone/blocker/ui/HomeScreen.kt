@@ -91,6 +91,9 @@ import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.launch
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -418,10 +421,11 @@ fun HomeSectionHeader(text: String) {
 //    self-contained "chip" reads as one calm object, not three loose elements.
 //  - The arrow is hand-drawn with Canvas instead of using Android's stock
 //    KeyboardArrowDown glyph. The stock chevron is a generic UI affordance
-//    (used for "expand/collapse" everywhere) and looks cheap here. A short
-//    diagonal line with a small arrowhead is the universal "trend" symbol
-//    used in finance/health apps and immediately reads as "down compared to
-//    before" rather than "tap to open."
+//    (used for "expand/collapse" everywhere) and looks cheap here. Instead
+//    it's a small curved "sparkline" swoop with an arrowhead at the end —
+//    the same soft, curved trend-line motif used by stock/market tickers
+//    and health apps (Robinhood, Apple Stocks, Oura), which reads as more
+//    alive and premium than a straight ruler-line diagonal.
 //  - Kept deliberately tiny (10dp arrow, compact text) and low-contrast
 //    background so it never competes with the big number for attention —
 //    it's a quiet confidence boost, not a banner.
@@ -441,7 +445,7 @@ private fun TrendPill(percent: Int) {
             modifier = Modifier.size(10.dp)
         )
         Text(
-            text = "$percent% vs yesterday",
+            text = "$percent% better than yesterday",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = AccentGreen
@@ -452,27 +456,49 @@ private fun TrendPill(percent: Int) {
 @Composable
 private fun TrendDownArrow(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
-        val strokeWidth = size.minDimension * 0.16f
+        val strokeWidth = size.minDimension * 0.14f
         val stroke = Stroke(
             width = strokeWidth,
             cap = StrokeCap.Round,
             join = StrokeJoin.Round
         )
 
-        // Diagonal line from top-left to bottom-right, like a downward
-        // sloping trend line on a small chart.
-        val start = Offset(size.width * 0.12f, size.height * 0.12f)
-        val end = Offset(size.width * 0.88f, size.height * 0.88f)
-        drawLine(color = color, start = start, end = end, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+        // A gentle curved "sparkline" swoop instead of a straight diagonal —
+        // it dips up slightly first, then descends, the same soft S-curve
+        // shape used for small trend glyphs in stock/finance and health apps.
+        val start = Offset(size.width * 0.10f, size.height * 0.34f)
+        val control1 = Offset(size.width * 0.40f, size.height * 0.04f)
+        val control2 = Offset(size.width * 0.58f, size.height * 0.58f)
+        val end = Offset(size.width * 0.86f, size.height * 0.82f)
 
-        // Small arrowhead at the end, pointing down-right.
-        val headLength = size.minDimension * 0.42f
-        val arrowPath = Path().apply {
-            moveTo(end.x, end.y - headLength)
-            lineTo(end.x, end.y)
-            lineTo(end.x - headLength, end.y)
+        val curve = Path().apply {
+            moveTo(start.x, start.y)
+            cubicTo(control1.x, control1.y, control2.x, control2.y, end.x, end.y)
         }
-        drawPath(path = arrowPath, color = color, style = stroke)
+        drawPath(path = curve, color = color, style = stroke)
+
+        // Small arrowhead at the end, angled to match the direction the
+        // curve is actually travelling in (rather than a fixed diagonal),
+        // so it looks like a natural continuation of the swoop.
+        val exitAngle = atan2(end.y - control2.y, end.x - control2.x)
+        val headLength = size.minDimension * 0.30f
+        val headSpread = 0.52f // radians, ~30° each side — a narrow, sharp head
+
+        val leftWing = Offset(
+            end.x - headLength * cos(exitAngle - headSpread),
+            end.y - headLength * sin(exitAngle - headSpread)
+        )
+        val rightWing = Offset(
+            end.x - headLength * cos(exitAngle + headSpread),
+            end.y - headLength * sin(exitAngle + headSpread)
+        )
+
+        val arrowHead = Path().apply {
+            moveTo(leftWing.x, leftWing.y)
+            lineTo(end.x, end.y)
+            lineTo(rightWing.x, rightWing.y)
+        }
+        drawPath(path = arrowHead, color = color, style = stroke)
     }
 }
 
