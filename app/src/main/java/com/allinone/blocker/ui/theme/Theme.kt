@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.allinone.blocker.ui.motion.LocalReducedHaptics
 import com.allinone.blocker.ui.motion.LocalReducedMotion
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,9 +303,22 @@ fun BlockerTheme(
         ) == 0f
     }
 
+    // Same idea, but for the OS "Touch feedback" / "vibrate on tap" setting
+    // (Settings > Sound & vibration on stock Android). When the user has
+    // switched that off, every haptic tick in the app should stay silent —
+    // see Haptics.kt for where this gets read.
+    val reducedHaptics = remember(context) {
+        android.provider.Settings.System.getInt(
+            context.contentResolver,
+            android.provider.Settings.System.HAPTIC_FEEDBACK_ENABLED,
+            1
+        ) == 0
+    }
+
     CompositionLocalProvider(
         LocalIsDarkTheme provides darkTheme,
-        LocalReducedMotion provides reducedMotion
+        LocalReducedMotion provides reducedMotion,
+        LocalReducedHaptics provides reducedHaptics
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
