@@ -1,9 +1,7 @@
 package com.allinone.blocker.ui
 
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +61,7 @@ import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.STRICT_ALARM_INTERVAL_MINUTES
 import com.allinone.blocker.data.StrictAlarmEntry
+import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -202,17 +201,16 @@ fun StrictAlarmListScreen(
             // Elevation and scale animate up while this card is the one
             // being dragged — purely visual, on top of the reordering
             // and sliding that ReorderableColumn already handles.
-            val elevation by animateDpAsState(
-                targetValue   = if (dragState.isDragging) 12.dp else 2.dp,
-                animationSpec = tween(150, easing = FastOutSlowInEasing),
+         val elevation by animateDpAsState(
+                targetValue   = if (dragState.isDragging) 16.dp else 2.dp,
+                animationSpec = MotionSpecs.reorderPickup(),
                 label         = "cardElevation"
             )
             val scale by animateFloatAsState(
-                targetValue   = if (dragState.isDragging) 1.03f else 1f,
-                animationSpec = tween(150, easing = FastOutSlowInEasing),
+                targetValue   = if (dragState.isDragging) 1.045f else 1f,
+                animationSpec = MotionSpecs.reorderPickup(),
                 label         = "cardScale"
             )
-
             AlarmCard(
                 entry      = entry,
                 isDragging = dragState.isDragging,
