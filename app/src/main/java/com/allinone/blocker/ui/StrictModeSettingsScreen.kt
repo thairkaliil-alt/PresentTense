@@ -647,15 +647,6 @@ private fun CustomFrictionSheet(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                         }
                     },
-                    actions = {
-                        Button(
-                            onClick = onDismiss,
-                            modifier = Modifier.padding(end = 8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
-                        ) {
-                            Text("Done", fontWeight = FontWeight.SemiBold)
-                        }
-                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
                 )
             }
