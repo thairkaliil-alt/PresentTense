@@ -150,6 +150,21 @@ object MotionSpecs {
             dampingRatio = 0.7f,
             stiffness    = 700f
         )
+
+    /**
+     * The lockdown "ignition" fill — a full-screen circular reveal that grows
+     * outward from wherever the user held down. Softer damping and lower
+     * stiffness than [tactile]/[expressive] on purpose: those are for small
+     * controls that need to snap back instantly, but a shape this large reads
+     * as *heavier* — it should settle like a spreading droplet of liquid
+     * rather than snapping to size. A touch of underdamping gives it a faint,
+     * organic overshoot instead of a mechanical stop.
+     */
+    fun <T> liquidExpand(): AnimationSpec<T> =
+        spring(
+            dampingRatio = 0.78f,
+            stiffness    = 180f
+        )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
