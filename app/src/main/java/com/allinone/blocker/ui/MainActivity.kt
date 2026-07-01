@@ -255,7 +255,8 @@ fun AppRoot(
                 Screen.APP_RULES -> AppRulesScreen(
                     packageName = selectedPackage,
                     isNew       = isNewApp,
-                    onBack      = { screen = Screen.BLOCKED_APPS }
+                    onBack      = { screen = Screen.BLOCKED_APPS },
+                    onOpenStrictMode = { screen = Screen.STRICT_MODE }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
         Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
