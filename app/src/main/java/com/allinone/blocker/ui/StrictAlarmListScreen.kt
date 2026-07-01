@@ -35,6 +35,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import com.allinone.blocker.data.effectiveAlarmCount
+import com.allinone.blocker.data.nextTriggerMillis
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -83,7 +84,9 @@ fun StrictAlarmListScreen(
     onEditAlarm: (String) -> Unit = {},
     onOpenSleepCalculator: () -> Unit = {},
     justAddedAlarms: List<StrictAlarmEntry>? = null,
-    onJustAddedAlarmsConsumed: () -> Unit = {}
+    onJustAddedAlarmsConsumed: () -> Unit = {},
+    justSavedAlarm: StrictAlarmEntry? = null,
+    onJustSavedAlarmConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
@@ -124,6 +127,25 @@ fun StrictAlarmListScreen(
         }
 
         onJustAddedAlarmsConsumed()
+    }
+
+    // ── Quick "Alarm set for X from now" message after a single save ───────
+    // Same MD3 Snackbar host as the batch message above, but a short,
+    // no-action toast — the same beat as stock Android/Samsung's Clock app
+    // showing "Alarm set for 7 hr 12 min from now" right after you save.
+    LaunchedEffect(justSavedAlarm) {
+        val saved = justSavedAlarm ?: return@LaunchedEffect
+        val next  = saved.nextTriggerMillis()
+        if (next != null) {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message           = "Alarm set for ${formatRelativeAlarmTime(next)} from now",
+                    withDismissAction = false,
+                    duration          = androidx.compose.material3.SnackbarDuration.Short
+                )
+            }
+        }
+        onJustSavedAlarmConsumed()
     }
 
     // Delete dialog
@@ -422,4 +444,17 @@ private fun formatAlarmTime(hour: Int, minute: Int): String {
         set(Calendar.MINUTE, minute)
     }
     return java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(cal.time)
+}
+
+/** "2h 15m", "45m", "3h" — same short style used for lockdown durations. */
+private fun formatRelativeAlarmTime(triggerMillis: Long, nowMillis: Long = System.currentTimeMillis()): String {
+    val totalMinutes = ((triggerMillis - nowMillis) / 60_000L).coerceAtLeast(0L)
+    val h = totalMinutes / 60
+    val m = totalMinutes % 60
+    return when {
+        h == 0L && m == 0L -> "less than a minute"
+        h == 0L            -> "${m}m"
+        m == 0L            -> "${h}h"
+        else                -> "${h}h ${m}m"
+    }
 }
