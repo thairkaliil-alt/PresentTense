@@ -147,7 +147,10 @@ fun StrictAlarmEditScreen(
                     commitSave()
                     saveState = SaveState.Done
                 },
-                onReset = { saveState = SaveState.Idle }
+                // Fires automatically a moment after "Saved" — sends the
+                // user back to the alarm list instead of leaving them on
+                // this screen needing a second tap on Back.
+                onReset = onBack
             )
         }
     ) { pad ->
