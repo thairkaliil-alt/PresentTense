@@ -113,7 +113,7 @@ object MotionSpecs {
             stiffness    = 1600f     // snaps; ~2× StiffnessMediumLow
         )
 
-    /**
+   /**
      * A touch more bounce than [tactile] — for celebratory beats (a streak tick,
      * a successful toggle). Use sparingly; bounce is loud.
      */
@@ -121,6 +121,34 @@ object MotionSpecs {
         spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness    = Spring.StiffnessMedium
+        )
+
+    /**
+     * Placement spring for REORDERABLE LISTS — how a sibling row glides into
+     * its new slot when another row is dragged past it.
+     *
+     * Tuned to *glide*, not bounce: just a hair under critically-damped, so
+     * there's a faint, natural ease to the motion but never a visible wobble
+     * or overshoot. This is the same restrained feel iOS Reminders / Things /
+     * Todoist use for their list-reorder — confident and quiet, not springy.
+     */
+    fun <T> reorderGlide(): FiniteAnimationSpec<T> =
+        spring(
+            dampingRatio = 0.86f,
+            stiffness    = 380f
+        )
+
+    /**
+     * Pickup / settle spring for the ONE row actively being dragged — the
+     * lift when you grab it, and the drop when you let go. Livelier than
+     * [reorderGlide] on purpose: unlike the passive siblings sliding out of
+     * the way, this is the row the user is physically holding, so picking
+     * it up and setting it down should read as a distinct, felt event.
+     */
+    fun <T> reorderPickup(): AnimationSpec<T> =
+        spring(
+            dampingRatio = 0.7f,
+            stiffness    = 700f
         )
 }
 
