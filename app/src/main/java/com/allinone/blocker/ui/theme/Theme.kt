@@ -303,17 +303,23 @@ fun BlockerTheme(
         ) == 0f
     }
 
-    // Same idea, but for the OS "Touch feedback" / "vibrate on tap" setting
-    // (Settings > Sound & vibration on stock Android). When the user has
-    // switched that off, every haptic tick in the app should stay silent —
-    // see Haptics.kt for where this gets read.
-    val reducedHaptics = remember(context) {
-        android.provider.Settings.System.getInt(
-            context.contentResolver,
-            android.provider.Settings.System.HAPTIC_FEEDBACK_ENABLED,
-            1
-        ) == 0
-    }
+    // NOTE: There used to be a second block here reading the OS "Touch
+    // feedback" setting (Settings.System.HAPTIC_FEEDBACK_ENABLED) and using
+    // it to silence every custom vibration in the app. That was a bug, not
+    // a feature — HAPTIC_FEEDBACK_ENABLED only governs View
+    // .performHapticFeedback() (keyboard key presses, long-press, switches,
+    // etc.), NOT direct Vibrator/VibrationEffect calls like the ones in
+    // Haptics.kt. Haptics.kt deliberately talks to Vibrator directly
+    // instead of Compose's HapticFeedbackType (see its file header for why),
+    // so it was never covered by that setting in the first place — reading
+    // it here just meant that anyone who'd turned off "Touch feedback"
+    // (a common thing to do if keyboard-tap buzzing is annoying, with
+    // general vibration left on) got total silence from Present Tense's
+    // PIN/error/confirm haptics too, for no reason tied to anything they
+    // actually asked for. Direct Vibrator calls already respect the
+    // device's Do Not Disturb / silent-mode handling at the OS level, so no
+    // extra gating is needed here.
+    val reducedHaptics = false
 
     CompositionLocalProvider(
         LocalIsDarkTheme provides darkTheme,
