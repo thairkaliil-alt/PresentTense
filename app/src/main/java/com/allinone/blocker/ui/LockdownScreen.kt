@@ -2,7 +2,9 @@ package com.allinone.blocker.ui
 
 import android.app.TimePickerDialog
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -17,7 +19,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -84,9 +89,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -100,6 +113,8 @@ import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownSchedule
 import com.allinone.blocker.data.StrictModeGate
+import com.allinone.blocker.ui.motion.LocalReducedMotion
+import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentRedSoft
@@ -111,10 +126,13 @@ import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Calendar
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -174,40 +192,71 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
 
     val goHome: () -> Unit = { LockdownLauncherActivity.launch(context) }
 
-    Scaffold(
-        containerColor = BgDarkest,
-        topBar = {
-            TopAppBar(
-                title = { Text("Lockdown", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+    // ── Ignition (press-and-hold-to-lock) state ─────────────────────────
+    // Lives here, at the screen root, rather than down inside the hero
+    // section, because the full-screen "liquid fill" has to paint OVER the
+    // TopAppBar and everything else — something nested inside the Scaffold's
+    // content can't do. The orb just reports where it is and which duration
+    // is armed; this screen owns actually starting the lockdown once the
+    // fill finishes.
+    var ignitionOrigin  by remember { mutableStateOf<Offset?>(null) }
+    var ignitionMinutes by remember { mutableStateOf<Int?>(null) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier       = Modifier.fillMaxSize(),
+            containerColor = BgDarkest,
+            topBar = {
+                TopAppBar(
+                    title = { Text("Lockdown", fontWeight = FontWeight.SemiBold) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
+                )
+            }
+        ) { pad ->
+            EmbeddedLockdownLazyColumn(
+                modifier            = Modifier.padding(pad),
+                sessionRunning      = sessionRunning,
+                decision            = decision,
+                now                 = now,
+                breaksRemaining     = breaksRemaining,
+                schedules           = schedules,
+                onManageWhitelist   = onManageWhitelist,
+                onStart             = { mins -> BlockerRepository.startManualLock(mins); goHome() },
+                onCustom            = { prefill -> customStartMinutes = prefill; showCustomMinutes = true },
+                onIgnite            = { origin, mins -> ignitionOrigin = origin; ignitionMinutes = mins },
+                onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
+                onEndLockdown       = { StrictModeGate.guard { BlockerRepository.endManualLock() } },
+                onAddSchedule       = { showAddSchedule = LockdownSchedule(id = BlockerRepository.newScheduleId()) },
+                onToggleSchedule    = { s, v ->
+                    if (!v) StrictModeGate.guard { BlockerRepository.updateSchedule(s.copy(enabled = v)) }
+                    else BlockerRepository.updateSchedule(s.copy(enabled = v))
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
+                onDeleteSchedule    = { s -> StrictModeGate.guard { BlockerRepository.removeSchedule(s.id) } },
+                onEditSchedule      = { showAddSchedule = it }
             )
         }
-    ) { pad ->
-        EmbeddedLockdownLazyColumn(
-            modifier            = Modifier.padding(pad),
-            sessionRunning      = sessionRunning,
-            decision            = decision,
-            now                 = now,
-            breaksRemaining     = breaksRemaining,
-            schedules           = schedules,
-            onManageWhitelist   = onManageWhitelist,
-            onStart             = { mins -> BlockerRepository.startManualLock(mins); goHome() },
-            onCustom            = { prefill -> customStartMinutes = prefill; showCustomMinutes = true },
-            onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
-            onEndLockdown       = { StrictModeGate.guard { BlockerRepository.endManualLock() } },
-            onAddSchedule       = { showAddSchedule = LockdownSchedule(id = BlockerRepository.newScheduleId()) },
-            onToggleSchedule    = { s, v ->
-                if (!v) StrictModeGate.guard { BlockerRepository.updateSchedule(s.copy(enabled = v)) }
-                else BlockerRepository.updateSchedule(s.copy(enabled = v))
-            },
-            onDeleteSchedule    = { s -> StrictModeGate.guard { BlockerRepository.removeSchedule(s.id) } },
-            onEditSchedule      = { showAddSchedule = it }
-        )
+
+        // The hold-to-lock fill. Only present while an ignition is in
+        // flight; it's the thing that actually starts the lockdown once the
+        // screen is fully covered — see [LockdownIgnitionOverlay].
+        val origin = ignitionOrigin
+        val mins   = ignitionMinutes
+        if (origin != null && mins != null) {
+            LockdownIgnitionOverlay(
+                origin     = origin,
+                onComplete = {
+                    BlockerRepository.startManualLock(mins)
+                    goHome()
+                    ignitionOrigin  = null
+                    ignitionMinutes = null
+                }
+            )
+        }
     }
 
     showAddSchedule?.let { editing ->
@@ -236,9 +285,28 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
 }
 
 // ════════════════════════════════════ Liquid Glass Orb ════════════════════════════════════
+//
+// The orb is now the primary way to START a lockdown, not just decoration.
+// Holding it down "charges" a ring around the glass — the same language as
+// Snapchat's record button, Discord's push-to-talk, or iOS's hold-to-confirm
+// toggles — so a lockdown (something with real teeth once Strict Mode is on)
+// can never be triggered by a stray tap. Only once the ring completes does
+// [onIgnite] fire; the screen-filling "liquid" reveal that follows lives in
+// [LockdownIgnitionOverlay] below, since it needs to paint above the whole
+// screen, not just this composable's own bounds.
+
+/** How long a full press-and-hold takes to "charge" before it fires. */
+private const val ORB_HOLD_MS = 650
 
 @Composable
-private fun LiquidGlassOrb(modifier: Modifier = Modifier) {
+private fun LiquidGlassOrb(
+    modifier    : Modifier = Modifier,
+    armedMinutes: Int?     = null,
+    onIgnite    : (Offset, Int) -> Unit = { _, _ -> }
+) {
+    val reducedMotion = LocalReducedMotion.current
+    val haptics       = LocalHapticFeedback.current
+
     val infiniteTransition = rememberInfiniteTransition(label = "orb_breathe")
     val breathScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -259,15 +327,78 @@ private fun LiquidGlassOrb(modifier: Modifier = Modifier) {
         label = "glow_alpha"
     )
 
-    Box(contentAlignment = Alignment.Center, modifier = modifier.size(220.dp)) {
+    // Hold-to-charge state. holdProgress drives the ring; shakeOffset gives
+    // a quick "no" wobble if someone holds without a duration picked yet.
+    var orbCenterInRoot by remember { mutableStateOf(Offset.Zero) }
+    val holdProgress    = remember { Animatable(0f) }
+    val shakeOffset      = remember { Animatable(0f) }
+    var isHolding         by remember { mutableStateOf(false) }
+
+    // While charging, the orb glows a little brighter and eases in very
+    // slightly — a physical "gathering energy" read, not just a static ring.
+    val chargeGlow = glowAlpha * (1f + holdProgress.value * 0.7f)
+    val pressEase  = 1f - (holdProgress.value * 0.035f)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(220.dp)
+            .onGloballyPositioned { coords ->
+                val p = coords.positionInRoot()
+                orbCenterInRoot = Offset(p.x + coords.size.width / 2f, p.y + coords.size.height / 2f)
+            }
+            .graphicsLayer { translationX = shakeOffset.value }
+            .pointerInput(armedMinutes, reducedMotion) {
+                coroutineScope {
+                    while (true) {
+                        awaitPointerEventScope { awaitFirstDown(requireUnconsumed = false) }
+                        isHolding = true
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                        val chargeMs = if (reducedMotion) 120 else ORB_HOLD_MS
+                        val chargeJob = launch {
+                            holdProgress.animateTo(1f, tween(durationMillis = chargeMs, easing = LinearEasing))
+                        }
+
+                        awaitPointerEventScope { waitForUpOrCancellation() }
+                        isHolding = false
+
+                        if (chargeJob.isActive) {
+                            // Released early — ease the ring back down instead
+                            // of snapping, so letting go still feels deliberate.
+                            chargeJob.cancel()
+                            launch { holdProgress.animateTo(0f, MotionSpecs.standard()) }
+                        } else {
+                            val mins = armedMinutes
+                            if (mins != null) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onIgnite(orbCenterInRoot, mins)
+                            } else {
+                                // Held long enough, but no duration is picked
+                                // yet — reject with a small shake rather than
+                                // silently doing nothing.
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                launch {
+                                    shakeOffset.animateTo(12f, tween(55))
+                                    shakeOffset.animateTo(-12f, tween(85))
+                                    shakeOffset.animateTo(6f, tween(70))
+                                    shakeOffset.animateTo(0f, tween(70))
+                                }
+                            }
+                            holdProgress.snapTo(0f)
+                        }
+                    }
+                }
+            }
+    ) {
         // Outermost ambient glow halo
-        Canvas(modifier = Modifier.size(220.dp).scale(breathScale)) {
+        Canvas(modifier = Modifier.size(220.dp).scale(breathScale * pressEase)) {
             val center = Offset(size.width / 2f, size.height / 2f)
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        AccentBlue.copy(alpha = glowAlpha * 0.5f),
-                        AccentTeal.copy(alpha = glowAlpha * 0.25f),
+                        AccentBlue.copy(alpha = chargeGlow * 0.5f),
+                        AccentTeal.copy(alpha = chargeGlow * 0.25f),
                         Color.Transparent
                     ),
                     center = center,
@@ -279,7 +410,7 @@ private fun LiquidGlassOrb(modifier: Modifier = Modifier) {
         }
 
         // Middle frosted glass ring
-        Canvas(modifier = Modifier.size(190.dp).scale(breathScale)) {
+        Canvas(modifier = Modifier.size(190.dp).scale(breathScale * pressEase)) {
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = size.minDimension / 2f
             drawCircle(
@@ -326,7 +457,7 @@ private fun LiquidGlassOrb(modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(148.dp)
-                .scale(breathScale)
+                .scale(breathScale * pressEase)
                 .clip(CircleShape)
                 .background(
                     brush = Brush.verticalGradient(
@@ -341,13 +472,121 @@ private fun LiquidGlassOrb(modifier: Modifier = Modifier) {
                 modifier           = Modifier.size(72.dp)
             )
         }
+
+        // Charge ring — appears only while held, sweeping clockwise from the
+        // top as it fills. This is the entire "am I holding long enough"
+        // affordance, so it needs to read unmistakably: bright white, thick
+        // enough to see at a glance, drawn just outside the glass.
+        if (isHolding || holdProgress.value > 0f) {
+            Canvas(modifier = Modifier.size(236.dp)) {
+                val stroke = 4.dp.toPx()
+                drawArc(
+                    color      = Color.White.copy(alpha = 0.9f),
+                    startAngle = -90f,
+                    sweepAngle = 360f * holdProgress.value,
+                    useCenter  = false,
+                    style      = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
+    }
+}
+
+// ════════════════════════════════════ Lockdown Ignition (full-screen fill) ════════════════════════════════════
+//
+// Plays once the orb's hold-to-lock ring completes. A circle grows out from
+// the orb's exact on-screen position until it swallows the whole display,
+// drifting in color from the orb's own blue/teal glass tones into the exact
+// black the lockdown launcher opens on — so by the time [onComplete] fires
+// and that screen actually appears, the color already matches and the cut
+// underneath it is invisible.
+//
+// Timing deliberately runs past the ~400ms "Doherty threshold" this app's
+// motion system otherwise holds to everywhere else (see Motion.kt) —
+// everyday micro-interactions should be fast because speed reads as
+// responsiveness, but this fires once a session at most and is meant to feel
+// like a ritual, closer to iOS's "slide to power off" or a game's
+// level-transition wipe, where a slightly longer, weightier motion reads as
+// significant rather than slow.
+
+private const val IGNITION_COLOR_DELAY_MS = 140
+private const val IGNITION_COLOR_MS       = 480
+
+@Composable
+private fun LockdownIgnitionOverlay(origin: Offset, onComplete: () -> Unit) {
+    val reducedMotion = LocalReducedMotion.current
+    val density       = LocalDensity.current
+    val config        = LocalConfiguration.current
+
+    // Screen diagonal, with headroom — guarantees full coverage no matter
+    // where on screen the orb was, even if [origin] is slightly off due to
+    // status-bar/inset rounding.
+    val maxRadiusPx = remember(config) {
+        with(density) {
+            val wPx = config.screenWidthDp.dp.toPx()
+            val hPx = config.screenHeightDp.dp.toPx()
+            hypot(wPx, hPx) * 1.15f
+        }
+    }
+    val startRadiusPx = with(density) { 100.dp.toPx() }
+
+    val radius   = remember { Animatable(startRadiusPx) }
+    val colorMix = remember { Animatable(0f) } // 0 = glass blue/teal · 1 = lockdown black
+
+    LaunchedEffect(origin) {
+        if (reducedMotion) {
+            // Respect the OS "remove animations" setting: cut straight to
+            // black instead of playing the expand.
+            radius.snapTo(maxRadiusPx)
+            colorMix.snapTo(1f)
+            delay(100)
+            onComplete()
+            return@LaunchedEffect
+        }
+        launch { radius.animateTo(maxRadiusPx, MotionSpecs.liquidExpand()) }
+        delay(IGNITION_COLOR_DELAY_MS)
+        colorMix.animateTo(1f, tween(durationMillis = IGNITION_COLOR_MS, easing = FastOutSlowInEasing))
+        onComplete()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Swallow any stray touches while the fill is mid-flight so
+            // nothing underneath can be double-tapped during the transition.
+            .pointerInput(Unit) { detectTapGestures {} }
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val fillColor = lerp(AccentBlue, BgDarkest, colorMix.value)
+            val edgeColor = lerp(AccentTeal, BgDarkest, colorMix.value)
+
+            // Two faint trailing echoes just behind the leading edge — the
+            // "surface tension" of a spreading liquid rather than a
+            // hard-edged circle snapping outward.
+            drawCircle(color = edgeColor.copy(alpha = 0.16f * (1f - colorMix.value)), radius = radius.value * 0.92f, center = origin)
+            drawCircle(color = edgeColor.copy(alpha = 0.09f * (1f - colorMix.value)), radius = radius.value * 0.85f, center = origin)
+
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(fillColor, lerp(fillColor, BgDarkest, 0.35f)),
+                    center = origin,
+                    radius = (radius.value * 1.05f).coerceAtLeast(1f)
+                ),
+                radius = radius.value,
+                center = origin
+            )
+        }
     }
 }
 
 // ════════════════════════════════════ Hero / Pick Duration ════════════════════════════════════
 
 @Composable
-private fun LockdownHeroSection(onStart: (Int) -> Unit, onCustom: (Int) -> Unit) {
+private fun LockdownHeroSection(
+    onStart : (Int) -> Unit,
+    onCustom: (Int) -> Unit,
+    onIgnite: (Offset, Int) -> Unit = { _, _ -> }
+) {
     var selectedPreset by remember { mutableStateOf<DurationPreset?>(null) }
 
     Column(
@@ -355,7 +594,13 @@ private fun LockdownHeroSection(onStart: (Int) -> Unit, onCustom: (Int) -> Unit)
         horizontalAlignment   = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(8.dp))
-        LiquidGlassOrb()
+        LiquidGlassOrb(
+            // Custom duration has no fixed minute count, so holding the orb
+            // only "arms" once a concrete preset chip is selected — for
+            // Custom, people go through the dial dialog via the button below.
+            armedMinutes = selectedPreset?.takeIf { it.minutes > 0 }?.minutes,
+            onIgnite     = onIgnite
+        )
         Spacer(Modifier.height(28.dp))
 
         Text(
@@ -728,6 +973,7 @@ private fun EmbeddedLockdownLazyColumn(
     onManageWhitelist: () -> Unit,
     onStart          : (Int) -> Unit,
     onCustom         : (Int) -> Unit,
+    onIgnite         : (Offset, Int) -> Unit,
     onEmergencyBreak : () -> Unit,
     onEndLockdown    : () -> Unit,
     onAddSchedule    : () -> Unit,
@@ -753,7 +999,7 @@ private fun EmbeddedLockdownLazyColumn(
 
         // ── 1. Hero / Active panel ──────────────────────────────────────────
         item(key = "session_header") {
-            if (!sessionRunning) LockdownHeroSection(onStart = onStart, onCustom = onCustom)
+            if (!sessionRunning) LockdownHeroSection(onStart = onStart, onCustom = onCustom, onIgnite = onIgnite)
             else ActiveLockdownPanel(
                 decision         = decision,
                 now              = now,
