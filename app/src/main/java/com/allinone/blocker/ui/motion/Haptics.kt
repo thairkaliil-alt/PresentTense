@@ -91,6 +91,14 @@ class Haptics internal constructor(
         }
     }
 
+    /**
+     * Sharp, blunt "no" pulse for a failed Strict Mode attempt — wrong PIN,
+     * wrong math answer, wrong scramble. Deliberately a single flat punch,
+     * not a rising rhythm like [confirm]'s two-beat pattern, so it reads as
+     * a dead end rather than a step forward.
+     */
+    fun error() = pulse(durationMs = 35L, amplitude = 200)
+
     private fun pulse(durationMs: Long, amplitude: Int) {
         if (reduced) return
         val v = vibrator ?: return
