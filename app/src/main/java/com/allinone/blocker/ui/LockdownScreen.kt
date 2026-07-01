@@ -13,7 +13,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,12 +39,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -90,6 +92,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
@@ -192,6 +195,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
             now                 = now,
             breaksRemaining     = breaksRemaining,
             schedules           = schedules,
+            onManageWhitelist   = onManageWhitelist,
             onStart             = { mins -> BlockerRepository.startManualLock(mins); goHome() },
             onCustom            = { prefill -> customStartMinutes = prefill; showCustomMinutes = true },
             onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
@@ -454,130 +458,125 @@ private fun DurationChip(preset: DurationPreset, selected: Boolean, modifier: Mo
     }
 }
 
-// ════════════════════════════════════ Whitelist section ════════════════════════════════════
+// ════════════════════════════════════ Whitelist summary (entry point) ════════════════════════════════════
+//
+// One merged card replaces what used to be a header + search bar + full scrolling
+// app list all living loose inside the lockdown page. The card always shows the
+// count and a stacked preview of who's allowed; tapping it opens the full
+// searchable manage-whitelist screen. This is the same "summary row → dedicated
+// manager" pattern iOS Focus/Screen Time and apps like Opal use for allow-lists,
+// so people aren't scrolling past hundreds of installed apps just to configure a
+// lockdown duration.
 
 @Composable
-private fun WhitelistSectionHeader(count: Int, onRefresh: () -> Unit) {
+private fun WhitelistSummaryCard(
+    count       : Int,
+    previewApps : List<DeviceApp>,
+    onClick     : () -> Unit
+) {
+    val pressScale by animateFloatAsState(
+        targetValue   = 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label         = "whitelistCardScale"
+    )
+
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(pressScale)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick),
         shape    = RoundedCornerShape(20.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurface)
+        colors   = CardDefaults.cardColors(containerColor = CardSurface),
+        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
     ) {
         Row(
-            modifier          = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier          = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier         = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(AccentTeal.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Shield, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("Whitelist", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    if (count == 0) "No apps whitelisted yet — all apps will be blocked"
+                    if (count == 0) "No apps allowed yet — tap to choose"
                     else "$count app${if (count == 1) "" else "s"} allowed during lockdown",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextTertiary
                 )
             }
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Refresh app list", tint = TextMuted)
+            if (previewApps.isNotEmpty()) {
+                Spacer(Modifier.width(8.dp))
+                WhitelistAvatarStack(apps = previewApps)
+                Spacer(Modifier.width(10.dp))
+            } else {
+                Spacer(Modifier.width(8.dp))
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Manage whitelist", tint = TextMuted)
+        }
+    }
+}
+
+// Overlapping "face pile" of the first few whitelisted apps — gives an instant
+// preview of who's allowed without opening anything, same idea as the member
+// avatar stacks in Slack/Notion.
+@Composable
+private fun WhitelistAvatarStack(apps: List<DeviceApp>) {
+    val shown    = apps.take(3)
+    val overflow = apps.size - shown.size
+
+    Row {
+        shown.forEachIndexed { index, app ->
+            Box(
+                modifier = Modifier
+                    .offset(x = (-8 * index).dp)
+                    .zIndex((shown.size - index).toFloat())
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(CardSurface)
+                    .border(2.dp, CardSurface, CircleShape)
+            ) {
+                MiniAppAvatar(app = app, size = 24)
+            }
+        }
+        if (overflow > 0) {
+            Box(
+                modifier = Modifier
+                    .offset(x = (-8 * shown.size).dp)
+                    .zIndex(0f)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(CardSurfaceAlt)
+                    .border(2.dp, CardSurface, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+$overflow", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = TextSecondary)
             }
         }
     }
 }
 
 @Composable
-private fun WhitelistAppRow(
-    packageName : String,
-    label       : String,
-    whitelisted : Boolean,
-    onToggle    : (Boolean) -> Unit
-) {
-    // ── Animated card background color ──────────────────────────────────────
-    val cardBg by animateColorAsState(
-        targetValue = if (whitelisted) AccentTeal.copy(alpha = 0.10f)
-                      else             AccentRed.copy(alpha  = 0.10f),
-        animationSpec = tween(durationMillis = 500),
-        label = "cardBg"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (whitelisted) AccentTeal.copy(alpha = 0.30f)
-                      else             AccentRed.copy(alpha  = 0.25f),
-        animationSpec = tween(durationMillis = 500),
-        label = "borderColor"
-    )
-
-    // ── Subtle scale spring on toggle ────────────────────────────────────────
-    val cardScale by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = spring(
-            dampingRatio    = Spring.DampingRatioMediumBouncy,
-            stiffness       = Spring.StiffnessMedium
-        ),
-        label = "cardScale"
-    )
-
-    // ── Blinking dot for blocked state ───────────────────────────────────────
-    val dotAlpha by if (!whitelisted) {
-        val infinite = rememberInfiniteTransition(label = "dot_blink")
-        infinite.animateFloat(
-            initialValue   = 1f,
-            targetValue    = 0.25f,
-            animationSpec  = infiniteRepeatable(
-                animation  = tween(900, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "dotBlink"
-        )
-    } else {
-        androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(1f) }
-    }
-
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .scale(cardScale),
-        shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = cardBg),
-        border    = BorderStroke(1.5.dp, borderColor),
-        elevation = CardDefaults.cardElevation(0.dp)
+private fun MiniAppAvatar(app: DeviceApp, size: Int) {
+    val icon = remember(app.packageName) { InstalledApps.iconFor(app.packageName) }
+    Box(
+        modifier         = Modifier.fillMaxSize().clip(CircleShape).background(CardSurfaceAlt),
+        contentAlignment = Alignment.Center
     ) {
-        Row(
-            modifier          = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AppIconOrLetter(packageName = packageName, label = label)
-            Spacer(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                // ── Status dot + label (no text sentence) ───────────────────
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                  Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                color = (if (whitelisted) AccentTeal else AccentRed)
-                                    .copy(alpha = dotAlpha)
-                            )
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text(
-                        text  = if (whitelisted) "Allowed in lockdown" else "Blocked in lockdown",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (whitelisted) AccentTeal else AccentRed
-                    )
-                }
-            }
-            Switch(
-                checked         = whitelisted,
-                onCheckedChange = onToggle,
-                colors          = SwitchDefaults.colors(
-                    checkedThumbColor    = Color.White,
-                    checkedTrackColor    = AccentTeal,
-                    checkedBorderColor   = AccentTeal,
-                    uncheckedThumbColor  = TextTertiary,
-                    uncheckedTrackColor  = BgDarkest,
-                    uncheckedBorderColor = TextTertiary
-                )
+        if (icon != null) {
+            Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(size.dp).clip(CircleShape))
+        } else {
+            Text(
+                app.label.take(1).uppercase(),
+                style      = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color      = TextPrimary
             )
         }
     }
@@ -726,6 +725,7 @@ private fun EmbeddedLockdownLazyColumn(
     now              : Long,
     breaksRemaining  : Int,
     schedules        : List<LockdownSchedule>,
+    onManageWhitelist: () -> Unit,
     onStart          : (Int) -> Unit,
     onCustom         : (Int) -> Unit,
     onEmergencyBreak : () -> Unit,
@@ -735,21 +735,14 @@ private fun EmbeddedLockdownLazyColumn(
     onDeleteSchedule : (LockdownSchedule) -> Unit,
     onEditSchedule   : (LockdownSchedule) -> Unit
 ) {
-    val context     = LocalContext.current
-    val whitelist   by BlockerRepository.whitelist.collectAsState()
-    val all         by InstalledApps.apps.collectAsState()
-    val loadingApps by InstalledApps.loading.collectAsState()
-
-    var searchQuery by remember { mutableStateOf("") }
+    val context   = LocalContext.current
+    val whitelist by BlockerRepository.whitelist.collectAsState()
+    val all       by InstalledApps.apps.collectAsState()
 
     LaunchedEffect(Unit) { if (all.isEmpty()) InstalledApps.refresh(context) }
 
-    val filtered = remember(all, searchQuery) {
-        if (searchQuery.isBlank()) all
-        else all.filter {
-            it.label.contains(searchQuery, ignoreCase = true) ||
-            it.packageName.contains(searchQuery, ignoreCase = true)
-        }
+    val whitelistedApps = remember(all, whitelist) {
+        all.filter { it.packageName in whitelist }
     }
 
     LazyColumn(
@@ -770,44 +763,12 @@ private fun EmbeddedLockdownLazyColumn(
             )
         }
 
-        // ── 2. Whitelist header card ────────────────────────────────────────
-        item(key = "whitelist_header_card") {
-            WhitelistSectionHeader(
-                count     = whitelist.size,
-                onRefresh = { InstalledApps.refresh(context) }
-            )
-        }
-
-        // Search field — always visible so users can find apps fast
-        item(key = "whitelist_search") {
-            OutlinedTextField(
-                value         = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder   = { Text("Search apps to whitelist…") },
-                singleLine    = true,
-                leadingIcon   = { Icon(Icons.Filled.Search, contentDescription = null) },
-                modifier      = Modifier.fillMaxWidth(),
-                shape         = RoundedCornerShape(14.dp)
-            )
-        }
-
-        // Loading state
-        if (all.isEmpty() && loadingApps) {
-            item(key = "whitelist_loading") {
-                Text("Loading installed apps…", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = TextTertiary)
-            }
-        }
-
-        // App rows — one per installed app, toggle = whitelist on/off
-        items(filtered, key = { "wl_${it.packageName}" }) { device ->
-            WhitelistAppRow(
-                packageName = device.packageName,
-                label       = device.label,
-                whitelisted = whitelist.contains(device.packageName),
-                onToggle    = { checked ->
-                    if (checked) BlockerRepository.addToWhitelist(device.packageName)
-                    else BlockerRepository.removeFromWhitelist(device.packageName)
-                }
+        // ── 2. Whitelist — one merged card: count + preview + tap to manage ──
+        item(key = "whitelist_summary_card") {
+            WhitelistSummaryCard(
+                count       = whitelist.size,
+                previewApps = whitelistedApps,
+                onClick     = onManageWhitelist
             )
         }
 
@@ -890,7 +851,7 @@ private fun EmbeddedLockdownLazyColumn(
 
         if (schedules.isEmpty()) {
             item(key = "schedules_empty") {
-                EmptyHintCard("No schedules yet. Add one for things like \u201Clock every night 11pm\u20137am.\u201D")
+                EmptyHintCard("No schedules yet. Add one for things like \u201CLock every night 11pm\u20137am.\u201D")
             }
         } else {
             items(schedules, key = { "schedule_${it.id}" }) { schedule ->
