@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,7 +57,11 @@ import com.allinone.blocker.data.FRICTION_ORDER
 import com.allinone.blocker.data.FrictionType
 import com.allinone.blocker.data.PinHasher
 import com.allinone.blocker.data.StrictModeConfig
+import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.SuccessCheckmark
+import com.allinone.blocker.ui.motion.rememberChallengeFeedback
 import com.allinone.blocker.ui.motion.rememberHaptics
+import com.allinone.blocker.ui.motion.shakeAndFlash
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
@@ -66,6 +71,7 @@ import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -258,6 +264,25 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
+    val feedback = rememberChallengeFeedback()
+    val scope = rememberCoroutineScope()
+    val succeeding = feedback.isSucceeding
+
+    fun fail() {
+        error = true
+        input = ""
+        haptics.error()
+        scope.launch { feedback.fail() }
+    }
+
+    fun succeed() {
+        scope.launch {
+            haptics.confirm()
+            feedback.succeed()
+            delay(MotionDurations.Emphasized.toLong())
+            onPassed()
+        }
+    }
 
     Column(
         Modifier.fillMaxWidth(),
@@ -266,38 +291,46 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
         StepHeadline("Enter your PIN")
         StepSubtitle("Type the 6-digit PIN you set in Strict Mode settings.")
 
-        OutlinedTextField(
-            value = input,
-            onValueChange = {
-                if (it.length <= 6 && it.all(Char::isDigit)) {
-                    // Only tick when a digit was ADDED, not on delete/paste-clear,
-                    // so backspacing doesn't feel like it's "entering" anything.
-                    if (it.length > input.length) haptics.digitTick()
-                    input = it; error = false
-                }
-                if (it.length == 6 && PinHasher.matches(it, expectedHash)) onPassed()
-            },
-            label = { Text("6-digit PIN") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.NumberPassword,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = {
-                if (input.length == 6) {
-                    if (PinHasher.matches(input, expectedHash)) onPassed()
-                    else { error = true; input = "" }
-                }
-            }),
-            isError = error,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = AccentBlue,
-                errorBorderColor = AccentRed
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shakeAndFlash(feedback),
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = {
+                    if (it.length <= 6 && it.all(Char::isDigit)) {
+                        // Only tick when a digit was ADDED, not on delete/paste-clear,
+                        // so backspacing doesn't feel like it's "entering" anything.
+                        if (it.length > input.length) haptics.digitTick()
+                        input = it; error = false
+                    }
+                    if (it.length == 6 && PinHasher.matches(it, expectedHash)) succeed()
+                },
+                label = { Text("6-digit PIN") },
+                singleLine = true,
+                enabled = !succeeding,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = {
+                    if (input.length == 6) {
+                        if (PinHasher.matches(input, expectedHash)) succeed() else fail()
+                    }
+                }),
+                isError = error,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentBlue,
+                    errorBorderColor = AccentRed
+                )
             )
-        )
+            SuccessCheckmark(feedback, modifier = Modifier.padding(end = 16.dp))
+        }
         if (error) {
             Text(
                 "Wrong PIN — try again",
@@ -308,10 +341,9 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
 
         PrimaryActionButton(
             label = "Confirm",
-            enabled = input.length == 6,
+            enabled = input.length == 6 && !succeeding,
             onClick = {
-                if (PinHasher.matches(input, expectedHash)) onPassed()
-                else { error = true; input = "" }
+                if (PinHasher.matches(input, expectedHash)) succeed() else fail()
             }
         )
     }
@@ -325,6 +357,19 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
 private fun CooldownStep(seconds: Int, onPassed: () -> Unit) {
     var elapsedMs by remember { mutableStateOf(0L) }
     val totalMs = seconds * 1000L
+    val haptics = rememberHaptics()
+    val feedback = rememberChallengeFeedback()
+    val scope = rememberCoroutineScope()
+    val succeeding = feedback.isSucceeding
+
+    fun succeed() {
+        scope.launch {
+            haptics.confirm()
+            feedback.succeed()
+            delay(MotionDurations.Emphasized.toLong())
+            onPassed()
+        }
+    }
 
     LaunchedEffect(Unit) {
         val start = System.currentTimeMillis()
@@ -364,6 +409,12 @@ private fun CooldownStep(seconds: Int, onPassed: () -> Unit) {
                 fontWeight = FontWeight.ExtraBold,
                 color = if (done) AccentBlue else TextPrimary
             )
+            SuccessCheckmark(
+                feedback,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 16.dp)
+            )
         }
 
         LinearProgressIndicator(
@@ -378,8 +429,8 @@ private fun CooldownStep(seconds: Int, onPassed: () -> Unit) {
 
         PrimaryActionButton(
             label = "Continue",
-            enabled = done,
-            onClick = onPassed
+            enabled = done && !succeeding,
+            onClick = { succeed() }
         )
     }
 }
@@ -392,6 +443,19 @@ private fun CooldownStep(seconds: Int, onPassed: () -> Unit) {
 private fun PledgeStep(phrase: String, onPassed: () -> Unit) {
     var input by remember { mutableStateOf("") }
     val matches = input.trim() == phrase.trim()
+    val haptics = rememberHaptics()
+    val feedback = rememberChallengeFeedback()
+    val scope = rememberCoroutineScope()
+    val succeeding = feedback.isSucceeding
+
+    fun succeed() {
+        scope.launch {
+            haptics.confirm()
+            feedback.succeed()
+            delay(MotionDurations.Emphasized.toLong())
+            onPassed()
+        }
+    }
 
     Column(
         Modifier.fillMaxWidth(),
@@ -415,22 +479,26 @@ private fun PledgeStep(phrase: String, onPassed: () -> Unit) {
             )
         }
 
-        OutlinedTextField(
-            value = input,
-            onValueChange = { input = it },
-            label = { Text("Type it here") },
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = if (matches) AccentBlue else AccentBlue.copy(alpha = 0.5f)
+        Box(contentAlignment = Alignment.CenterEnd) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("Type it here") },
+                enabled = !succeeding,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = if (matches) AccentBlue else AccentBlue.copy(alpha = 0.5f)
+                )
             )
-        )
+            SuccessCheckmark(feedback, modifier = Modifier.padding(end = 16.dp, top = 12.dp))
+        }
 
         PrimaryActionButton(
             label = "Continue",
-            enabled = matches,
-            onClick = onPassed
+            enabled = matches && !succeeding,
+            onClick = { succeed() }
         )
     }
 }
@@ -481,6 +549,26 @@ private fun MathStep(onPassed: () -> Unit) {
     var input   by remember { mutableStateOf("") }
     var error   by remember { mutableStateOf(false) }
     var attempts by remember { mutableIntStateOf(0) }
+    val haptics = rememberHaptics()
+    val feedback = rememberChallengeFeedback()
+    val scope = rememberCoroutineScope()
+    val succeeding = feedback.isSucceeding
+
+    fun fail() {
+        error = true; input = ""; attempts++
+        problem = generateMathProblem()
+        haptics.error()
+        scope.launch { feedback.fail() }
+    }
+
+    fun succeed() {
+        scope.launch {
+            haptics.confirm()
+            feedback.succeed()
+            delay(MotionDurations.Emphasized.toLong())
+            onPassed()
+        }
+    }
 
     Column(
         Modifier.fillMaxWidth(),
@@ -495,47 +583,59 @@ private fun MathStep(onPassed: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(CardSurface)
-                .padding(vertical = 28.dp, horizontal = 20.dp),
-            contentAlignment = Alignment.Center
+                .shakeAndFlash(feedback, cornerRadius = 20.dp),
+            contentAlignment = Alignment.TopEnd
         ) {
-            Text(
-                problem.display,
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.ExtraBold,
-                color = TextPrimary,
-                textAlign = TextAlign.Center
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(CardSurface)
+                        .padding(vertical = 28.dp, horizontal = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        problem.display,
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TextPrimary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it.filter(Char::isDigit); error = false },
+                    label = { Text("Your answer") },
+                    singleLine = true,
+                    enabled = !succeeding,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = {
+                        if (input.isNotEmpty()) {
+                            if (input.toIntOrNull() == problem.answer) succeed() else fail()
+                        }
+                    }),
+                    isError = error,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentBlue,
+                        errorBorderColor = AccentRed
+                    )
+                )
+            }
+            SuccessCheckmark(
+                feedback,
+                modifier = Modifier.padding(top = 12.dp, end = 12.dp)
             )
         }
-
-        OutlinedTextField(
-            value = input,
-            onValueChange = { input = it.filter(Char::isDigit); error = false },
-            label = { Text("Your answer") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Number,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = {
-                if (input.isNotEmpty()) {
-                    if (input.toIntOrNull() == problem.answer) {
-                        onPassed()
-                    } else {
-                        error = true; input = ""; attempts++
-                        problem = generateMathProblem()
-                    }
-                }
-            }),
-            isError = error,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = AccentBlue,
-                errorBorderColor = AccentRed
-            )
-        )
         if (error) {
             Text(
                 "Not quite — new problem incoming",
@@ -546,14 +646,9 @@ private fun MathStep(onPassed: () -> Unit) {
 
         PrimaryActionButton(
             label = "Check",
-            enabled = input.isNotEmpty(),
+            enabled = input.isNotEmpty() && !succeeding,
             onClick = {
-                if (input.toIntOrNull() == problem.answer) {
-                    onPassed()
-                } else {
-                    error = true; input = ""; attempts++
-                    problem = generateMathProblem()
-                }
+                if (input.toIntOrNull() == problem.answer) succeed() else fail()
             }
         )
     }
@@ -581,6 +676,25 @@ private fun WordScrambleStep(onPassed: () -> Unit) {
     var scrambled by remember { mutableStateOf(scramble(target)) }
     var input    by remember { mutableStateOf("") }
     var error    by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
+    val feedback = rememberChallengeFeedback()
+    val scope = rememberCoroutineScope()
+    val succeeding = feedback.isSucceeding
+
+    fun fail() {
+        error = true; input = ""; scrambled = scramble(target)
+        haptics.error()
+        scope.launch { feedback.fail() }
+    }
+
+    fun succeed() {
+        scope.launch {
+            haptics.confirm()
+            feedback.succeed()
+            delay(MotionDurations.Emphasized.toLong())
+            onPassed()
+        }
+    }
 
     Column(
         Modifier.fillMaxWidth(),
@@ -589,60 +703,79 @@ private fun WordScrambleStep(onPassed: () -> Unit) {
         StepHeadline("Unscramble this.")
         StepSubtitle("Rearrange the letters into a real word.")
 
-        // Scrambled word display
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(CardSurfaceAlt)
-                .padding(vertical = 28.dp, horizontal = 20.dp),
-            contentAlignment = Alignment.Center
+                .shakeAndFlash(feedback, cornerRadius = 20.dp),
+            contentAlignment = Alignment.TopEnd
         ) {
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                Text(
-                    scrambled,
-                    style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = AccentBlue,
-                    letterSpacing = 6.sp,
-                    textAlign = TextAlign.Center
-                )
-                TextButton(onClick = { scrambled = scramble(target) }) {
-                    Text(
-                        "Reshuffle",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextMuted
-                    )
+                // Scrambled word display
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(CardSurfaceAlt)
+                        .padding(vertical = 28.dp, horizontal = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            scrambled,
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AccentBlue,
+                            letterSpacing = 6.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        TextButton(
+                            onClick = { scrambled = scramble(target) },
+                            enabled = !succeeding
+                        ) {
+                            Text(
+                                "Reshuffle",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TextMuted
+                            )
+                        }
+                    }
                 }
-            }
-        }
 
-        OutlinedTextField(
-            value = input,
-            onValueChange = {
-                input = it.uppercase().filter(Char::isLetter); error = false
-            },
-            label = { Text("Your answer") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = {
-                if (input == target) onPassed()
-                else { error = true; input = ""; scrambled = scramble(target) }
-            }),
-            isError = error,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = AccentBlue,
-                errorBorderColor = AccentRed
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = {
+                        input = it.uppercase().filter(Char::isLetter); error = false
+                    },
+                    label = { Text("Your answer") },
+                    singleLine = true,
+                    enabled = !succeeding,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = {
+                        if (input == target) succeed() else fail()
+                    }),
+                    isError = error,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentBlue,
+                        errorBorderColor = AccentRed
+                    )
+                )
+            }
+            SuccessCheckmark(
+                feedback,
+                modifier = Modifier.padding(top = 12.dp, end = 12.dp)
             )
-        )
+        }
         if (error) {
             Text(
                 "Not quite — letters reshuffled",
@@ -653,10 +786,9 @@ private fun WordScrambleStep(onPassed: () -> Unit) {
 
         PrimaryActionButton(
             label = "Confirm",
-            enabled = input.length == target.length,
+            enabled = input.length == target.length && !succeeding,
             onClick = {
-                if (input == target) onPassed()
-                else { error = true; input = ""; scrambled = scramble(target) }
+                if (input == target) succeed() else fail()
             }
         )
     }
