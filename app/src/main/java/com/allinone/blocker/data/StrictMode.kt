@@ -140,6 +140,23 @@ object StrictModeGate {
             return
         }
 
+        // If Active Plan currently has a genuinely timed block in effect,
+        // hard-block the same way — no bypass. This has to be checked here,
+        // not just on the settings screen: removing a blocked app,
+        // disabling one, or turning Strict Mode off entirely are exactly
+        // the kind of "weakening your setup" Active Plan exists to stop.
+        //
+        // Without this check, any of those actions would instead fall
+        // through to the challenge screen below — but PLAN_LOCK is
+        // deliberately left out of FRICTION_ORDER (it's an automatic
+        // enforcer, not a challenge you complete), so if it's the only
+        // active friction the challenge screen ends up with zero steps.
+        // A zero-step challenge auto-succeeds immediately, which meant
+        // Active Plan was silently never actually stopping anything.
+        if (isSettingsLockedByPlan(config)) {
+            return
+        }
+
         if (!config.enabled || config.activeFrictions.isEmpty()) {
             StreakRepository.recordSuccessfulDisable()
             action()
@@ -164,13 +181,10 @@ object StrictModeGate {
     /**
      * True while Active Plan (PLAN_LOCK) is turned on AND at least one of
      * your blocked apps currently has a genuinely time-bound block in
-     * effect (see [BlockerRepository.hasActiveTimedBlock]). This is
-     * deliberately separate from [guard]: [guard] protects *using* the
-     * blocker (ending lockdown, removing a blocked app, etc.) with a
-     * challenge. This instead freezes the Strict Mode *settings screen*
-     * itself — no challenge, no bypass, because the whole point of Active
-     * Plan is that you can't weaken your setup while a block you set up is
-     * actively doing its job.
+     * effect (see [BlockerRepository.hasActiveTimedBlock]). [guard] checks
+     * this too — not just this file's own settings-screen call sites —
+     * since removing or disabling a blocked app is just as much
+     * "weakening your setup" as loosening a friction is.
      *
      * This always has a defined end, because [BlockerRepository.hasActiveTimedBlock]
      * deliberately ignores PERMANENT-rule blocks (and apps with no rules at
