@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
@@ -47,13 +48,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,8 +72,7 @@ import com.allinone.blocker.data.BlockRule
 import com.allinone.blocker.data.BlockRuleType
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
-import com.allinone.blocker.data.ProtectionLevel
-import com.allinone.blocker.data.StrictModeGate
+import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentRed
@@ -99,8 +98,7 @@ private data class PresetDef(
     val description: String,
     val icon: ImageVector,
     val color: Color,
-    val defaultRules: List<BlockRule>,
-    val defaultProtection: ProtectionLevel
+    val defaultRules: List<BlockRule>
 )
 
 private val PRESETS = listOf(
@@ -111,8 +109,7 @@ private val PRESETS = listOf(
         description = "You can still open this app, but once you've used it for 30 minutes today it closes. Good for apps you want to cut back on, not quit cold turkey.",
         icon        = Icons.Filled.Psychology,
         color       = AccentTeal,
-        defaultRules = listOf(BlockRule(type = BlockRuleType.DAILY_LIMIT, limitMinutes = 30)),
-        defaultProtection = ProtectionLevel.SOFT
+        defaultRules = listOf(BlockRule(type = BlockRuleType.DAILY_LIMIT, limitMinutes = 30))
     ),
     PresetDef(
         preset      = BlockPreset.HARD_LIMITS,
@@ -121,8 +118,7 @@ private val PRESETS = listOf(
         description = "You decide a window when this app is allowed (e.g. 6 PM–8 PM). Outside that window it's closed. Great for apps you want to use at a specific time and nowhere else.",
         icon        = Icons.Filled.AccessTime,
         color       = AccentBlue,
-        defaultRules = listOf(BlockRule(type = BlockRuleType.TIME_INTERVAL, startMinutes = 18 * 60, endMinutes = 20 * 60)),
-        defaultProtection = ProtectionLevel.NORMAL
+        defaultRules = listOf(BlockRule(type = BlockRuleType.TIME_INTERVAL, startMinutes = 18 * 60, endMinutes = 20 * 60))
     ),
     PresetDef(
         preset      = BlockPreset.FULLY_BLOCKED,
@@ -131,8 +127,7 @@ private val PRESETS = listOf(
         description = "This app is completely off-limits. Tapping it does nothing — it's treated like it doesn't exist. Use this for apps you want out of your life entirely.",
         icon        = Icons.Filled.Block,
         color       = AccentRed,
-        defaultRules = emptyList(), // empty rules = always blocked (BlockEngine rule)
-        defaultProtection = ProtectionLevel.STRICT
+        defaultRules = emptyList() // empty rules = always blocked (BlockEngine rule)
     ),
     PresetDef(
         preset      = BlockPreset.CUSTOM,
@@ -141,8 +136,7 @@ private val PRESETS = listOf(
         description = "Mix and match rules yourself. For power users who want exact control over daily limits, session caps, open counts, cooldowns, and more.",
         icon        = Icons.Filled.Lock,
         color       = AccentAmber,
-        defaultRules = emptyList(),
-        defaultProtection = ProtectionLevel.NORMAL
+        defaultRules = emptyList()
     )
 )
 
@@ -154,7 +148,7 @@ private fun defFor(preset: BlockPreset) = PRESETS.first { it.preset == preset }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> Unit) {
+fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> Unit, onOpenStrictMode: () -> Unit) {
     val context = LocalContext.current
 
     // ── Load existing saved app (null if this is a brand-new addition) ────
@@ -210,16 +204,21 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
     fun applyPreset(def: PresetDef) {
         updateDraft(
             current.copy(
-                preset     = def.preset,
-                rules      = if (def.preset == BlockPreset.CUSTOM) current.rules else def.defaultRules,
-                protection = def.defaultProtection
+                preset = def.preset,
+                rules  = if (def.preset == BlockPreset.CUSTOM) current.rules else def.defaultRules
             )
         )
         presetChosen = true
         if (def.preset == BlockPreset.CUSTOM) customExpanded = true
     }
 
-    val hardToUndoOn = current.protection >= ProtectionLevel.STRICT
+    // Strict Mode is a global, separate system (see StrictModeGate.guard) —
+    // it protects turning off ANY block, not just this one app. So rather
+    // than a per-app flag that silently did nothing unless Strict Mode also
+    // happened to be configured, this screen just reflects the real global
+    // state and links straight to where it's actually managed.
+    val strictConfig by BlockerRepository.strictMode.collectAsState()
+    val strictModeActive = strictConfig.enabled && strictConfig.activeFrictions.isNotEmpty()
 
     Scaffold(
         topBar = {
@@ -243,19 +242,9 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 state   = saveState,
                 enabled = presetChosen,
                 onClick = {
-                    val commit = {
-                        saveState = SaveState.Loading
-                        BlockerRepository.upsertApp(current)
-                        saveState = SaveState.Done
-                    }
-                    // Only a WEAKER edit needs to clear Strict Mode's
-                    // challenge first — see isWeakerEdit(). Tightening a
-                    // block, or saving a brand-new app, commits right away.
-                    if (isWeakerEdit(savedApp, current)) {
-                        StrictModeGate.guard(commit)
-                    } else {
-                        commit()
-                    }
+                    saveState = SaveState.Loading
+                    BlockerRepository.upsertApp(current)
+                    saveState = SaveState.Done
                 },
                 // Fires automatically a moment after "Saved" — sends the
                 // user back to the app list instead of leaving them on
@@ -323,17 +312,11 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 )
             }
 
-            // ── Hard-to-undo toggle — updates draft only ──────────────────
+            // ── Strict Mode link — teleports to the real settings screen ──
             Spacer(Modifier.height(4.dp))
-            HardToUndoCard(
-                checked  = hardToUndoOn,
-                onChange = { wantsHard ->
-                    updateDraft(
-                        current.copy(
-                            protection = if (wantsHard) ProtectionLevel.STRICT else ProtectionLevel.SOFT
-                        )
-                    )
-                }
+            StrictModeLinkCard(
+                strictModeOn = strictModeActive,
+                onClick      = onOpenStrictMode
             )
 
             // ── Hint shown when preset not yet chosen ─────────────────────
@@ -548,20 +531,33 @@ private fun CustomRuleSection(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HARD-TO-UNDO TOGGLE CARD
+// STRICT MODE LINK CARD
+//
+// "Hard to undo" isn't something this screen can grant on its own — the only
+// thing that actually stands between a person and turning a block off is
+// Strict Mode's challenge (see StrictModeGate.guard, which is global: it
+// protects every block, not a per-app flag). The old version here was a
+// switch that flipped a per-app value with no real challenge behind it — a
+// promise the app couldn't back up on its own. This card is honest instead:
+// it shows the real state of Strict Mode and always leads straight to where
+// it's actually configured, the same "summary row → dedicated manager"
+// pattern used for Whitelist on the Lockdown screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun HardToUndoCard(checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun StrictModeLinkCard(strictModeOn: Boolean, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .pressable(onClick = onClick),
         shape    = RoundedCornerShape(16.dp),
         colors   = CardDefaults.cardColors(
-            containerColor = if (checked) AccentAmber.copy(alpha = 0.10f) else CardSurface
+            containerColor = if (strictModeOn) AccentAmber.copy(alpha = 0.10f) else CardSurface
         ),
         border   = BorderStroke(
-            width = if (checked) 1.5.dp else 0.5.dp,
-            color = if (checked) AccentAmber else CardSurfaceAlt
+            width = if (strictModeOn) 1.5.dp else 0.5.dp,
+            color = if (strictModeOn) AccentAmber else CardSurfaceAlt
         ),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
@@ -576,7 +572,7 @@ private fun HardToUndoCard(checked: Boolean, onChange: (Boolean) -> Unit) {
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(AccentAmber.copy(alpha = if (checked) 0.22f else 0.14f)),
+                    .background(AccentAmber.copy(alpha = if (strictModeOn) 0.22f else 0.14f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -591,22 +587,21 @@ private fun HardToUndoCard(checked: Boolean, onChange: (Boolean) -> Unit) {
                     "Make this hard to undo",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (checked) AccentAmber else TextPrimary
+                    color = if (strictModeOn) AccentAmber else TextPrimary
                 )
                 Text(
-                    "Disabling or editing this block will require passing a Strict Mode challenge first.",
+                    if (strictModeOn)
+                        "Strict Mode is on — disabling or deleting any block requires passing a challenge first. Tap to manage."
+                    else
+                        "Turn on a Strict Mode challenge so blocks can't be casually switched off. Tap to set it up.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
             }
-            Switch(
-                checked  = checked,
-                onCheckedChange = onChange,
-                colors   = SwitchDefaults.colors(
-                    checkedThumbColor  = Color.White,
-                    checkedTrackColor  = AccentAmber,
-                    checkedBorderColor = AccentAmber
-                )
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open Strict Mode settings",
+                tint = TextTertiary
             )
         }
     }
@@ -737,63 +732,6 @@ private fun AddRuleDialog(onDismiss: () -> Unit, onPick: (BlockRuleType) -> Unit
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STRICT MODE GUARD — does saving this edit loosen the block?
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// Editing rules on this screen used to be a side door around Strict Mode:
-// the on/off switch and delete button on the app list were protected by
-// StrictModeGate.guard(), but coming in here and shortening a Time Interval
-// window, raising a Daily Limit, deleting a rule outright, or switching to a
-// looser preset saved instantly with no challenge at all, regardless of any
-// friction you'd turned on. The Save button below now runs every edit to an
-// existing app through isWeakerEdit() first, and only weakening edits get
-// routed through StrictModeGate.guard() — same as the app list already does.
-
-/**
- * True if committing [draft] over [saved] would make the app's block easier
- * to satisfy than it currently is — fewer rules, a shorter blocked window, a
- * higher allowance, a shorter cooldown, the app itself turned off, or its
- * protection level turned down. [saved] is null for a brand-new app, which
- * is never a "weakening" edit — there's nothing yet to protect.
- *
- * Tightening a block (adding a rule, raising a cooldown, shrinking a limit,
- * etc.) always saves immediately with no challenge — Strict Mode only exists
- * to stop you from making things *easier* on yourself, never to get in the
- * way of making them harder.
- */
-private fun isWeakerEdit(saved: BlockedApp?, draft: BlockedApp): Boolean {
-    if (saved == null) return false
-    if (saved.enabled && !draft.enabled) return true
-    if (draft.protection < saved.protection) return true
-    // Rules combine with OR (BlockEngine: blocked if ANY rule triggers), so
-    // losing a rule type entirely — or keeping the type but making its
-    // trigger easier to satisfy — both loosen the overall block.
-    return saved.rules.any { savedRule ->
-        val stillPresent = draft.rules.firstOrNull { it.type == savedRule.type }
-        stillPresent == null || stillPresent.isWeakerThan(savedRule)
-    }
-}
-
-/** Same-[BlockRuleType] strength comparison only — see [isWeakerEdit]. */
-private fun BlockRule.isWeakerThan(other: BlockRule): Boolean = when (type) {
-    BlockRuleType.PERMANENT ->
-        false // a PERMANENT rule is either present or it isn't; "weaker" doesn't apply
-    BlockRuleType.TIME_INTERVAL ->
-        windowMinutes() < other.windowMinutes()
-    BlockRuleType.DAILY_LIMIT, BlockRuleType.SESSION_LIMIT ->
-        limitMinutes > other.limitMinutes
-    BlockRuleType.OPEN_COUNT ->
-        count > other.count
-    BlockRuleType.COOLDOWN ->
-        cooldownMinutes < other.cooldownMinutes
-}
-
-/** Length of the daily blocked window in minutes, wrap-around aware (e.g. 11 PM–6 AM). */
-private fun BlockRule.windowMinutes(): Int =
-    if (startMinutes <= endMinutes) endMinutes - startMinutes
-    else (24 * 60 - startMinutes) + endMinutes
 
 private fun ruleTitle(type: BlockRuleType): String = when (type) {
     BlockRuleType.TIME_INTERVAL -> "Time window block"
