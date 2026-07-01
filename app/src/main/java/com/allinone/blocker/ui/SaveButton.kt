@@ -3,10 +3,11 @@ package com.allinone.blocker.ui
 // ═══════════════════════════════════════════════════════════════════════════
 // SaveButton.kt  —  Reusable Save button design token
 //
-// Redesigned as a pill-shaped Extended FAB to match the "+ Add app" button:
+// Pill-shaped Extended FAB to match the "+ Add app" button:
 //   • Floats bottom-end of screen with a real drop shadow
 //   • Compact pill shape (fully rounded corners)
-//   • Same three animated states: Idle → Loading → Done
+//   • Text-only — no icon, per MD3 text-only Extended FAB guidance
+//   • Three animated states: Idle → Loading → Done, then auto-fires onReset
 //
 // HOW TO USE IN A SCREEN
 // ──────────────────────
@@ -22,7 +23,10 @@ package com.allinone.blocker.ui
 //                  // do your save, then:
 //                  saveState = SaveState.Done
 //              },
-//              onReset = { saveState = SaveState.Idle }
+//              // onReset fires automatically ~500ms after Done — this is the
+//              // right place to navigate back so the user doesn't have to
+//              // tap Save and then tap Back separately.
+//              onReset = { onBack() }
 //          )
 //      }
 //
@@ -37,28 +41,17 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -103,6 +96,14 @@ enum class SaveButtonVariant {
     Ghost
 }
 
+/**
+ * How long the button lingers on "Saved" before [SaveButton]'s onReset fires.
+ * Screens typically use onReset to navigate back, so this is effectively the
+ * "confirmation flash" the user sees before being returned to the previous
+ * screen — short enough to feel immediate, long enough to register.
+ */
+private const val DONE_HOLD_MILLIS = 450L
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPOSABLE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -110,12 +111,15 @@ enum class SaveButtonVariant {
 /**
  * The single Save button for the entire app.
  *
- * Default mode renders as an ExtendedFloatingActionButton (pill + shadow),
- * matching the "+ Add app" button in size, shape, and elevation.
+ * Default mode renders as a text-only ExtendedFloatingActionButton (pill +
+ * shadow), matching the "+ Add app" button in size, shape, and elevation —
+ * no leading icon, per MD3's text-only Extended FAB spacing rules.
  *
  * @param state    current [SaveState].
  * @param onClick  called on tap in [SaveState.Idle].
- * @param onReset  called automatically 1.2 s after [SaveState.Done].
+ * @param onReset  called automatically ~450ms after [SaveState.Done]. Screens
+ *                 should use this to navigate back, so the user never has to
+ *                 tap Save and then tap Back separately.
  * @param size     [SaveButtonSize.Default] (FAB pill) or [SaveButtonSize.Compact] (inline pill).
  * @param variant  [SaveButtonVariant.Filled] or [SaveButtonVariant.Ghost].
  * @param modifier passed through to the button root.
@@ -130,10 +134,10 @@ fun SaveButton(
     variant: SaveButtonVariant = SaveButtonVariant.Filled,
     modifier: Modifier = Modifier
 ) {
-    // ── Auto-reset after Done ─────────────────────────────────────────────
+    // ── Auto-fire onReset after Done (screens hook this to navigate back) ──
     LaunchedEffect(state) {
         if (state == SaveState.Done) {
-            delay(1200)
+            delay(DONE_HOLD_MILLIS)
             onReset()
         }
     }
@@ -151,6 +155,8 @@ fun SaveButton(
     val isEnabled = state == SaveState.Idle && enabled
 
     // ── Default: Extended FAB — pill shape, real shadow, bottom-end float ─
+    // Uses the text-only content-lambda overload (no icon slot), which
+    // applies MD3's correct symmetric padding for a label-only Extended FAB.
     if (size == SaveButtonSize.Default && variant == SaveButtonVariant.Filled) {
         val containerColor = when (state) {
             SaveState.Done -> AccentTeal
@@ -160,12 +166,6 @@ fun SaveButton(
 
         ExtendedFloatingActionButton(
             onClick = { if (isEnabled) onClick() },
-            icon = {
-                SaveButtonIcon(state, iconSize = 20.dp, contentColor = contentColor)
-            },
-            text = {
-                SaveButtonLabel(state, contentColor = contentColor)
-            },
             modifier = modifier.scale(scale),
             containerColor = containerColor,
             contentColor = contentColor,
@@ -175,13 +175,14 @@ fun SaveButton(
                 focusedElevation  = 6.dp,
                 hoveredElevation  = 8.dp
             )
-        )
+        ) {
+            SaveButtonLabel(state, contentColor = contentColor)
+        }
         return
     }
 
     // ── Compact / Ghost fallback — inline pill button ─────────────────────
     val buttonHeight: Dp = if (size == SaveButtonSize.Compact) 40.dp else 52.dp
-    val iconSize: Dp     = if (size == SaveButtonSize.Compact) 16.dp else 20.dp
 
     val containerColor: Color = when (state) {
         SaveState.Done -> AccentTealContainer
@@ -214,7 +215,7 @@ fun SaveButton(
                 disabledContainerColor = containerColor
             )
         ) {
-            SaveButtonContent(state, iconSize, contentColor)
+            SaveButtonLabel(state, contentColor = contentColor)
         }
     } else {
         Button(
@@ -236,7 +237,7 @@ fun SaveButton(
                 disabledContentColor   = contentColor.copy(alpha = 0.85f)
             )
         ) {
-            SaveButtonContent(state, iconSize, contentColor)
+            SaveButtonLabel(state, contentColor = contentColor)
         }
     }
 }
@@ -245,44 +246,7 @@ fun SaveButton(
 // INNER HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Animated icon only — used inside the FAB's icon slot. */
-@Composable
-private fun SaveButtonIcon(state: SaveState, iconSize: Dp, contentColor: Color) {
-    AnimatedContent(
-        targetState = state,
-        transitionSpec = {
-            (fadeIn(animationSpec = MotionSpecs.standard()) +
-             scaleIn(initialScale = 0.85f, animationSpec = MotionSpecs.enter()))
-                .togetherWith(
-             fadeOut(animationSpec = MotionSpecs.exit()) +
-             scaleOut(targetScale = 0.85f, animationSpec = MotionSpecs.exit()))
-        },
-        contentAlignment = Alignment.Center,
-        label = "saveButtonIcon"
-    ) { s ->
-        when (s) {
-            SaveState.Loading -> CircularProgressIndicator(
-                modifier  = Modifier.size(iconSize),
-                color     = contentColor,
-                strokeWidth = 2.dp
-            )
-            SaveState.Done    -> Icon(
-                imageVector        = Icons.Filled.Check,
-                contentDescription = null,
-                modifier           = Modifier.size(iconSize),
-                tint               = contentColor
-            )
-            SaveState.Idle    -> Icon(
-                imageVector        = Icons.Filled.Save,
-                contentDescription = null,
-                modifier           = Modifier.size(iconSize),
-                tint               = contentColor
-            )
-        }
-    }
-}
-
-/** Animated label only — used inside the FAB's text slot. */
+/** Animated label only — the button's entire content, no icon. */
 @Composable
 private fun SaveButtonLabel(state: SaveState, contentColor: Color) {
     AnimatedContent(
@@ -303,42 +267,5 @@ private fun SaveButtonLabel(state: SaveState, contentColor: Color) {
             style = MaterialTheme.typography.labelLarge,
             color = contentColor
         )
-    }
-}
-
-/** Combined icon + label row — used in Compact / Ghost inline variants. */
-@Composable
-private fun SaveButtonContent(state: SaveState, iconSize: Dp, contentColor: Color) {
-    AnimatedContent(
-        targetState = state,
-        transitionSpec = {
-            (fadeIn(animationSpec = MotionSpecs.standard()) +
-             scaleIn(initialScale = 0.88f, animationSpec = MotionSpecs.enter()))
-                .togetherWith(
-             fadeOut(animationSpec = MotionSpecs.exit()) +
-             scaleOut(targetScale = 0.88f, animationSpec = MotionSpecs.exit()))
-        },
-        contentAlignment = Alignment.Center,
-        label = "saveButtonContent"
-    ) { s ->
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            when (s) {
-                SaveState.Idle -> {
-                    Icon(Icons.Filled.Save, null, Modifier.size(iconSize), tint = contentColor)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Save", style = MaterialTheme.typography.labelLarge, color = contentColor)
-                }
-                SaveState.Loading -> {
-                    CircularProgressIndicator(Modifier.size(iconSize), color = contentColor, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Saving…", style = MaterialTheme.typography.labelLarge, color = contentColor)
-                }
-                SaveState.Done -> {
-                    Icon(Icons.Filled.Check, null, Modifier.size(iconSize), tint = contentColor)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Saved", style = MaterialTheme.typography.labelLarge, color = contentColor)
-                }
-            }
-        }
     }
 }
