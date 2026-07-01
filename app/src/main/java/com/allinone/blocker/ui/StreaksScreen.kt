@@ -69,6 +69,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.StreakRepository
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
@@ -214,6 +215,7 @@ private fun BigFlameHero(
     onMilestoneRevealed: () -> Unit = {}
 ) {
     val context    = LocalContext.current
+    val haptics    = rememberHaptics()
     val flameColor = if (brokenToday && streak == 0) TextTertiary else AccentAmber
     val glowColor  = if (brokenToday && streak == 0) TextTertiary else AccentRed
 
@@ -286,6 +288,10 @@ private fun BigFlameHero(
         if (isMilestone) {
             delay(400L)
             milestoneVisible = true
+            // Fire the same moment the confetti gets triggered (see
+            // onMilestoneRevealed's caller in StreaksScreen) — a stronger
+            // "confirm" pulse to match a real achievement, not just a tap.
+            haptics.confirm()
             onMilestoneRevealed()
         }
 
