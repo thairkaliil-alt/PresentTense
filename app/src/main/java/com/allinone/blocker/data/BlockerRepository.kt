@@ -251,11 +251,11 @@ object BlockerRepository {
         resetBreaksForNewSession()
     }
 
-    fun endManualLock() {
-        _manualLockUntil.value = 0L
-        prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, 0L).apply()
-        endBreakNow()
-    }
+    // No endManualLock(): a running lockdown always runs its course. The
+    // only sanctioned way out mid-session is startEmergencyBreak(), which is
+    // deliberately limited (see breaksRemaining()/maxBreaksPerSession) — a
+    // free, unlimited "end early" button would make Lockdown Mode no
+    // stronger than just... not turning it on.
 
     // Break settings are now read from StrictModeConfig so the user can
     // configure them from the Strict Mode settings screen.
