@@ -59,20 +59,8 @@ data class StrictModeConfig(
     val breakDurationMinutes: Int = 5,
     val locationZones: List<LocationZone> = emptyList(),
     // true while the device is inside at least one geofence zone
-    val insideZone: Boolean = false,
-    // Active Plan (PLAN_LOCK): while planActiveUntil is in the future, Strict
-    // Mode's own settings are frozen — no turning off a friction, no PIN
-    // change, no deleting a zone, no disabling Strict Mode itself. There is
-    // deliberately no "indefinite" option here, unlike manual Lockdown — every
-    // plan has a hard end time chosen up front, so this can never become a
-    // lock with no way out. See StrictModeGate.isSettingsLockedByPlan().
-    val planActiveUntil: Long = 0L,
-    val planLabel: String = ""
+    val insideZone: Boolean = false
 ) {
-    /** True while an Active Plan countdown is still running. */
-    fun isPlanActive(nowMillis: Long = System.currentTimeMillis()): Boolean =
-        planActiveUntil > nowMillis
-
     fun toJson(): JSONObject = JSONObject().apply {
         put("enabled", enabled)
         put("activeFrictions", JSONArray(activeFrictions.map { it.name }))
@@ -83,15 +71,9 @@ data class StrictModeConfig(
         put("breakDurationMinutes", breakDurationMinutes)
         put("locationZones", JSONArray(locationZones.map { it.toJson() }))
         put("insideZone", insideZone)
-        put("planActiveUntil", planActiveUntil)
-        put("planLabel", planLabel)
     }
 
     companion object {
-        // Custom plan length is capped here so a typo (e.g. extra zero) can't
-        // accidentally create a multi-year lock with no way to weaken it.
-        const val MAX_CUSTOM_PLAN_DAYS = 14
-
         fun fromJson(o: JSONObject): StrictModeConfig {
             val frictions = mutableSetOf<FrictionType>()
             o.optJSONArray("activeFrictions")?.let { arr ->
@@ -117,9 +99,7 @@ data class StrictModeConfig(
                 maxBreaksPerSession = o.optInt("maxBreaksPerSession", 2),
                 breakDurationMinutes = o.optInt("breakDurationMinutes", 5),
                 locationZones = zones,
-                insideZone = o.optBoolean("insideZone", false),
-                planActiveUntil = o.optLong("planActiveUntil", 0L),
-                planLabel = o.optString("planLabel", "")
+                insideZone = o.optBoolean("insideZone", false)
             )
         }
     }
@@ -182,17 +162,22 @@ object StrictModeGate {
     }
 
     /**
-     * True while an Active Plan (PLAN_LOCK) countdown is running. This is
+     * True while Active Plan (PLAN_LOCK) is turned on AND at least one of
+     * your blocked apps currently has a genuinely time-bound block in
+     * effect (see [BlockerRepository.hasActiveTimedBlock]). This is
      * deliberately separate from [guard]: [guard] protects *using* the
      * blocker (ending lockdown, removing a blocked app, etc.) with a
      * challenge. This instead freezes the Strict Mode *settings screen*
-     * itself — no challenge, no bypass, because the whole point of a plan
-     * is that you committed to it before you could second-guess yourself.
+     * itself — no challenge, no bypass, because the whole point of Active
+     * Plan is that you can't weaken your setup while a block you set up is
+     * actively doing its job.
      *
-     * It always has a defined end (see [StrictModeConfig.MAX_CUSTOM_PLAN_DAYS]),
-     * so unlike Location Lock this is never a true no-exit state — waiting
-     * it out is always an option, by design.
+     * This always has a defined end, because [BlockerRepository.hasActiveTimedBlock]
+     * deliberately ignores PERMANENT-rule blocks (and apps with no rules at
+     * all, which behave the same way) — an always-blocked app can never be
+     * the reason Strict Mode stays locked forever. Waiting out a real block
+     * is always an option, by design.
      */
     fun isSettingsLockedByPlan(config: StrictModeConfig = BlockerRepository.strictMode.value): Boolean =
-        FrictionType.PLAN_LOCK in config.activeFrictions && config.isPlanActive()
+        FrictionType.PLAN_LOCK in config.activeFrictions && BlockerRepository.hasActiveTimedBlock()
 }
