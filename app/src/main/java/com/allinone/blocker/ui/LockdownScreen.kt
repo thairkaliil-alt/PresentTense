@@ -509,7 +509,7 @@ private fun LiquidGlassOrb(
 // level-transition wipe, where a slightly longer, weightier motion reads as
 // significant rather than slow.
 
-private const val IGNITION_COLOR_DELAY_MS = 140
+private const val IGNITION_COLOR_DELAY_MS = 140L
 private const val IGNITION_COLOR_MS       = 480
 
 @Composable
@@ -532,6 +532,11 @@ private fun LockdownIgnitionOverlay(origin: Offset, onComplete: () -> Unit) {
 
     val radius   = remember { Animatable(startRadiusPx) }
     val colorMix = remember { Animatable(0f) } // 0 = glass blue/teal · 1 = lockdown black
+
+    // Canvas's draw block runs outside composition, so any color that reads
+    // light/dark theme (like BgDarkest) has to be captured here first, in the
+    // composable body, and then just referenced as a plain value below.
+    val lockdownBlack = BgDarkest
 
     LaunchedEffect(origin) {
         if (reducedMotion) {
@@ -557,8 +562,8 @@ private fun LockdownIgnitionOverlay(origin: Offset, onComplete: () -> Unit) {
             .pointerInput(Unit) { detectTapGestures {} }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val fillColor = lerp(AccentBlue, BgDarkest, colorMix.value)
-            val edgeColor = lerp(AccentTeal, BgDarkest, colorMix.value)
+            val fillColor = lerp(AccentBlue, lockdownBlack, colorMix.value)
+            val edgeColor = lerp(AccentTeal, lockdownBlack, colorMix.value)
 
             // Two faint trailing echoes just behind the leading edge — the
             // "surface tension" of a spreading liquid rather than a
@@ -568,7 +573,7 @@ private fun LockdownIgnitionOverlay(origin: Offset, onComplete: () -> Unit) {
 
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(fillColor, lerp(fillColor, BgDarkest, 0.35f)),
+                    colors = listOf(fillColor, lerp(fillColor, lockdownBlack, 0.35f)),
                     center = origin,
                     radius = (radius.value * 1.05f).coerceAtLeast(1f)
                 ),
