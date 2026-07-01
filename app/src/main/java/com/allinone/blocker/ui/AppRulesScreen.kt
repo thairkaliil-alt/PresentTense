@@ -73,6 +73,7 @@ import com.allinone.blocker.data.BlockRuleType
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.ProtectionLevel
+import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentRed
@@ -242,9 +243,19 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 state   = saveState,
                 enabled = presetChosen,
                 onClick = {
-                    saveState = SaveState.Loading
-                    BlockerRepository.upsertApp(current)
-                    saveState = SaveState.Done
+                    val commit = {
+                        saveState = SaveState.Loading
+                        BlockerRepository.upsertApp(current)
+                        saveState = SaveState.Done
+                    }
+                    // Only a WEAKER edit needs to clear Strict Mode's
+                    // challenge first — see isWeakerEdit(). Tightening a
+                    // block, or saving a brand-new app, commits right away.
+                    if (isWeakerEdit(savedApp, current)) {
+                        StrictModeGate.guard(commit)
+                    } else {
+                        commit()
+                    }
                 },
                 // Fires automatically a moment after "Saved" — sends the
                 // user back to the app list instead of leaving them on
@@ -726,6 +737,63 @@ private fun AddRuleDialog(onDismiss: () -> Unit, onPick: (BlockRuleType) -> Unit
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRICT MODE GUARD — does saving this edit loosen the block?
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Editing rules on this screen used to be a side door around Strict Mode:
+// the on/off switch and delete button on the app list were protected by
+// StrictModeGate.guard(), but coming in here and shortening a Time Interval
+// window, raising a Daily Limit, deleting a rule outright, or switching to a
+// looser preset saved instantly with no challenge at all, regardless of any
+// friction you'd turned on. The Save button below now runs every edit to an
+// existing app through isWeakerEdit() first, and only weakening edits get
+// routed through StrictModeGate.guard() — same as the app list already does.
+
+/**
+ * True if committing [draft] over [saved] would make the app's block easier
+ * to satisfy than it currently is — fewer rules, a shorter blocked window, a
+ * higher allowance, a shorter cooldown, the app itself turned off, or its
+ * protection level turned down. [saved] is null for a brand-new app, which
+ * is never a "weakening" edit — there's nothing yet to protect.
+ *
+ * Tightening a block (adding a rule, raising a cooldown, shrinking a limit,
+ * etc.) always saves immediately with no challenge — Strict Mode only exists
+ * to stop you from making things *easier* on yourself, never to get in the
+ * way of making them harder.
+ */
+private fun isWeakerEdit(saved: BlockedApp?, draft: BlockedApp): Boolean {
+    if (saved == null) return false
+    if (saved.enabled && !draft.enabled) return true
+    if (draft.protection < saved.protection) return true
+    // Rules combine with OR (BlockEngine: blocked if ANY rule triggers), so
+    // losing a rule type entirely — or keeping the type but making its
+    // trigger easier to satisfy — both loosen the overall block.
+    return saved.rules.any { savedRule ->
+        val stillPresent = draft.rules.firstOrNull { it.type == savedRule.type }
+        stillPresent == null || stillPresent.isWeakerThan(savedRule)
+    }
+}
+
+/** Same-[BlockRuleType] strength comparison only — see [isWeakerEdit]. */
+private fun BlockRule.isWeakerThan(other: BlockRule): Boolean = when (type) {
+    BlockRuleType.PERMANENT ->
+        false // a PERMANENT rule is either present or it isn't; "weaker" doesn't apply
+    BlockRuleType.TIME_INTERVAL ->
+        windowMinutes() < other.windowMinutes()
+    BlockRuleType.DAILY_LIMIT, BlockRuleType.SESSION_LIMIT ->
+        limitMinutes > other.limitMinutes
+    BlockRuleType.OPEN_COUNT ->
+        count > other.count
+    BlockRuleType.COOLDOWN ->
+        cooldownMinutes < other.cooldownMinutes
+}
+
+/** Length of the daily blocked window in minutes, wrap-around aware (e.g. 11 PM–6 AM). */
+private fun BlockRule.windowMinutes(): Int =
+    if (startMinutes <= endMinutes) endMinutes - startMinutes
+    else (24 * 60 - startMinutes) + endMinutes
 
 private fun ruleTitle(type: BlockRuleType): String = when (type) {
     BlockRuleType.TIME_INTERVAL -> "Time window block"
