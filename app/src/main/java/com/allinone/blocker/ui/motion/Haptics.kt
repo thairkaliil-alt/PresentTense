@@ -28,13 +28,18 @@ package com.allinone.blocker.ui.motion
 //   Switch(checked = on, onCheckedChange = { haptics.toggleTick(); ... })
 //
 // RESPECTING THE SYSTEM SETTING
-//   [LocalReducedHaptics] mirrors [LocalReducedMotion]'s pattern exactly:
-//   read once at the theme root (see Theme.kt) from the OS-level "Touch
-//   feedback" / "vibrate on tap" setting (Settings.System
-//   .HAPTIC_FEEDBACK_ENABLED — the same toggle under Settings > Sound &
-//   vibration on stock Android). When the user has switched that off,
-//   every tick below silently no-ops, the same way reduced-motion collapses
-//   animations to instant.
+//   [LocalReducedHaptics] mirrors [LocalReducedMotion]'s pattern (a
+//   composition-local read once at the theme root) but currently always
+//   resolves to false. There used to be a version of this that read the OS
+//   "Touch feedback" setting (Settings.System.HAPTIC_FEEDBACK_ENABLED) and
+//   used it to silence every vibration below — that was wrong. That setting
+//   only governs View.performHapticFeedback() (keyboard key presses,
+//   long-press, switches), not the direct Vibrator/VibrationEffect calls
+//   this file makes, so it was muting every custom haptic in the app
+//   whenever someone had turned off the unrelated "Touch feedback" toggle.
+//   See Theme.kt for the full explanation. [LocalReducedHaptics] is kept
+//   around as the mechanism in case a real, correctly-scoped reduced-haptics
+//   control (e.g. an in-app toggle) gets added later.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import android.os.VibrationEffect
@@ -45,9 +50,10 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * true when the OS-level "touch feedback" / "vibrate on tap" setting is
- * turned off. Provided once at the theme root in Theme.kt. Defaults to
- * false so haptics still fire in Previews or before the theme sets it.
+ * true when haptics should be suppressed app-wide. Provided at the theme
+ * root in Theme.kt — currently always false; see that file's comment for
+ * why this is no longer wired to the OS "Touch feedback" setting. Defaults
+ * to false so haptics still fire in Previews or before the theme sets it.
  */
 val LocalReducedHaptics = staticCompositionLocalOf { false }
 
