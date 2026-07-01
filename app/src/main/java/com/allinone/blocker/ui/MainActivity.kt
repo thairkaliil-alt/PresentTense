@@ -216,6 +216,7 @@ fun AppRoot(
     var selectedAlarmId by remember { mutableStateOf<String?>(null) }
     var isNewAlarm      by remember { mutableStateOf(false) }
     var justAddedAlarms by remember { mutableStateOf<List<com.allinone.blocker.data.StrictAlarmEntry>?>(null) }
+    var justSavedAlarm  by remember { mutableStateOf<com.allinone.blocker.data.StrictAlarmEntry?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val pendingAction by StrictModeGate.pendingAction.collectAsState()
@@ -275,7 +276,9 @@ fun AppRoot(
     },
     onOpenSleepCalculator = { screen = Screen.SLEEP_CALCULATOR },
     justAddedAlarms = justAddedAlarms,
-    onJustAddedAlarmsConsumed = { justAddedAlarms = null }
+    onJustAddedAlarmsConsumed = { justAddedAlarms = null },
+    justSavedAlarm = justSavedAlarm,
+    onJustSavedAlarmConsumed = { justSavedAlarm = null }
 )
 Screen.STRICT_ALARM_QUICK_ADD -> StrictAlarmQuickAddScreen(
     onBack = { screen = Screen.STRICT_ALARM_LIST },
@@ -290,6 +293,10 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
     ).id,
     isNew = isNewAlarm,
     onBack = { screen = Screen.STRICT_ALARM_LIST },
+    onSaved = { saved ->
+        justSavedAlarm = saved
+        screen = Screen.STRICT_ALARM_LIST
+    },
     onDelete = { alarmId ->
         val alarmToDelete = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         BlockerRepository.removeStrictAlarmEntry(alarmId)
