@@ -246,7 +246,10 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                     BlockerRepository.upsertApp(current)
                     saveState = SaveState.Done
                 },
-                onReset = { saveState = SaveState.Idle }
+                // Fires automatically a moment after "Saved" — sends the
+                // user back to the app list instead of leaving them on
+                // this screen needing a second tap on Back.
+                onReset = onBack
             )
         },
         containerColor = BgScreen
