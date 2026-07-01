@@ -114,8 +114,7 @@ private data class StrictPreset(
     val description: String,
     val frictions: Set<FrictionType>,
     val accentColor: Color,
-    val needsPin: Boolean = false,
-    val needsPlan: Boolean = false
+    val needsPin: Boolean = false
 )
 
 private val STRICT_PRESETS = listOf(
@@ -151,8 +150,7 @@ private val STRICT_PRESETS = listOf(
         description = "Every layer, plus a time commitment. When this is on, the door is sealed for as long as you chose. Not for the half-committed.",
         frictions = setOf(FrictionType.COOLDOWN, FrictionType.MATH_PUZZLE, FrictionType.WORD_SCRAMBLE, FrictionType.PIN, FrictionType.TYPING_PLEDGE, FrictionType.PLAN_LOCK),
         accentColor = Color(0xFFE4895F),
-        needsPin = true,
-        needsPlan = true
+        needsPin = true
     )
 )
 
@@ -179,9 +177,7 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
     var showCustom by remember { mutableStateOf(false) }
     var showPinSetup by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
-    var showPlanPicker by remember { mutableStateOf(false) }
     var pendingPreset by remember { mutableStateOf<StrictPreset?>(null) }
-    var pendingPlanPreset by remember { mutableStateOf<StrictPreset?>(null) }
 
     var permissionRefresh by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -203,9 +199,14 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
         if (granted) Permissions.openAppLocationSettings(context)
     }
 
+    // Ticks once a second while this screen is open so the Active Plan
+    // status (which now depends on live blocked-app state, not a stored
+    // countdown) stays current — e.g. it flips from locked to unlocked the
+    // moment a Time Interval block's end time passes, without needing a
+    // screen re-visit.
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(config.planActiveUntil) {
-        while (config.isPlanActive(nowMillis)) {
+    LaunchedEffect(Unit) {
+        while (true) {
             delay(1_000)
             nowMillis = System.currentTimeMillis()
         }
@@ -286,11 +287,6 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                             preset.needsPin && config.pinHash.isBlank() -> {
                                 pendingPreset = preset
                                 showPinSetup = true
-                            }
-                            preset.needsPlan -> {
-                                applyPreset(preset, preset.frictions - FrictionType.PLAN_LOCK)
-                                pendingPlanPreset = preset
-                                showPlanPicker = true
                             }
                             else -> applyPreset(preset)
                         }
@@ -375,14 +371,9 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
             onSaved = { hash ->
                 val preset = pendingPreset
                 if (preset != null) {
-                    val frictions = preset.frictions - FrictionType.PLAN_LOCK
                     BlockerRepository.setStrictMode(
-                        config.copy(pinHash = hash, enabled = true, activeFrictions = frictions)
+                        config.copy(pinHash = hash, enabled = true, activeFrictions = preset.frictions)
                     )
-                    if (preset.needsPlan) {
-                        pendingPlanPreset = preset
-                        showPlanPicker = true
-                    }
                 } else {
                     BlockerRepository.setStrictMode(
                         config.copy(pinHash = hash, activeFrictions = config.activeFrictions + FrictionType.PIN)
@@ -405,22 +396,6 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
         )
     }
 
-    if (showPlanPicker) {
-        PlanPickerDialog(
-            onDismiss = { showPlanPicker = false; pendingPlanPreset = null },
-            onPlanChosen = { durationMillis, label ->
-                BlockerRepository.startStrictPlan(durationMillis, label)
-                val preset = pendingPlanPreset
-                if (preset != null) {
-                    BlockerRepository.setStrictMode(
-                        BlockerRepository.strictMode.value.copy(activeFrictions = preset.frictions)
-                    )
-                }
-                showPlanPicker = false
-                pendingPlanPreset = null
-            }
-        )
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -643,7 +618,6 @@ private fun CustomFrictionSheet(
     val context = LocalContext.current
     var showPinSetup by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
-    var showPlanPicker by remember { mutableStateOf(false) }
 
     fun setFriction(type: FrictionType, on: Boolean) {
         if (!on && StrictModeGate.isSettingsLockedByPlan(config)) return
@@ -811,15 +785,12 @@ private fun CustomFrictionSheet(
                 // Active Plan
                 FrictionCard(
                     emoji = "🗓️", title = "Active Plan",
-                    description = "Commit to a length of time. While a plan is running, Strict Mode's settings are frozen — no turning off frictions, no PIN changes, no exceptions until it ends.",
+                    description = "Automatic, not something you schedule. Whenever any blocked app is currently inside one of its own timed blocks (a time window, a daily limit, a cooldown, etc.), Strict Mode's settings freeze on their own — no turning off frictions, no PIN changes — until that block ends. A Permanently-blocked app can never trigger this, so it can never turn into a lock with no way out.",
                     checked = FrictionType.PLAN_LOCK in config.activeFrictions,
-                    switchEnabled = !config.isPlanActive(nowMillis),
-                    onCheckedChange = { on ->
-                        if (on) showPlanPicker = true
-                        else if (!config.isPlanActive()) setFriction(FrictionType.PLAN_LOCK, false)
-                    }
+                    switchEnabled = !StrictModeGate.isSettingsLockedByPlan(config),
+                    onCheckedChange = { on -> setFriction(FrictionType.PLAN_LOCK, on) }
                 ) {
-                    ActivePlanStatus(config = config, nowMillis = nowMillis, onChangePlan = { showPlanPicker = true })
+                    ActivePlanStatus(nowMillis = nowMillis)
                 }
 
                 // Typing pledge
@@ -861,15 +832,6 @@ private fun CustomFrictionSheet(
             onSaved = { phrase ->
                 BlockerRepository.setStrictMode(config.copy(pledgePhrase = phrase))
                 showPledgeEdit = false
-            }
-        )
-    }
-    if (showPlanPicker) {
-        PlanPickerDialog(
-            onDismiss = { showPlanPicker = false },
-            onPlanChosen = { durationMillis, label ->
-                BlockerRepository.startStrictPlan(durationMillis, label)
-                showPlanPicker = false
             }
         )
     }
@@ -1065,150 +1027,50 @@ private fun PledgeEditDialog(current: String, onDismiss: () -> Unit, onSaved: (S
 // ACTIVE PLAN
 // ─────────────────────────────────────────────────────────────────────────────
 
-private fun formatPlanRemaining(remainingMillis: Long): String {
-    val totalSeconds = (remainingMillis / 1000).coerceAtLeast(0)
-    val days = totalSeconds / 86_400
-    val hours = (totalSeconds % 86_400) / 3_600
-    val minutes = (totalSeconds % 3_600) / 60
-    val seconds = totalSeconds % 60
-    return when {
-        days > 0    -> "${days}d ${hours}h ${minutes}m"
-        hours > 0   -> "${hours}h ${minutes}m"
-        minutes > 0 -> "${minutes}m ${seconds}s"
-        else        -> "${seconds}s"
-    }
-}
-
+/**
+ * Shows what Active Plan is currently doing — live, based on which blocked
+ * apps (if any) are mid-block right now. There's no "choose a plan" step
+ * anymore: this is read-only status, not a control.
+ */
 @Composable
-private fun ActivePlanStatus(config: StrictModeConfig, nowMillis: Long, onChangePlan: () -> Unit) {
-    if (config.isPlanActive(nowMillis)) {
-        val remaining = config.planActiveUntil - nowMillis
+private fun ActivePlanStatus(nowMillis: Long) {
+    val activeBlocks = remember(nowMillis) { BlockerRepository.activeTimedBlocks(nowMillis) }
+
+    if (activeBlocks.isNotEmpty()) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(AccentBlue.copy(alpha = 0.10f))
                 .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(config.planLabel.ifBlank { "Active Plan" }, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = AccentBlue)
-            Text("${formatPlanRemaining(remaining)} remaining — Strict Mode settings are locked until then.", style = MaterialTheme.typography.bodySmall, color = TextSecondary, lineHeight = 17.sp)
+            Text("Locked right now", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = AccentBlue)
+            Text(
+                "Strict Mode settings are frozen because:",
+                style = MaterialTheme.typography.bodySmall, color = TextSecondary, lineHeight = 17.sp
+            )
+            activeBlocks.forEach { block ->
+                Text(
+                    "• ${block.appName} — ${block.reason}",
+                    style = MaterialTheme.typography.bodySmall, color = TextSecondary, lineHeight = 17.sp
+                )
+            }
         }
     } else {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("No plan running. Choose a length below to lock in your commitment.", style = MaterialTheme.typography.bodySmall, color = TextTertiary, lineHeight = 17.sp)
-            OutlinedButton(
-                onClick = onChangePlan,
-                modifier = Modifier.fillMaxWidth(),
-                border = androidx.compose.foundation.BorderStroke(1.dp, AccentBlue.copy(alpha = 0.5f)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentBlue),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("Choose a plan", fontWeight = FontWeight.SemiBold)
-            }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(TextTertiary.copy(alpha = 0.08f))
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Text(
+                "Nothing is actively blocking right now, so settings are unlocked. The moment a blocked app enters one of its own timed blocks, this freezes automatically.",
+                style = MaterialTheme.typography.bodySmall, color = TextTertiary, lineHeight = 17.sp
+            )
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PlanPickerDialog(onDismiss: () -> Unit, onPlanChosen: (Long, String) -> Unit) {
-    var showCustom by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = CardSurfaceAlt,
-        title = { Text("Choose a plan", fontWeight = FontWeight.Bold, color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Once started, Strict Mode settings are frozen until the plan ends. Pick a length you actually want to commit to.",
-                    style = MaterialTheme.typography.bodySmall, color = TextTertiary, lineHeight = 17.sp
-                )
-                PlanOptionRow("📌", "24-Hour Lock", "Locked in for a full day") { onPlanChosen(24L * 60 * 60 * 1000, "24-Hour Lock") }
-                PlanOptionRow("⚙️", "Custom", "Pick your own length, up to ${StrictModeConfig.MAX_CUSTOM_PLAN_DAYS} days") { showCustom = true }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
-    )
-
-    if (showCustom) {
-        CustomPlanDialog(
-            onDismiss = { showCustom = false },
-            onConfirm = { days, hours, label ->
-                onPlanChosen((days * 24L + hours) * 60 * 60 * 1000, label)
-            }
-        )
-    }
-}
-
-@Composable
-private fun PlanOptionRow(emoji: String, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AccentBlue.copy(alpha = 0.08f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(emoji, fontSize = 22.sp)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = TextPrimary)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextTertiary)
-        }
-    }
-}
-
-@Composable
-private fun CustomPlanDialog(onDismiss: () -> Unit, onConfirm: (days: Int, hours: Int, label: String) -> Unit) {
-    var daysText by remember { mutableStateOf("1") }
-    var hoursText by remember { mutableStateOf("0") }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = CardSurfaceAlt,
-        title = { Text("Custom plan length", fontWeight = FontWeight.Bold, color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Maximum ${StrictModeConfig.MAX_CUSTOM_PLAN_DAYS} days — long enough to commit, capped so a typo can't lock you out for longer than you meant.",
-                    style = MaterialTheme.typography.bodySmall, color = TextTertiary, lineHeight = 17.sp
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(value = daysText, onValueChange = { daysText = it.filter(Char::isDigit); error = null }, label = { Text("Days") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = hoursText, onValueChange = { hoursText = it.filter(Char::isDigit); error = null }, label = { Text("Hours") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
-                }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val days = daysText.toIntOrNull() ?: 0
-                    val hours = hoursText.toIntOrNull() ?: 0
-                    val totalHours = days * 24 + hours
-                    when {
-                        totalHours <= 0 -> error = "Enter a length greater than zero"
-                        days > StrictModeConfig.MAX_CUSTOM_PLAN_DAYS -> error = "Max is ${StrictModeConfig.MAX_CUSTOM_PLAN_DAYS} days"
-                        else -> {
-                            val label = buildString {
-                                if (days > 0) append("${days}d ")
-                                if (hours > 0) append("${hours}h ")
-                            }.trim().ifBlank { "Custom plan" }
-                            onConfirm(days, hours, label)
-                        }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
-            ) { Text("Start plan", fontWeight = FontWeight.SemiBold) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
