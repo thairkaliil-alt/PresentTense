@@ -48,7 +48,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -117,7 +116,6 @@ import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
-import com.allinone.blocker.ui.theme.AccentRedSoft
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.CardSurface
@@ -174,19 +172,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     var showCustomMinutes  by remember { mutableStateOf(false) }
     var customStartMinutes by remember { mutableStateOf(45) }
 
-    // ── Armed duration (chip picked, or custom dial confirmed) ──────────
-    // Setting these never starts anything by itself — they just tell the
-    // orb "you're allowed to fire, and for how long." The lockdown only
-    // actually starts once someone holds the orb through a full charge;
-    // see onIgnite below.
-    var selectedPreset     by remember { mutableStateOf<DurationPreset?>(null) }
-    var customArmedMinutes by remember { mutableStateOf<Int?>(null) }
-    val armedMinutes = when {
-        selectedPreset != null && selectedPreset!!.minutes > 0 -> selectedPreset!!.minutes
-        selectedPreset?.minutes == -1                          -> customArmedMinutes
-        else                                                    -> null
-    }
-
     val decisionPreview = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
     }
@@ -239,14 +224,10 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 breaksRemaining     = breaksRemaining,
                 schedules           = schedules,
                 onManageWhitelist   = onManageWhitelist,
-                selectedPreset      = selectedPreset,
-                onSelectPreset      = { selectedPreset = it },
-                customArmedMinutes  = customArmedMinutes,
-                armedMinutes        = armedMinutes,
+                onStart             = { mins -> BlockerRepository.startManualLock(mins); goHome() },
                 onCustom            = { prefill -> customStartMinutes = prefill; showCustomMinutes = true },
                 onIgnite            = { origin, mins -> ignitionOrigin = origin; ignitionMinutes = mins },
                 onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
-                onEndLockdown       = { StrictModeGate.guard { BlockerRepository.endManualLock() } },
                 onAddSchedule       = { showAddSchedule = LockdownSchedule(id = BlockerRepository.newScheduleId()) },
                 onToggleSchedule    = { s, v ->
                     if (!v) StrictModeGate.guard { BlockerRepository.updateSchedule(s.copy(enabled = v)) }
@@ -292,11 +273,9 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
             initialMinutes = customStartMinutes,
             onDismiss      = { showCustomMinutes = false },
             onConfirm      = { mins ->
-                // Only arms the orb with this duration — starting still
-                // requires holding the orb down, same as the preset chips.
-                customArmedMinutes = mins
-                selectedPreset     = DURATION_PRESETS.first { it.minutes == -1 }
-                showCustomMinutes  = false
+                BlockerRepository.startManualLock(mins)
+                showCustomMinutes = false
+                goHome()
             }
         )
     }
@@ -606,23 +585,22 @@ private fun LockdownIgnitionOverlay(origin: Offset, onComplete: () -> Unit) {
 
 @Composable
 private fun LockdownHeroSection(
-    selectedPreset    : DurationPreset?,
-    onSelectPreset    : (DurationPreset?) -> Unit,
-    customArmedMinutes: Int?,
-    armedMinutes      : Int?,
-    onCustom          : (Int) -> Unit,
-    onIgnite          : (Offset, Int) -> Unit = { _, _ -> }
+    onStart : (Int) -> Unit,
+    onCustom: (Int) -> Unit,
+    onIgnite: (Offset, Int) -> Unit = { _, _ -> }
 ) {
+    var selectedPreset by remember { mutableStateOf<DurationPreset?>(null) }
+
     Column(
         modifier              = Modifier.fillMaxWidth(),
         horizontalAlignment   = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(8.dp))
         LiquidGlassOrb(
-            // The orb only fires once something is actually armed — a
-            // preset chip with a real minute count, or a custom duration
-            // confirmed through the dial dialog below.
-            armedMinutes = armedMinutes,
+            // Custom duration has no fixed minute count, so holding the orb
+            // only "arms" once a concrete preset chip is selected — for
+            // Custom, people go through the dial dialog via the button below.
+            armedMinutes = selectedPreset?.takeIf { it.minutes > 0 }?.minutes,
             onIgnite     = onIgnite
         )
         Spacer(Modifier.height(28.dp))
@@ -659,7 +637,7 @@ private fun LockdownHeroSection(
                                 preset   = preset,
                                 selected = selectedPreset == preset,
                                 modifier = Modifier.weight(1f),
-                                onClick  = { onSelectPreset(preset) }
+                                onClick  = { selectedPreset = preset }
                             )
                         }
                         repeat((3 - rowPresets.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
@@ -672,58 +650,33 @@ private fun LockdownHeroSection(
                     HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
                     Spacer(Modifier.height(16.dp))
                     if (preset.minutes == -1) {
-                        if (customArmedMinutes != null) {
-                            // Custom time already confirmed via the dial —
-                            // same "hold the orb" instruction as a normal
-                            // preset, plus a way to reopen the dial and
-                            // change the number before holding.
-                            HoldToStartHint(durationLabel = formatDuration(customArmedMinutes))
-                            Spacer(Modifier.height(10.dp))
-                            OutlinedButton(
-                                onClick        = { onCustom(customArmedMinutes) },
-                                shape          = RoundedCornerShape(16.dp),
-                                border         = BorderStroke(1.dp, TextMuted.copy(alpha = 0.3f)),
-                                colors         = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
-                            ) {
-                                Text("Change time", style = MaterialTheme.typography.labelMedium)
-                            }
-                        } else {
-                            Button(
-                                onClick          = { onCustom(45) },
-                                modifier         = Modifier.fillMaxWidth(),
-                                shape            = RoundedCornerShape(16.dp),
-                                colors           = ButtonDefaults.buttonColors(containerColor = AccentBlue),
-                                contentPadding   = PaddingValues(vertical = 16.dp)
-                            ) {
-                                Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Set custom time", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                            }
+                        Button(
+                            onClick          = { onCustom(45) },
+                            modifier         = Modifier.fillMaxWidth(),
+                            shape            = RoundedCornerShape(16.dp),
+                            colors           = ButtonDefaults.buttonColors(containerColor = AccentBlue),
+                            contentPadding   = PaddingValues(vertical = 16.dp)
+                        ) {
+                            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Set custom time", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                         }
                     } else {
-                        HoldToStartHint(durationLabel = preset.label)
+                        Button(
+                            onClick          = { onStart(preset.minutes) },
+                            modifier         = Modifier.fillMaxWidth(),
+                            shape            = RoundedCornerShape(16.dp),
+                            colors           = ButtonDefaults.buttonColors(containerColor = AccentBlue),
+                            contentPadding   = PaddingValues(vertical = 16.dp)
+                        ) {
+                            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Start ${preset.label} lockdown", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
                     }
                 }
             }
         }
-    }
-}
-
-// The only instruction telling people how a lockdown actually begins now
-// that the instant-start buttons are gone — needs to read clearly, but
-// quietly, since the orb itself is doing the heavy lifting visually.
-@Composable
-private fun HoldToStartHint(durationLabel: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
-        Text(
-            "Hold the icon above to start your $durationLabel lockdown",
-            style      = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color      = TextMuted,
-            textAlign  = TextAlign.Center
-        )
     }
 }
 
@@ -883,8 +836,7 @@ private fun ActiveLockdownPanel(
     decision        : LockdownDecision,
     now             : Long,
     breaksRemaining : Int,
-    onEmergencyBreak: () -> Unit,
-    onEndLockdown   : () -> Unit
+    onEmergencyBreak: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -948,20 +900,6 @@ private fun ActiveLockdownPanel(
                     Spacer(Modifier.width(8.dp))
                     Text("Emergency Break ($breaksRemaining left)", fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.height(10.dp))
-            }
-
-            OutlinedButton(
-                onClick          = onEndLockdown,
-                modifier         = Modifier.fillMaxWidth(),
-                shape            = MaterialTheme.shapes.large,
-                border           = BorderStroke(1.dp, AccentRed.copy(alpha = 0.5f)),
-                colors           = ButtonDefaults.outlinedButtonColors(contentColor = AccentRedSoft),
-                contentPadding   = PaddingValues(vertical = 12.dp)
-            ) {
-                Icon(Icons.Filled.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("End Lockdown", fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -1020,14 +958,10 @@ private fun EmbeddedLockdownLazyColumn(
     breaksRemaining  : Int,
     schedules        : List<LockdownSchedule>,
     onManageWhitelist: () -> Unit,
-    selectedPreset     : DurationPreset?,
-    onSelectPreset     : (DurationPreset?) -> Unit,
-    customArmedMinutes : Int?,
-    armedMinutes       : Int?,
+    onStart          : (Int) -> Unit,
     onCustom         : (Int) -> Unit,
     onIgnite         : (Offset, Int) -> Unit,
     onEmergencyBreak : () -> Unit,
-    onEndLockdown    : () -> Unit,
     onAddSchedule    : () -> Unit,
     onToggleSchedule : (LockdownSchedule, Boolean) -> Unit,
     onDeleteSchedule : (LockdownSchedule) -> Unit,
@@ -1051,20 +985,12 @@ private fun EmbeddedLockdownLazyColumn(
 
         // ── 1. Hero / Active panel ──────────────────────────────────────────
         item(key = "session_header") {
-            if (!sessionRunning) LockdownHeroSection(
-                selectedPreset     = selectedPreset,
-                onSelectPreset     = onSelectPreset,
-                customArmedMinutes = customArmedMinutes,
-                armedMinutes       = armedMinutes,
-                onCustom           = onCustom,
-                onIgnite           = onIgnite
-            )
+            if (!sessionRunning) LockdownHeroSection(onStart = onStart, onCustom = onCustom, onIgnite = onIgnite)
             else ActiveLockdownPanel(
                 decision         = decision,
                 now              = now,
                 breaksRemaining  = breaksRemaining,
-                onEmergencyBreak = onEmergencyBreak,
-                onEndLockdown    = onEndLockdown
+                onEmergencyBreak = onEmergencyBreak
             )
         }
 
@@ -1198,9 +1124,9 @@ private fun RadialTimerDialog(initialMinutes: Int, onDismiss: () -> Unit, onConf
         },
         confirmButton = {
             Button(onClick = { onConfirm(minutes) }, colors = ButtonDefaults.buttonColors(containerColor = AccentBlue), shape = MaterialTheme.shapes.medium) {
-                Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Arm ${formatDuration(minutes)}", fontWeight = FontWeight.SemiBold)
+                Text("Start ${formatDuration(minutes)}", fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
