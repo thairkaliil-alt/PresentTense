@@ -80,20 +80,22 @@ class Haptics internal constructor(
      * hitting a streak milestone.
      */
     fun confirm() {
-        if (reduced || vibrator == null) return
+        if (reduced) return
+        val v = vibrator ?: return
         // timings: [wait, buzz, wait, buzz] in ms. amplitudes line up 1:1;
         // the "wait" slots use 0 amplitude since they're silent gaps.
         val timings    = longArrayOf(0, 20, 40, 30)
         val amplitudes = intArrayOf(0, 160, 0, 220)
         runCatching {
-            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+            v.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
         }
     }
 
     private fun pulse(durationMs: Long, amplitude: Int) {
-        if (reduced || vibrator == null) return
+        if (reduced) return
+        val v = vibrator ?: return
         runCatching {
-            vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
+            v.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
         }
     }
 }
