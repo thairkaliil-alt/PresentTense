@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
-import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.BlockerTheme
@@ -98,8 +97,7 @@ class LockdownLauncherActivity : ComponentActivity() {
             BlockerTheme(darkTheme = true) {
                 LockdownLauncherScreen(
                     onLaunchApp = ::launchApp,
-                    onExitToApp = ::exitToApp,
-                    onRequestEnd = ::requestEndLockdown
+                    onExitToApp = ::exitToApp
                 )
             }
         }
@@ -129,17 +127,6 @@ class LockdownLauncherActivity : ComponentActivity() {
         finish()
     }
 
-    /**
-     * The sanctioned early-exit. Routes through the strict-mode gate: if strict
-     * friction is configured this hands off to MainActivity's unlock challenge
-     * (which suppresses the lockdown bounce while pending); otherwise it ends the
-     * session immediately. Either way we open the app so the user sees the result.
-     */
-    private fun requestEndLockdown() {
-        com.allinone.blocker.data.StrictModeGate.guard { BlockerRepository.endManualLock() }
-        exitToApp()
-    }
-
     companion object {
         /** Brings the lockdown launcher to the front (used when a session starts
          *  and by the accessibility service when corralling the user). */
@@ -157,8 +144,7 @@ private data class LauncherApp(val packageName: String, val label: String)
 @Composable
 private fun LockdownLauncherScreen(
     onLaunchApp: (String) -> Unit,
-    onExitToApp: () -> Unit,
-    onRequestEnd: () -> Unit
+    onExitToApp: () -> Unit
 ) {
     val context = LocalContext.current
     val whitelist by BlockerRepository.whitelist.collectAsState()
@@ -267,14 +253,6 @@ private fun LockdownLauncherScreen(
                 }
             } else {
                 Spacer(Modifier.height(24.dp))
-            }
-
-            // Sanctioned early-exit (goes through the strict-mode gate).
-            androidx.compose.material3.TextButton(
-                onClick = onRequestEnd,
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                Text("End lockdown", color = AccentRed, style = MaterialTheme.typography.labelMedium)
             }
         }
     }
