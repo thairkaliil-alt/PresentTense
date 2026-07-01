@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.BgScreen
@@ -237,11 +238,12 @@ private fun PickerRow(
     onPick: () -> Unit
 ) {
     val icon = remember(device.packageName) { InstalledApps.iconFor(device.packageName) }
+    val haptics = rememberHaptics()
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !alreadyBlocked, onClick = onPick)
+            .clickable(enabled = !alreadyBlocked, onClick = { haptics.tap(); onPick() })
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
