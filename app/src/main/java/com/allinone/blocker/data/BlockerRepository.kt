@@ -30,6 +30,11 @@ object BlockerRepository {
     private const val KEY_DAILY_GOAL_MINUTES = "daily_goal_minutes"
 
     private lateinit var prefs: SharedPreferences
+    // Kept only so context-requiring checks (like the Active Plan auto-lock
+    // in hasActiveTimedBlock/activeTimedBlocks below) can run from anywhere
+    // without every call site having to pass a Context in. Always the
+    // Application context — never an Activity — so this can't leak a screen.
+    private lateinit var appContext: Context
     @Volatile private var initialized = false
 
     private val _apps = MutableStateFlow<List<BlockedApp>>(emptyList())
@@ -70,7 +75,8 @@ object BlockerRepository {
 
     fun init(context: Context) {
         if (initialized) return
-        prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        appContext = context.applicationContext
+        prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         load()
         initialized = true
     }
@@ -302,24 +308,27 @@ object BlockerRepository {
         prefs.edit().putString(KEY_STRICT_MODE, config.toJson().toString()).apply()
     }
 
+    /** One blocked app that is currently mid-block for a reason that has a built-in end time. */
+    data class ActiveTimedBlock(val appName: String, val reason: String)
+
     /**
-     * Starts (or extends) an Active Plan countdown for Strict Mode. [durationMillis]
-     * is clamped to [StrictModeConfig.MAX_CUSTOM_PLAN_DAYS] here as well as in the
-     * UI, so there's no path — including a future screen someone adds later — that
-     * can sneak past the cap and create a runaway lock with no end time.
+     * Every blocked app that is, right now, being actively blocked by a
+     * rule with a built-in expiry (see [BlockEngine.evaluateTimeBound] for
+     * exactly which rule types count and why PERMANENT never does). This
+     * drives Strict Mode's Active Plan auto-lock — see
+     * [StrictModeGate.isSettingsLockedByPlan].
      */
-    fun startStrictPlan(durationMillis: Long, label: String) {
-        val maxMillis = StrictModeConfig.MAX_CUSTOM_PLAN_DAYS * 24L * 60 * 60 * 1000
-        val clamped = durationMillis.coerceIn(1L, maxMillis)
-        val current = _strictMode.value
-        setStrictMode(
-            current.copy(
-                activeFrictions = current.activeFrictions + FrictionType.PLAN_LOCK,
-                planActiveUntil = System.currentTimeMillis() + clamped,
-                planLabel = label
-            )
-        )
+    fun activeTimedBlocks(nowMillis: Long = System.currentTimeMillis()): List<ActiveTimedBlock> {
+        if (!::appContext.isInitialized) return emptyList()
+        return _apps.value.mapNotNull { app ->
+            val decision = BlockEngine.evaluateTimeBound(appContext, app, nowMillis)
+            if (decision.blocked) ActiveTimedBlock(app.appName, decision.reason) else null
+        }
     }
+
+    /** True if at least one blocked app is currently mid-block for a reason that will end on its own. */
+    fun hasActiveTimedBlock(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        activeTimedBlocks(nowMillis).isNotEmpty()
 
     // List-based CRUD, mirrors addSchedule/updateSchedule/removeSchedule above.
 
