@@ -56,6 +56,7 @@ import com.allinone.blocker.data.FRICTION_ORDER
 import com.allinone.blocker.data.FrictionType
 import com.allinone.blocker.data.PinHasher
 import com.allinone.blocker.data.StrictModeConfig
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
@@ -87,13 +88,17 @@ fun UnlockChallengeScreen(
         FRICTION_ORDER.filter { it in config.activeFrictions }
     }
     var stepIndex by remember { mutableIntStateOf(0) }
+    val haptics = rememberHaptics()
 
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
         if (stepIndex >= steps.size) {
-            LaunchedEffect(Unit) { onSuccess() }
+            // The whole Strict Mode challenge just passed — a stronger,
+            // two-beat "confirm" pulse instead of the light per-step ticks,
+            // so unlocking reads as a distinct, bigger moment.
+            LaunchedEffect(Unit) { haptics.confirm(); onSuccess() }
         } else {
             Column(
                 modifier = Modifier
@@ -252,6 +257,7 @@ private fun PrimaryActionButton(
 private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
 
     Column(
         Modifier.fillMaxWidth(),
@@ -263,7 +269,12 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
         OutlinedTextField(
             value = input,
             onValueChange = {
-                if (it.length <= 6 && it.all(Char::isDigit)) { input = it; error = false }
+                if (it.length <= 6 && it.all(Char::isDigit)) {
+                    // Only tick when a digit was ADDED, not on delete/paste-clear,
+                    // so backspacing doesn't feel like it's "entering" anything.
+                    if (it.length > input.length) haptics.digitTick()
+                    input = it; error = false
+                }
                 if (it.length == 6 && PinHasher.matches(it, expectedHash)) onPassed()
             },
             label = { Text("6-digit PIN") },
