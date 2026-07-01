@@ -48,6 +48,7 @@ import com.allinone.blocker.data.BlockPreset
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.StrictModeGate
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentBlueSoft
@@ -128,6 +129,7 @@ private fun BlockedAppsList(apps: List<BlockedApp>, onEdit: (String) -> Unit, mo
 @Composable
 private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit) {
     val icon = remember(app.packageName) { InstalledApps.iconFor(app.packageName) }
+    val haptics = rememberHaptics()
 
     val onToggle: (Boolean) -> Unit = remember(app) {
         { wantsOn ->
@@ -185,7 +187,7 @@ private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit) {
             }
             Switch(
                 checked = app.enabled,
-                onCheckedChange = onToggle,
+                onCheckedChange = { checked -> haptics.toggleTick(); onToggle(checked) },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor    = Color.White,
                     checkedTrackColor    = AccentBlue,
