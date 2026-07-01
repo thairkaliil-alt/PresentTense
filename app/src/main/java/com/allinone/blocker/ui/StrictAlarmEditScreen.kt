@@ -77,6 +77,7 @@ fun StrictAlarmEditScreen(
     alarmId: String,
     isNew: Boolean = false,
     onBack: () -> Unit,
+    onSaved: (StrictAlarmEntry) -> Unit = {},
     onDelete: (String) -> Unit = {}
 ) {
     val context   = LocalContext.current
@@ -147,10 +148,12 @@ fun StrictAlarmEditScreen(
                     commitSave()
                     saveState = SaveState.Done
                 },
-                // Fires automatically a moment after "Saved" — sends the
-                // user back to the alarm list instead of leaving them on
-                // this screen needing a second tap on Back.
-                onReset = onBack
+                // Fires automatically a moment after "Saved" — hands the
+                // freshly-saved alarm back to the caller, which navigates
+                // to the list AND (via onSaved) triggers a brief "Alarm
+                // set for X from now" message there — same beat as stock
+                // Android/Samsung's Clock app.
+                onReset = { onSaved(draft) }
             )
         }
     ) { pad ->
