@@ -102,6 +102,109 @@ object BlockEngine {
         return BlockDecision(false)
     }
 
+    /**
+     * Same rule-checking as [evaluate], but used only to drive Strict Mode's
+     * Active Plan auto-lock (see BlockerRepository.hasActiveTimedBlock).
+     * Only rules that have a built-in expiry are considered:
+     *  - TIME_INTERVAL ends at its window's end time
+     *  - DAILY_LIMIT / OPEN_COUNT reset automatically at midnight
+     *  - COOLDOWN ends once its timer runs out
+     *  - SESSION_LIMIT ends once the session ends
+     *
+     * PERMANENT rules are intentionally skipped, and an app with an empty
+     * rule list (which [evaluate] treats as "blocked, always") is treated
+     * as not blocked here for the same reason. An app that is blocked
+     * forever must never be able to keep Active Plan locked forever too.
+     * The Reels/Shorts kill switch is skipped for the same reason — it's a
+     * plain on/off toggle with no scheduled end, so it doesn't count here
+     * either.
+     */
+    fun evaluateTimeBound(
+        context: Context,
+        app: BlockedApp,
+        nowMillis: Long = System.currentTimeMillis(),
+        sessionStart: Long = 0L
+    ): BlockDecision {
+        if (!app.enabled || app.rules.isEmpty()) return BlockDecision(false)
+
+        val nowMinutes = minutesOfDay(nowMillis)
+
+        for (rule in app.rules) {
+            when (rule.type) {
+                BlockRuleType.PERMANENT -> {
+                    // Never counts toward Active Plan — see doc comment above.
+                }
+
+                BlockRuleType.TIME_INTERVAL -> {
+                    if (inWindow(nowMinutes, rule.startMinutes, rule.endMinutes)) {
+                        return BlockDecision(
+                            true,
+                            "Blocked until ${formatMinutes(rule.endMinutes)}"
+                        )
+                    }
+                }
+
+                BlockRuleType.DAILY_LIMIT -> {
+                    val used = UsageTracker.todayUsageMinutes(context, app.packageName)
+                    if (used >= rule.limitMinutes) {
+                        return BlockDecision(
+                            true,
+                            "Daily limit reached (${rule.limitMinutes} min)"
+                        )
+                    }
+                }
+
+                BlockRuleType.OPEN_COUNT -> {
+                    if (BlockerRepository.opensToday(app.packageName) >= rule.count) {
+                        return BlockDecision(
+                            true,
+                            "Open limit reached (${rule.count}/day)"
+                        )
+                    }
+                }
+
+                BlockRuleType.COOLDOWN -> {
+                    val last = BlockerRepository.lastUse(app.packageName)
+                    if (last > 0) {
+                        val elapsed = nowMillis - last
+                        val cooldownMs = rule.cooldownMinutes * 60_000L
+                        if (elapsed < cooldownMs) {
+                            val remaining = (cooldownMs - elapsed) / 1000
+                            return BlockDecision(
+                                true,
+                                "Cooling down (${rule.cooldownMinutes} min)",
+                                remaining
+                            )
+                        }
+                    }
+                }
+
+                BlockRuleType.SESSION_LIMIT -> {
+                    // NOTE: sessionStart is only known while this app is the
+                    // one currently in the foreground (tracked by the
+                    // accessibility service). Active Plan's repository-wide
+                    // check below always passes 0 here, so a SESSION_LIMIT
+                    // rule can't trigger the auto-lock while the app isn't
+                    // the one you're actively using. That's an accepted gap,
+                    // not a bug — the other four rule types cover the vast
+                    // majority of real cases.
+                    if (sessionStart > 0) {
+                        val sessionMs = nowMillis - sessionStart
+                        val limitMs = rule.limitMinutes * 60_000L
+                        if (sessionMs >= limitMs) {
+                            return BlockDecision(
+                                true,
+                                "Session limit reached (${rule.limitMinutes} min)"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        return BlockDecision(false)
+    }
+
     private fun inWindow(now: Int, start: Int, end: Int): Boolean =
         if (start <= end) now in start until end else now >= start || now < end
 
