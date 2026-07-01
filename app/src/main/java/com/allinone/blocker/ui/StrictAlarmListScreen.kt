@@ -23,9 +23,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.PlaylistAdd
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,21 +34,23 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import com.allinone.blocker.data.effectiveAlarmCount
 import com.allinone.blocker.data.nextTriggerMillis
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -68,6 +68,7 @@ import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
+import com.allinone.blocker.ui.theme.CardSurfaceAlt
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextSecondary
 import java.util.Calendar
@@ -90,7 +91,6 @@ fun StrictAlarmListScreen(
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
-    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
 
     // ── Undo snackbar for a just-created batch (from Quick Add) ────────────
     val snackbarHostState = remember { SnackbarHostState() }
@@ -146,28 +146,6 @@ fun StrictAlarmListScreen(
             }
         }
         onJustSavedAlarmConsumed()
-    }
-
-    // Delete dialog
-    if (pendingDeleteId != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDeleteId = null },
-            title = { Text("Delete alarm?") },
-            text  = { Text("This alarm will be removed and cancelled.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val id = pendingDeleteId!!
-                    val toDelete = alarms.firstOrNull { it.id == id }
-                    BlockerRepository.removeStrictAlarmEntry(id)
-                    if (toDelete != null) AlarmScheduler.cancel(context, toDelete)
-                    else AlarmScheduler.cancel(context, id)
-                    pendingDeleteId = null
-                }) { Text("Delete", color = AccentRed) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel") }
-            }
-        )
     }
 
     Scaffold(
@@ -244,12 +222,33 @@ fun StrictAlarmListScreen(
                     AlarmScheduler.schedule(context, entry.copy(enabled = checked))
                 },
                 onClick    = { onEditAlarm(entry.id) },
-                onDelete   = { pendingDeleteId = entry.id }
+                onDelete   = {
+                    // Swiping already IS the confirmation — no dialog. We
+                    // delete right away and give a few seconds of Undo via
+                    // the same snackbar host used for the Quick Add batch,
+                    // so there's still a safety net without an extra tap.
+                    val removed = entry
+                    BlockerRepository.removeStrictAlarmEntry(removed.id)
+                    AlarmScheduler.cancel(context, removed)
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message           = "Alarm deleted",
+                            actionLabel       = "Undo",
+                            withDismissAction = false,
+                            duration          = androidx.compose.material3.SnackbarDuration.Short
+                        )
+                        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                            BlockerRepository.addStrictAlarmEntry(removed)
+                            if (removed.enabled) AlarmScheduler.schedule(context, removed)
+                        }
+                    }
+                }
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AlarmCard(
     entry: StrictAlarmEntry,
@@ -263,118 +262,169 @@ private fun AlarmCard(
 ) {
     val slotCount = entry.effectiveAlarmCount()
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX          = scale
-                scaleY          = scale
-                shadowElevation = if (isDragging) 24f else 0f
-            }
-            .shadow(elevation, RoundedCornerShape(20.dp), clip = false)
-            .background(CardSurface, RoundedCornerShape(20.dp))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                // pressable gives the card a tactile 4% squeeze on tap,
-                // with no ripple — same feel as every other card in the app.
-                // It handles the click so we no longer need a pointerInput block.
-                .pressable(onClick = onClick)
-                .padding(horizontal = 20.dp, vertical = 16.dp)
-        ) {
-            // ── Top row: time + drag handle ───────────────────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text      = formatAlarmTime(entry.hour, entry.minute),
-                    style     = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
-                    color     = if (entry.enabled) MaterialTheme.colorScheme.onBackground else TextMuted,
-                    modifier  = Modifier.weight(1f)
-                )
+    // Matches the app's own shape token for "list item cards" (see Shape.kt)
+    // instead of a one-off custom radius — one visual language everywhere.
+    val cardShape = MaterialTheme.shapes.large
 
-                // Drag handle — the visual cue that this card is draggable
-                Icon(
-                    imageVector        = Icons.Filled.DragHandle,
-                    contentDescription = "Drag to reorder",
-                    tint               = TextMuted,
-                    modifier           = Modifier.size(24.dp)
-                )
-            }
+    // ── Swipe-to-delete ──────────────────────────────────────────────────
+    // Swiping left IS the confirmation — there's no dialog. confirmValueChange
+    // always returns false so the box itself never stays "dismissed"; the
+    // row disappears because onDelete() removes it from the underlying list
+    // one frame later, which reads as a clean disappear rather than a stuck
+    // half-swiped card.
+    //
+    // Note on gestures: this does NOT fight the long-press-to-reorder drag
+    // from ReorderableColumn. That drag only starts consuming touches after
+    // ~500ms of holding still (detectDragGesturesAfterLongPress), while this
+    // swipe only starts consuming once your finger has actually moved
+    // sideways past a small threshold. A quick swipe is caught by this
+    // gesture before the long-press timer ever fires; a hold-then-drag never
+    // moves far enough sideways early on to trip the swipe, so the long
+    // press wins instead. Two different "shapes" of touch, so they land on
+    // two different actions. Worth double-checking on your phone once this
+    // build is up, since gesture feel is one of those things that's hard to
+    // fully judge without a real screen.
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) onDelete()
+            false
+        }
+    )
 
-            Spacer(Modifier.height(4.dp))
-
-            // ── Repeat-days summary ───────────────────────────────────────
-            val repeatLabel = repeatSummary(entry.daysOfWeek)
-            val burstLabel  = if (slotCount > 1) "  ·  ${slotCount}× snooze burst" else ""
-            Text(
-                text  = repeatLabel + burstLabel,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (entry.enabled) TextSecondary else TextMuted
+    SwipeToDismissBox(
+        state    = dismissState,
+        modifier = modifier.fillMaxWidth(),
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            // A small red "basket" that grows in as you swipe — not a full
+            // red panel behind the card, just a compact circular icon. It
+            // reaches full size right as the swipe crosses the delete
+            // threshold, so the size itself tells you when it'll trigger.
+            val basketScale by animateFloatAsState(
+                targetValue   = if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) 1f else 0.55f,
+                animationSpec = MotionSpecs.reorderPickup(),
+                label         = "basketScale"
             )
-
-            // ── Burst sub-times (compact) ─────────────────────────────────
-            if (slotCount > 1) {
-                Spacer(Modifier.height(6.dp))
-                val times = (0 until slotCount).joinToString("  ·  ") { i ->
-                    val total = entry.hour * 60 + entry.minute + i * STRICT_ALARM_INTERVAL_MINUTES
-                    formatAlarmTime((total / 60) % 24, total % 60)
-                }
-                Text(
-                    text  = times,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // ── Bottom row: label (if any) + delete + toggle ──────────────
-            Row(
-                modifier          = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(cardShape)
+                    .padding(end = 22.dp),
+                contentAlignment = Alignment.CenterEnd
             ) {
-                if (entry.label.isNotBlank()) {
-                    Text(
-                        text   = entry.label,
-                        style  = MaterialTheme.typography.labelMedium,
-                        color  = TextSecondary,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-
-                // Delete icon
-                IconButton(
-                    onClick  = onDelete,
-                    modifier = Modifier.size(36.dp)
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .graphicsLayer {
+                            scaleX = basketScale
+                            scaleY = basketScale
+                        }
+                        .background(AccentRed, CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         Icons.Filled.Delete,
                         contentDescription = "Delete alarm",
-                        tint               = AccentRed.copy(alpha = 0.7f),
-                        modifier           = Modifier.size(20.dp)
+                        tint     = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    scaleX          = scale
+                    scaleY          = scale
+                    shadowElevation = if (isDragging) 24f else 0f
+                }
+                .shadow(elevation, cardShape, clip = false)
+                .background(CardSurface, cardShape)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // pressable gives the card a tactile 4% squeeze on tap,
+                    // with no ripple — same feel as every other card in the app.
+                    // It handles the click so we no longer need a pointerInput block.
+                    .pressable(onClick = onClick)
+                    .padding(horizontal = 18.dp, vertical = 16.dp)
+            ) {
+                // ── Hero row: time + toggle ─────────────────────────────────
+                // No drag-handle icon here on purpose — the whole card is
+                // already the drag target (long-press anywhere to reorder,
+                // same as Todoist/Things), so a separate handle glyph was just
+                // extra clutter competing with the time for attention.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text       = formatAlarmTime(entry.hour, entry.minute),
+                        style      = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Medium,
+                        color      = if (entry.enabled) MaterialTheme.colorScheme.onBackground else TextMuted,
+                        modifier   = Modifier.weight(1f)
+                    )
+
+                    Switch(
+                        checked         = entry.enabled,
+                        onCheckedChange = { checked ->
+                            // Stop the tap-to-edit from firing when toggle is used
+                            onToggle(checked)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = AccentBlue
+                        )
                     )
                 }
 
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.height(4.dp))
 
-                // On/off toggle
-                Switch(
-                    checked       = entry.enabled,
-                    onCheckedChange = { checked ->
-                        // Stop the tap-to-edit from firing when toggle is used
-                        onToggle(checked)
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AccentBlue
-                    )
+                // ── Repeat-days / burst summary ─────────────────────────────
+                val repeatLabel = repeatSummary(entry.daysOfWeek)
+                val burstLabel  = if (slotCount > 1) "  ·  ${slotCount}× snooze burst" else ""
+                Text(
+                    text  = repeatLabel + burstLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (entry.enabled) TextSecondary else TextMuted
                 )
+
+                // ── Burst sub-times (compact) ─────────────────────────────────
+                if (slotCount > 1) {
+                    Spacer(Modifier.height(6.dp))
+                    val times = (0 until slotCount).joinToString("  ·  ") { i ->
+                        val total = entry.hour * 60 + entry.minute + i * STRICT_ALARM_INTERVAL_MINUTES
+                        formatAlarmTime((total / 60) % 24, total % 60)
+                    }
+                    Text(
+                        text  = times,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                }
+
+                // ── Label pill (only if set) ────────────────────────────────
+                // A small rounded tag instead of a bare line of text — reads as
+                // a proper label at a glance, the way a chip does in MD3.
+                if (entry.label.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(CardSurfaceAlt, RoundedCornerShape(50))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text  = entry.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextSecondary
+                        )
+                    }
+                }
             }
         }
     }
