@@ -1,5 +1,11 @@
 package com.allinone.blocker.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.allinone.blocker.data.BlockedWebsite
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.StrictModeGate
@@ -137,7 +145,12 @@ private fun BlockedWebsitesList(modifier: Modifier = Modifier) {
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             items(websites, key = { it.domain }) { site ->
-                BlockedWebsiteRow(site = site)
+                BlockedWebsiteRow(
+                    site = site,
+                    // animateItem() slides the remaining rows smoothly into
+                    // the gap left by a deleted one instead of snapping.
+                    modifier = Modifier.animateItem()
+                )
             }
             item { Spacer(Modifier.size(72.dp)) }
         }
@@ -145,7 +158,20 @@ private fun BlockedWebsitesList(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BlockedWebsiteRow(site: BlockedWebsite) {
+private fun BlockedWebsiteRow(site: BlockedWebsite, modifier: Modifier = Modifier) {
+    // Same idea as BlockedAppRow: removing a site doesn't delete it from
+    // BlockerRepository the instant Delete is tapped. It first plays a
+    // short fade + shrink, and only once that finishes does the real
+    // removal happen — so the row reads as "closing" instead of vanishing.
+    var visible by remember(site.domain) { mutableStateOf(true) }
+
+    LaunchedEffect(visible) {
+        if (!visible) {
+            delay(REMOVE_ANIM_MS)
+            BlockerRepository.removeWebsite(site.domain)
+        }
+    }
+
     val onToggle: (Boolean) -> Unit = remember(site) {
         { wantsOn ->
             if (wantsOn) {
@@ -158,62 +184,73 @@ private fun BlockedWebsiteRow(site: BlockedWebsite) {
         }
     }
     val onDelete: () -> Unit = remember(site.domain) {
-        { StrictModeGate.guard { BlockerRepository.removeWebsite(site.domain) } }
+        { StrictModeGate.guard { visible = false } }
     }
 
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        elevation = CardDefaults.cardElevation(0.dp)
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = fadeIn(tween(REMOVE_ANIM_MS.toInt())) + scaleIn(initialScale = 0.9f, animationSpec = tween(REMOVE_ANIM_MS.toInt())),
+        exit = fadeOut(tween(REMOVE_ANIM_MS.toInt())) + scaleOut(targetScale = 0.85f, animationSpec = tween(REMOVE_ANIM_MS.toInt()))
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Card(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardSurface),
+            elevation = CardDefaults.cardElevation(0.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(AccentBlue.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
+            Row(
+                Modifier.fillMaxWidth().padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.Language, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
-            }
-            Spacer(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    site.domain,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = TextPrimary
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(AccentBlue.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Language, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        site.domain,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = TextPrimary
+                    )
+                    Text(
+                        if (site.enabled) "Blocked" else "Paused",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                Switch(
+                    checked = site.enabled,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor    = Color.White,
+                        checkedTrackColor    = AccentBlue,
+                        checkedBorderColor   = AccentBlue,
+                        uncheckedThumbColor  = TextTertiary,
+                        uncheckedTrackColor  = BgDarkest,
+                        uncheckedBorderColor = TextTertiary
+                    )
                 )
-                Text(
-                    if (site.enabled) "Blocked" else "Paused",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-            Switch(
-                checked = site.enabled,
-                onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor    = Color.White,
-                    checkedTrackColor    = AccentBlue,
-                    checkedBorderColor   = AccentBlue,
-                    uncheckedThumbColor  = TextTertiary,
-                    uncheckedTrackColor  = BgDarkest,
-                    uncheckedBorderColor = TextTertiary
-                )
-            )
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = TextSecondary)
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = TextSecondary)
+                }
             }
         }
     }
 }
+
+// Shared duration (in milliseconds) for the row's own fade+scale exit
+// animation before the site is actually removed from the repository.
+private const val REMOVE_ANIM_MS = 180L
 
 @Composable
 private fun AddWebsiteDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
