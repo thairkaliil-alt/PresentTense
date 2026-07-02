@@ -158,7 +158,12 @@ object StrictModeGate {
         }
 
         if (!config.enabled || config.activeFrictions.isEmpty()) {
-            StreakRepository.recordSuccessfulDisable()
+            // Strict Mode isn't actively protecting anything right now, so
+            // this is just ordinary list management (deleting a test entry,
+            // fixing a mistake, etc.) — it should NOT count as "breaking"
+            // the streak or burn a shield. Only a disable that actually had
+            // to get past a Strict Mode challenge (see confirm() below)
+            // counts against the streak.
             action()
         } else {
             _pendingAction.value = action
