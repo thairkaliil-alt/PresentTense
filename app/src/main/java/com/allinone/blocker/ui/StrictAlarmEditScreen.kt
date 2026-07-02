@@ -214,12 +214,27 @@ fun StrictAlarmEditScreen(
             Spacer(Modifier.height(36.dp))
 
             // ── Repeat days ───────────────────────────────────────────────
-            Text(
-                "Repeat on",
-                style = MaterialTheme.typography.labelLarge,
-                color = TextSecondary,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Text(
+                    "Repeat on",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextSecondary
+                )
+                // Live summary of the current repeat state — "Once" is the
+                // default for a brand-new alarm (no days picked yet), the
+                // same wording and the same "doesn't repeat" default every
+                // stock alarm app uses. Picking any day chip below turns
+                // this into "Every day", "Weekdays", or the specific days.
+                Text(
+                    text  = repeatCaption(draft.daysOfWeek),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -323,6 +338,22 @@ private val DAY_LABELS = listOf(
     Calendar.THURSDAY  to "T", Calendar.FRIDAY    to "F", Calendar.SATURDAY  to "S",
     Calendar.SUNDAY    to "S"
 )
+
+/** "Once", "Every day", "Weekdays", "Weekends", or a specific-days list. */
+private fun repeatCaption(daysOfWeek: Set<Int>): String {
+    if (daysOfWeek.isEmpty()) return "Once"
+    if (daysOfWeek.size == 7) return "Every day"
+    val weekdays = setOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY)
+    val weekend  = setOf(Calendar.SATURDAY, Calendar.SUNDAY)
+    if (daysOfWeek == weekdays) return "Weekdays"
+    if (daysOfWeek == weekend)  return "Weekends"
+    val order = listOf(
+        Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
+        Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
+        Calendar.SUNDAY to "Sun"
+    )
+    return order.filter { it.first in daysOfWeek }.joinToString(", ") { it.second }
+}
 
 private fun formatEditTime(hour: Int, minute: Int): String {
     val cal = Calendar.getInstance().apply {
