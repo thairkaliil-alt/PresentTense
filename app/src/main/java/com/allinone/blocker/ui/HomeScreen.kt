@@ -343,9 +343,20 @@ fun HomeScreen(
                     }
                 }
 
-                HomeEntranceSection(index = 4, animate = shouldAnimateEntrance) {
-                    PresetsSection()
-                }
+                // Not wrapped in HomeEntranceSection like the sections above —
+                // PresetsSection cascades its OWN 12 cards in one at a time
+                // (see StaggeredColumn inside it). Wrapping it in a second,
+                // outer entrance animation used to mean 12 cards animating
+                // inside an already-animating wrapper: two cascades stacked
+                // on top of each other, which is what made the cascade look
+                // like it "didn't play" (frames dropped, not a deliberate
+                // instant show) and cost real jank on Home's first frame.
+                // Passing the animate flag + a start delay straight through
+                // makes this one continuous cascade instead.
+                PresetsSection(
+                    animate = shouldAnimateEntrance,
+                    startDelayMs = 4 * MotionTokens.StaggerStepMs
+                )
 
                 Spacer(Modifier.height(80.dp))
             }
