@@ -73,6 +73,7 @@ import com.allinone.blocker.data.BlockRule
 import com.allinone.blocker.data.BlockRuleType
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentAmber
@@ -245,9 +246,28 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
                 state   = saveState,
                 enabled = presetChosen,
                 onClick = {
-                    saveState = SaveState.Loading
-                    BlockerRepository.upsertApp(current)
-                    saveState = SaveState.Done
+                    // Committing a NEW app's first-ever block only ever adds
+                    // protection, so it never needs to go through Strict
+                    // Mode — same asymmetry BlockedAppsScreen's on/off
+                    // toggle already uses (turning ON is free, turning OFF
+                    // is guarded). Editing an EXISTING app's rules, though,
+                    // can loosen or remove a block entirely — exactly the
+                    // "weakening your setup" Active Plan (and every other
+                    // Strict Mode friction) exists to stop. Previously this
+                    // called upsertApp() directly with no guard at all,
+                    // which meant Active Plan could be fully bypassed just
+                    // by editing a block's rules from this screen instead
+                    // of toggling it off from the app list.
+                    val save: () -> Unit = {
+                        saveState = SaveState.Loading
+                        BlockerRepository.upsertApp(current)
+                        saveState = SaveState.Done
+                    }
+                    if (savedApp == null) {
+                        save()
+                    } else {
+                        StrictModeGate.guard(save)
+                    }
                 },
                 // Fires automatically a moment after "Saved" — sends the
                 // user back to the app list instead of leaving them on
