@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -102,8 +103,26 @@ fun WhitelistScreen(onBack: () -> Unit) {
     // the animation itself barely visible (frames were being dropped). There
     // only ever needs to be ONE clock driving the pulse; every row just reads
     // the same shared value instead of running its own copy.
+    //
+    // SECOND PERFORMANCE FIX: sharing one clock wasn't quite enough on its
+    // own. `by dotBlinkTransition.animateFloat(...)` reads the animated value
+    // right here, in WhitelistScreen's own composable body — and that body is
+    // also what builds the whole LazyColumn's row content. Reading a value
+    // that changes every frame at THIS level means the entire list rebuilds
+    // every frame, forever, for as long as this screen is open — every row,
+    // not just the dots. That's a much smaller burst than the old "100
+    // animations at once" bug, but it's permanent instead of one-off, which
+    // is exactly the kind of thing that reads as "the list is still laggy"
+    // even after entrance-animation fixes elsewhere.
+    //
+    // The fix: keep this as a State<Float> (skip the `by`, so nothing reads
+    // .value here) and hand the State object itself down to each row. A row
+    // only reads .value inside Modifier.graphicsLayer — a draw-phase-only
+    // callback — so the pulse still animates the dot's opacity every frame,
+    // but recomposing NEVER happens for it; only that one dot's pixels get
+    // redrawn.
     val dotBlinkTransition = rememberInfiniteTransition(label = "whitelistDotBlink")
-    val sharedDotAlpha by dotBlinkTransition.animateFloat(
+    val sharedDotAlphaState = dotBlinkTransition.animateFloat(
         initialValue = 1f,
         targetValue = 0.25f,
         animationSpec = infiniteRepeatable(
@@ -209,7 +228,7 @@ fun WhitelistScreen(onBack: () -> Unit) {
                     packageName = device.packageName,
                     label       = device.label,
                     whitelisted = whitelist.contains(device.packageName),
-                    dotAlpha    = sharedDotAlpha,
+                    dotAlphaState = sharedDotAlphaState,
                     onToggle    = { checked ->
                         if (checked) BlockerRepository.addToWhitelist(device.packageName)
                         else BlockerRepository.removeFromWhitelist(device.packageName)
@@ -232,12 +251,12 @@ fun WhitelistScreen(onBack: () -> Unit) {
 // the manager screen feels like part of the same feature, not a bolted-on page.
 @Composable
 private fun WhitelistToggleRow(
-    packageName : String,
-    label       : String,
-    whitelisted : Boolean,
-    dotAlpha    : Float,
-    onToggle    : (Boolean) -> Unit,
-    modifier    : Modifier = Modifier
+    packageName   : String,
+    label         : String,
+    whitelisted   : Boolean,
+    dotAlphaState : androidx.compose.runtime.State<Float>,
+    onToggle      : (Boolean) -> Unit,
+    modifier      : Modifier = Modifier
 ) {
     val haptics = rememberHaptics()
     val cardBg by animateColorAsState(
@@ -250,12 +269,6 @@ private fun WhitelistToggleRow(
         animationSpec = tween(durationMillis = 400),
         label         = "whitelistRowBorder"
     )
-
-    // dotAlpha is the ONE shared pulse value, computed once at WhitelistScreen
-    // level and passed down here — see the comment there for why this used to
-    // be a per-row rememberInfiniteTransition (and why that was the cause of
-    // the scroll lag). Whitelisted rows just hold their dot fully opaque.
-    val resolvedDotAlpha = if (whitelisted) 1f else dotAlpha
 
     Card(
         modifier  = modifier.fillMaxWidth(),
@@ -273,11 +286,21 @@ private fun WhitelistToggleRow(
             Column(Modifier.weight(1f)) {
                 Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // dotAlphaState is the ONE shared pulse clock, computed once at
+                    // WhitelistScreen level — see the comment there for why this
+                    // used to be a per-row rememberInfiniteTransition, and later why
+                    // even a shared value still caused constant recomposition. The
+                    // pulse's .value is only ever read right here, inside
+                    // graphicsLayer's draw-phase callback, so a pulsing dot never
+                    // triggers recomposition of this row (or the list) — it just
+                    // redraws this one small layer each frame. Whitelisted rows
+                    // stay fully opaque (no need to even look at the pulse).
                     Box(
                         modifier = Modifier
                             .size(7.dp)
                             .clip(CircleShape)
-                            .background((if (whitelisted) AccentTeal else AccentRed).copy(alpha = resolvedDotAlpha))
+                            .graphicsLayer { alpha = if (whitelisted) 1f else dotAlphaState.value }
+                            .background(if (whitelisted) AccentTeal else AccentRed)
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
