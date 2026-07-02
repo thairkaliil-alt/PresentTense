@@ -1,17 +1,23 @@
 package com.allinone.blocker.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,17 +40,15 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import com.allinone.blocker.data.effectiveAlarmCount
 import com.allinone.blocker.data.nextTriggerMillis
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -56,7 +60,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
@@ -65,6 +71,7 @@ import com.allinone.blocker.data.StrictAlarmEntry
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
@@ -73,6 +80,7 @@ import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextSecondary
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -91,6 +99,13 @@ fun StrictAlarmListScreen(
 ) {
     val context = LocalContext.current
     val alarms by BlockerRepository.strictAlarms.collectAsState()
+
+    // ── Swipe-to-delete reveal state ────────────────────────────────────────
+    // Tracks the id of whichever ONE card currently has its red delete action
+    // revealed. Only one at a time — opening a new card's action snaps any
+    // previously-open one shut, the same behaviour as Gmail, Files by Google,
+    // and every other well-made "swipe to reveal an action" list.
+    var revealedAlarmId by remember { mutableStateOf<String?>(null) }
 
     // ── Undo snackbar for a just-created batch (from Quick Add) ────────────
     val snackbarHostState = remember { SnackbarHostState() }
@@ -212,22 +227,28 @@ fun StrictAlarmListScreen(
                 label         = "cardScale"
             )
             AlarmCard(
-                entry      = entry,
-                isDragging = dragState.isDragging,
-                elevation  = elevation,
-                scale      = scale,
-                modifier   = dragState.itemModifier,
+                entry        = entry,
+                isDragging   = dragState.isDragging,
+                elevation    = elevation,
+                scale        = scale,
+                modifier     = dragState.itemModifier,
+                isRevealed   = revealedAlarmId == entry.id,
+                onRevealChange = { open ->
+                    revealedAlarmId = if (open) entry.id else null
+                },
                 onToggle   = { checked ->
                     BlockerRepository.setStrictAlarmEntryEnabled(entry.id, checked)
                     AlarmScheduler.schedule(context, entry.copy(enabled = checked))
                 },
                 onClick    = { onEditAlarm(entry.id) },
                 onDelete   = {
-                    // Swiping already IS the confirmation — no dialog. We
-                    // delete right away and give a few seconds of Undo via
-                    // the same snackbar host used for the Quick Add batch,
-                    // so there's still a safety net without an extra tap.
+                    // The reveal-then-confirm swipe already IS the
+                    // confirmation — no dialog. We delete right away and
+                    // give a few seconds of Undo via the same snackbar host
+                    // used for the Quick Add batch, so there's still a
+                    // safety net without an extra tap.
                     val removed = entry
+                    if (revealedAlarmId == removed.id) revealedAlarmId = null
                     BlockerRepository.removeStrictAlarmEntry(removed.id)
                     AlarmScheduler.cancel(context, removed)
                     scope.launch {
@@ -248,7 +269,6 @@ fun StrictAlarmListScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AlarmCard(
     entry: StrictAlarmEntry,
@@ -256,6 +276,8 @@ private fun AlarmCard(
     elevation: androidx.compose.ui.unit.Dp,
     scale: Float,
     modifier: Modifier = Modifier,
+    isRevealed: Boolean,
+    onRevealChange: (Boolean) -> Unit,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit,
     onDelete: () -> Unit
@@ -266,12 +288,22 @@ private fun AlarmCard(
     // instead of a one-off custom radius — one visual language everywhere.
     val cardShape = MaterialTheme.shapes.large
 
-    // ── Swipe-to-delete ──────────────────────────────────────────────────
-    // Swiping left IS the confirmation — there's no dialog. confirmValueChange
-    // always returns false so the box itself never stays "dismissed"; the
-    // row disappears because onDelete() removes it from the underlying list
-    // one frame later, which reads as a clean disappear rather than a stuck
-    // half-swiped card.
+    // ── Swipe-to-REVEAL delete (not swipe-to-delete) ────────────────────────
+    // The old version deleted the instant you swiped past a threshold — one
+    // flick and it was gone. Every well-made list (Gmail, Files by Google,
+    // Todoist) instead does this in two beats:
+    //   1. Swipe left → the card slides over and STOPS, revealing a red
+    //      delete button behind it. Nothing is deleted yet.
+    //   2. Tap that button, or swipe left again (further, or a fast flick)
+    //      → NOW it deletes.
+    //   3. Swipe back right, tap the card itself, or open a different
+    //      card's action → this one closes with nothing lost.
+    // The reveal step itself is the "are you sure" — no dialog needed, but
+    // no more accidental one-swipe deletes either.
+    //
+    // Hand-built with Modifier.draggable + Animatable rather than
+    // Material3's SwipeToDismissBox, because SwipeToDismissBox is built for
+    // "one swipe = fully dismissed" with no clean way to stop halfway.
     //
     // Note on gestures: this does NOT fight the long-press-to-reorder drag
     // from ReorderableColumn. That drag only starts consuming touches after
@@ -284,58 +316,98 @@ private fun AlarmCard(
     // two different actions. Worth double-checking on your phone once this
     // build is up, since gesture feel is one of those things that's hard to
     // fully judge without a real screen.
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) onDelete()
-            false
-        }
-    )
+    val density   = LocalDensity.current
+    val haptics   = rememberHaptics()
+    val dragScope = rememberCoroutineScope()
 
-    SwipeToDismissBox(
-        state    = dismissState,
-        modifier = modifier.fillMaxWidth(),
-        enableDismissFromStartToEnd = false,
-        enableDismissFromEndToStart = true,
-        backgroundContent = {
-            // A small red "basket" that grows in as you swipe — not a full
-            // red panel behind the card, just a compact circular icon. It
-            // reaches full size right as the swipe crosses the delete
-            // threshold, so the size itself tells you when it'll trigger.
-            val basketScale by animateFloatAsState(
-                targetValue   = if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) 1f else 0.55f,
-                animationSpec = MotionSpecs.reorderPickup(),
-                label         = "basketScale"
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(cardShape)
-                    .padding(end = 22.dp),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .graphicsLayer {
-                            scaleX = basketScale
-                            scaleY = basketScale
-                        }
-                        .background(AccentRed, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = "Delete alarm",
-                        tint     = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+    // Width of the red action button once fully revealed.
+    val revealWidthPx = with(density) { 78.dp.toPx() }
+    // Swiping (or flinging) past this point commits to delete outright —
+    // this is the "swipe again, further or faster" gesture.
+    val commitPx = revealWidthPx * 1.9f
+    // Hard stop so a wild drag can't fling the card off past a sane point.
+    val maxDragPx = revealWidthPx * 2.4f
+
+    val offsetX = remember(entry.id) { Animatable(0f) }
+    var buzzedReveal by remember(entry.id) { mutableStateOf(false) }
+
+    // A different card was swiped open, or the parent asked this one to
+    // close — snap shut instead of ever leaving two cards open at once.
+    LaunchedEffect(isRevealed) {
+        if (!isRevealed && offsetX.value != 0f) {
+            offsetX.animateTo(0f, MotionSpecs.tactile())
+            buzzedReveal = false
+        }
+    }
+
+    // Where the drag/fling ends up decides the outcome: snap shut, settle
+    // into the "revealed" position, or commit to deleting.
+    suspend fun settleDrag(velocity: Float) {
+        val current    = offsetX.value
+        val flungFast  = velocity < -900f
+        when {
+            current <= -commitPx || (flungFast && current <= -revealWidthPx * 0.9f) -> {
+                haptics.confirm()
+                onRevealChange(false)
+                onDelete()
+            }
+            current <= -revealWidthPx * 0.5f -> {
+                offsetX.animateTo(-revealWidthPx, MotionSpecs.tactile())
+                onRevealChange(true)
+            }
+            else -> {
+                offsetX.animateTo(0f, MotionSpecs.tactile())
+                onRevealChange(false)
+                buzzedReveal = false
             }
         }
-    ) {
+    }
+
+    fun closeReveal() {
+        dragScope.launch {
+            offsetX.animateTo(0f, MotionSpecs.tactile())
+            onRevealChange(false)
+            buzzedReveal = false
+        }
+    }
+
+    Box(modifier = modifier.fillMaxWidth()) {
+        // ── Red delete action, sitting behind the card ───────────────────
+        // A solid red panel the width of a real tap target (not a floating
+        // icon) — this is now a genuine button once revealed, so it needs
+        // to be comfortably tappable, not just decorative.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(cardShape)
+                .background(AccentRed),
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(84.dp)
+                    .pressable(onClick = {
+                        haptics.confirm()
+                        onRevealChange(false)
+                        onDelete()
+                    }),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Delete alarm",
+                    tint     = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        // ── Foreground card — slides left to reveal the action above ─────
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
                 .graphicsLayer {
                     scaleX          = scale
                     scaleY          = scale
@@ -343,14 +415,37 @@ private fun AlarmCard(
                 }
                 .shadow(elevation, cardShape, clip = false)
                 .background(CardSurface, cardShape)
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        dragScope.launch {
+                            val next = (offsetX.value + delta).coerceIn(-maxDragPx, 0f)
+                            offsetX.snapTo(next)
+                            // One light tick exactly when the swipe crosses
+                            // into "revealed" territory — the same felt
+                            // confirmation a physical latch gives you.
+                            if (!buzzedReveal && next <= -revealWidthPx) {
+                                haptics.tap()
+                                buzzedReveal = true
+                            } else if (next > -revealWidthPx * 0.5f) {
+                                buzzedReveal = false
+                            }
+                        }
+                    },
+                    onDragStopped = { velocity -> settleDrag(velocity) }
+                )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     // pressable gives the card a tactile 4% squeeze on tap,
-                    // with no ripple — same feel as every other card in the app.
-                    // It handles the click so we no longer need a pointerInput block.
-                    .pressable(onClick = onClick)
+                    // with no ripple — same feel as every other card in the
+                    // app. While the delete action is showing, tapping the
+                    // card just closes it back up instead of opening edit —
+                    // the same behaviour every swipe-actions list uses.
+                    .pressable(onClick = {
+                        if (offsetX.value != 0f) closeReveal() else onClick()
+                    })
                     .padding(horizontal = 18.dp, vertical = 16.dp)
             ) {
                 // ── Hero row: time + toggle ─────────────────────────────────
