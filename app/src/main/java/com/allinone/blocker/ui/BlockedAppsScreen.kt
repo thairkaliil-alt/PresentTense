@@ -293,18 +293,42 @@ fun AppIconOrLetter(icon: ImageBitmap?, label: String) {
 
 @Composable
 fun AppIconOrLetter(packageName: String, label: String) {
-    // Same "icon can pop in mid-scroll" issue the app picker had — icons load
-    // into InstalledApps' cache off the main thread, so a row can render a
-    // beat before its icon is ready. This polls briefly and crossfades the
-    // icon in once it resolves instead of popping it in instantly. This is
-    // the shared version of the fix from AppPickerScreen.kt's PickerRow, so
-    // every screen that lists apps (Blocked apps, Whitelist, Lockdown
-    // launcher, Stats) behaves the same way.
-    var icon by remember(packageName) {
-        mutableStateOf(InstalledApps.iconFor(packageName))
+    // PERFORMANCE FIX: the vast majority of rows already have their icon
+    // sitting in InstalledApps' cache by the time they're drawn — the scan
+    // runs once at app startup (see BlockerApp.kt), long before the user
+    // opens Blocked apps / Whitelist / Stats. Checking the cache directly at
+    // composition time (not inside remember{}'s lazily-read initial value —
+    // this is a plain val, read fresh every time this row composes) lets us
+    // skip ALL of the animation setup below (an extra remembered state, a
+    // coroutine, and an animateFloatAsState) for that common case. That
+    // setup being paid for on EVERY row, EVERY time it scrolled into view,
+    // is what was making Blocked apps / Whitelist / Stats laggy — this was
+    // the "shared version of the fix" mentioned below, so the fast path
+    // benefits all three screens (and Lockdown launcher) at once.
+    val cachedIcon = InstalledApps.iconFor(packageName)
+    if (cachedIcon != null) {
+        Image(
+            bitmap = cachedIcon,
+            contentDescription = null,
+            modifier = Modifier.size(40.dp)
+        )
+        return
     }
-    LaunchedEffect(packageName, icon) {
-        if (icon != null) return@LaunchedEffect
+
+    // Slow path — only reached for the rare row whose icon genuinely isn't
+    // cached yet (e.g. a fresh install, or opening the screen a beat before
+    // the startup scan finishes). Same "icon can pop in mid-scroll" issue
+    // the app picker had — icons load into InstalledApps' cache off the main
+    // thread, so a row can render a beat before its icon is ready. This
+    // polls briefly and crossfades the icon in once it resolves instead of
+    // popping it in instantly. This is the shared version of the fix from
+    // AppPickerScreen.kt's PickerRow, so every screen that lists apps
+    // (Blocked apps, Whitelist, Lockdown launcher, Stats) behaves the same
+    // way once the icon does resolve.
+    var icon by remember(packageName) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(packageName) {
         // Check every 80ms for up to ~1.6s, then give up — covers the
         // "still scanning" window without polling forever for apps that
         // genuinely have no icon (loop exits itself either way).
