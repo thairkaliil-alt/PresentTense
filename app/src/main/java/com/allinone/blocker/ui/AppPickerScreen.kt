@@ -1,5 +1,7 @@
 package com.allinone.blocker.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +49,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.ui.motion.LocalReducedMotion
+import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -55,6 +60,7 @@ import com.allinone.blocker.ui.theme.CardSurface
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
+import kotlinx.coroutines.delay
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "Popular to block" — these appear at the top of the list if installed.
@@ -237,8 +243,42 @@ private fun PickerRow(
     alreadyBlocked: Boolean,
     onPick: () -> Unit
 ) {
-    val icon = remember(device.packageName) { InstalledApps.iconFor(device.packageName) }
     val haptics = rememberHaptics()
+
+    // The icon is USUALLY already sitting in InstalledApps' cache by the time
+    // this row shows up (the scan loads every icon before the app list is
+    // published). But right after a cold start or a manual refresh, a row can
+    // render a beat before its icon is cached. Instead of a one-shot lookup
+    // that either has the icon or doesn't, we hold it in state and briefly
+    // poll the cache until it appears — then stop. This makes the icon
+    // "reactive" without touching how InstalledApps loads things.
+    var icon by remember(device.packageName) {
+        mutableStateOf(InstalledApps.iconFor(device.packageName))
+    }
+    LaunchedEffect(device.packageName, icon) {
+        if (icon != null) return@LaunchedEffect
+        // Check every 80ms for up to ~1.6s, then give up — this covers the
+        // "still scanning" window without polling forever for apps that
+        // genuinely have no icon (loop exits itself either way).
+        repeat(20) {
+            delay(80)
+            val found = InstalledApps.iconFor(device.packageName)
+            if (found != null) {
+                icon = found
+                return@LaunchedEffect
+            }
+        }
+    }
+
+    // Crossfade the icon in over the app's standard fade duration once it
+    // resolves, instead of popping in. Respects the reduced-motion setting.
+    val reducedMotion = LocalReducedMotion.current
+    val iconAlpha by animateFloatAsState(
+        targetValue = if (icon != null) 1f else 0f,
+        animationSpec = if (reducedMotion) MotionSpecs.standard(0)
+        else MotionSpecs.standard(MotionDurations.Standard),
+        label = "appIconFade"
+    )
 
     Row(
         modifier = Modifier
@@ -248,7 +288,24 @@ private fun PickerRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        AppIconOrLetter(icon = icon, label = device.label)
+        // Neutral placeholder (the same letter-avatar fallback used app-wide)
+        // sits underneath at all times; the real icon crossfades in on top
+        // of it once it resolves, so there's never a hard "pop".
+        Box(
+            modifier = Modifier.size(40.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            LetterAvatar(device.label)
+            val resolvedIcon = icon
+            if (resolvedIcon != null) {
+                Image(
+                    bitmap = resolvedIcon,
+                    contentDescription = null,
+                    alpha = iconAlpha,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+        }
 
         Column(Modifier.weight(1f)) {
             Text(
