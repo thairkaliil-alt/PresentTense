@@ -412,6 +412,13 @@ private fun AlarmCard(
                     scaleX          = scale
                     scaleY          = scale
                     shadowElevation = if (isDragging) 24f else 0f
+                    // Without this, the shadow this layer casts while
+                    // dragging defaults to a plain rectangle — its square
+                    // corners then poke out from behind the card's rounded
+                    // ones as small black triangles. Giving it the same
+                    // shape as the card (and the .shadow() modifier below)
+                    // keeps the shadow's outline matching the card exactly.
+                    shape           = cardShape
                 }
                 .shadow(elevation, cardShape, clip = false)
                 .background(CardSurface, cardShape)
