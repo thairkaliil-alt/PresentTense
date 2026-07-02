@@ -217,14 +217,17 @@ fun TimerDisplay(
         modifier = Modifier.fillMaxWidth()
     ) {
         // Circular progress
-        Canvas(modifier = Modifier.size(280.dp)) {
+        val cardSurface = CardSurface
+        Canvas(
+            modifier = Modifier.size(280.dp)
+    ) {
             val strokeWidth = 20.dp.toPx()
             val size = this.size.minDimension - strokeWidth
             val topLeft = Offset((this.size.width - size) / 2, (this.size.height - size) / 2)
 
             // Background circle
             drawArc(
-                color = CardSurface,
+                color = cardSurface,
                 startAngle = -90f,
                 sweepAngle = 360f,
                 useCenter = false,
