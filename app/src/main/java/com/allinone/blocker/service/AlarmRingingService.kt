@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.allinone.blocker.R
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.isOneTime
 import com.allinone.blocker.ui.AlarmRingActivity
 
 class AlarmRingingService : Service() {
@@ -31,7 +32,16 @@ class AlarmRingingService : Service() {
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
-            AlarmScheduler.schedule(applicationContext, alarm)
+            if (alarm.isOneTime) {
+                // A one-time alarm has now rung — it doesn't get a "next
+                // day" rearm. Flip its own toggle off, same as stock
+                // Android/Samsung Clock does the instant a non-repeating
+                // alarm fires. The OS-level alarm itself was already a
+                // one-shot registration, so there's nothing left to cancel.
+                BlockerRepository.setStrictAlarmEntryEnabled(alarm.id, false)
+            } else {
+                AlarmScheduler.schedule(applicationContext, alarm)
+            }
         }
 
         // KEY FIX: if the screen is already on and unlocked (user is actively
