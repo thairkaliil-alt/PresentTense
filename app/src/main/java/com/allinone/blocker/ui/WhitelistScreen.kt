@@ -93,6 +93,26 @@ fun WhitelistScreen(onBack: () -> Unit) {
         }
     }
 
+    // PERFORMANCE FIX: this used to be created fresh INSIDE every single row
+    // (WhitelistToggleRow) — one rememberInfiniteTransition per non-whitelisted
+    // app. On a phone with 150+ installed apps, that meant 100+ animations all
+    // running forever at once, each one forcing its row to recompose/redraw
+    // every frame, all fighting for the same frame budget as your scroll
+    // gesture — that's what was making this screen "unbelievably laggy" and
+    // the animation itself barely visible (frames were being dropped). There
+    // only ever needs to be ONE clock driving the pulse; every row just reads
+    // the same shared value instead of running its own copy.
+    val dotBlinkTransition = rememberInfiniteTransition(label = "whitelistDotBlink")
+    val sharedDotAlpha by dotBlinkTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dotBlink"
+    )
+
     Scaffold(
         containerColor = BgDarkest,
         topBar = {
@@ -189,6 +209,7 @@ fun WhitelistScreen(onBack: () -> Unit) {
                     packageName = device.packageName,
                     label       = device.label,
                     whitelisted = whitelist.contains(device.packageName),
+                    dotAlpha    = sharedDotAlpha,
                     onToggle    = { checked ->
                         if (checked) BlockerRepository.addToWhitelist(device.packageName)
                         else BlockerRepository.removeFromWhitelist(device.packageName)
@@ -214,6 +235,7 @@ private fun WhitelistToggleRow(
     packageName : String,
     label       : String,
     whitelisted : Boolean,
+    dotAlpha    : Float,
     onToggle    : (Boolean) -> Unit,
     modifier    : Modifier = Modifier
 ) {
@@ -229,20 +251,11 @@ private fun WhitelistToggleRow(
         label         = "whitelistRowBorder"
     )
 
-    val dotAlpha by if (!whitelisted) {
-        val infinite = rememberInfiniteTransition(label = "whitelistDotBlink")
-        infinite.animateFloat(
-            initialValue  = 1f,
-            targetValue   = 0.25f,
-            animationSpec = infiniteRepeatable(
-                animation  = tween(900, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "dotBlink"
-        )
-    } else {
-        remember { mutableStateOf(1f) }
-    }
+    // dotAlpha is the ONE shared pulse value, computed once at WhitelistScreen
+    // level and passed down here — see the comment there for why this used to
+    // be a per-row rememberInfiniteTransition (and why that was the cause of
+    // the scroll lag). Whitelisted rows just hold their dot fully opaque.
+    val resolvedDotAlpha = if (whitelisted) 1f else dotAlpha
 
     Card(
         modifier  = modifier.fillMaxWidth(),
@@ -264,7 +277,7 @@ private fun WhitelistToggleRow(
                         modifier = Modifier
                             .size(7.dp)
                             .clip(CircleShape)
-                            .background((if (whitelisted) AccentTeal else AccentRed).copy(alpha = dotAlpha))
+                            .background((if (whitelisted) AccentTeal else AccentRed).copy(alpha = resolvedDotAlpha))
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
