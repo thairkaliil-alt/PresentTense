@@ -31,7 +31,6 @@ package com.allinone.blocker.ui.motion
 //     AnimatedAppearance { CardContent() } // entrance
 // ═══════════════════════════════════════════════════════════════════════════
 
-import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
@@ -107,7 +106,7 @@ object MotionSpecs {
      * to snap down/back almost immediately, with a touch of underdamping so the
      * release has a faint, alive rebound instead of a dead stop.
      */
-    fun <T> tactile(): AnimationSpec<T> =
+    fun <T> tactile(): FiniteAnimationSpec<T> =
         spring(
             dampingRatio = 0.55f,    // a little bounce on release — reads as "alive"
             stiffness    = 1600f     // snaps; ~2× StiffnessMediumLow
@@ -117,7 +116,7 @@ object MotionSpecs {
      * A touch more bounce than [tactile] — for celebratory beats (a streak tick,
      * a successful toggle). Use sparingly; bounce is loud.
      */
-    fun <T> expressive(): AnimationSpec<T> =
+    fun <T> expressive(): FiniteAnimationSpec<T> =
         spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness    = Spring.StiffnessMedium
@@ -145,7 +144,7 @@ object MotionSpecs {
      * the way, this is the row the user is physically holding, so picking
      * it up and setting it down should read as a distinct, felt event.
      */
-    fun <T> reorderPickup(): AnimationSpec<T> =
+    fun <T> reorderPickup(): FiniteAnimationSpec<T> =
         spring(
             dampingRatio = 0.7f,
             stiffness    = 700f
@@ -160,7 +159,7 @@ object MotionSpecs {
      * rather than snapping to size. A touch of underdamping gives it a faint,
      * organic overshoot instead of a mechanical stop.
      */
-    fun <T> liquidExpand(): AnimationSpec<T> =
+    fun <T> liquidExpand(): FiniteAnimationSpec<T> =
         spring(
             dampingRatio = 0.78f,
             stiffness    = 180f
