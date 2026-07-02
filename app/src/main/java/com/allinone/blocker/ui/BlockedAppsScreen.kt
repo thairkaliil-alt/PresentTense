@@ -1,6 +1,7 @@
 package com.allinone.blocker.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -58,6 +59,9 @@ import com.allinone.blocker.data.BlockPreset
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.StrictModeGate
+import com.allinone.blocker.ui.motion.LocalReducedMotion
+import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -145,7 +149,6 @@ private fun BlockedAppsList(apps: List<BlockedApp>, onEdit: (String) -> Unit, mo
 
 @Composable
 private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit, modifier: Modifier = Modifier) {
-    val icon = remember(app.packageName) { InstalledApps.iconFor(app.packageName) }
     val haptics = rememberHaptics()
 
     // Controls whether this row is on screen. Deleting an app doesn't
@@ -204,7 +207,7 @@ private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit, modifier: M
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AppIconOrLetter(icon = icon, label = app.appName)
+                AppIconOrLetter(packageName = app.packageName, label = app.appName)
                 Spacer(Modifier.size(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -290,6 +293,55 @@ fun AppIconOrLetter(icon: ImageBitmap?, label: String) {
 
 @Composable
 fun AppIconOrLetter(packageName: String, label: String) {
-    val icon = remember(packageName) { InstalledApps.iconFor(packageName) }
-    AppIconOrLetter(icon = icon, label = label)
+    // Same "icon can pop in mid-scroll" issue the app picker had — icons load
+    // into InstalledApps' cache off the main thread, so a row can render a
+    // beat before its icon is ready. This polls briefly and crossfades the
+    // icon in once it resolves instead of popping it in instantly. This is
+    // the shared version of the fix from AppPickerScreen.kt's PickerRow, so
+    // every screen that lists apps (Blocked apps, Whitelist, Lockdown
+    // launcher, Stats) behaves the same way.
+    var icon by remember(packageName) {
+        mutableStateOf(InstalledApps.iconFor(packageName))
+    }
+    LaunchedEffect(packageName, icon) {
+        if (icon != null) return@LaunchedEffect
+        // Check every 80ms for up to ~1.6s, then give up — covers the
+        // "still scanning" window without polling forever for apps that
+        // genuinely have no icon (loop exits itself either way).
+        repeat(20) {
+            delay(80)
+            val found = InstalledApps.iconFor(packageName)
+            if (found != null) {
+                icon = found
+                return@LaunchedEffect
+            }
+        }
+    }
+
+    val reducedMotion = LocalReducedMotion.current
+    val iconAlpha by animateFloatAsState(
+        targetValue = if (icon != null) 1f else 0f,
+        animationSpec = if (reducedMotion) MotionSpecs.standard(0)
+        else MotionSpecs.standard(MotionDurations.Standard),
+        label = "appIconFade"
+    )
+
+    Box(
+        modifier = Modifier.size(40.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Neutral placeholder sits underneath at all times; the real icon
+        // crossfades in on top of it once it resolves, so there's never a
+        // hard "pop".
+        LetterAvatar(label)
+        val resolvedIcon = icon
+        if (resolvedIcon != null) {
+            Image(
+                bitmap = resolvedIcon,
+                contentDescription = null,
+                alpha = iconAlpha,
+                modifier = Modifier.size(40.dp)
+            )
+        }
+    }
 }
