@@ -1000,11 +1000,6 @@ private fun TrendChip(today: Int, yesterday: Int) {
 
 @Composable
 private fun AppStatRow(stat: AppUsageStat, maxMillis: Long) {
-    // FIX: icon is looked up once per unique packageName and cached by `remember`.
-    // Previously this was also done with remember but was inside a forEach in
-    // a single item{} — now each row is its own lazy item, so Compose can skip
-    // re-composing rows that haven't changed.
-    val icon: ImageBitmap? = remember(stat.packageName) { InstalledApps.iconFor(stat.packageName) }
     val fraction  = remember(stat.todayMillis, maxMillis) { (stat.todayMillis.toFloat() / maxMillis).coerceIn(0f, 1f) }
     val minutes   = remember(stat.todayMillis) { (stat.todayMillis / 60_000L).toInt() }
     val timeColor = remember(minutes) { when { minutes >= 60 -> AccentAmber; minutes >= 30 -> AccentBlue; else -> AccentTeal } }
@@ -1012,7 +1007,7 @@ private fun AppStatRow(stat: AppUsageStat, maxMillis: Long) {
     Card(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = CardSurface)) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                AppIconOrLetter(icon = icon, label = stat.appName)
+                AppIconOrLetter(packageName = stat.packageName, label = stat.appName)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(stat.appName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = TextPrimary)
