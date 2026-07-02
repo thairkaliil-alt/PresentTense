@@ -27,6 +27,10 @@ const val STRICT_ALARM_INTERVAL_MINUTES = MULTI_ALARM_INTERVAL_MINUTES
  *
  * [daysOfWeek] uses java.util.Calendar values: Calendar.SUNDAY(1) ..
  * Calendar.SATURDAY(7), same as every other day-of-week set in this app.
+ * An EMPTY set is a deliberate, meaningful state — not "off": it means
+ * "one-time alarm, no repeat", exactly like a fresh alarm in stock
+ * Android/Samsung Clock. See [nextTriggerMillis] for how that's resolved
+ * into an actual trigger time, and [isOneTime].
  */
 data class StrictAlarmEntry(
     val id: String,
@@ -34,7 +38,12 @@ data class StrictAlarmEntry(
     val enabled: Boolean = true,
     val hour: Int = 7,
     val minute: Int = 0,
-    val daysOfWeek: Set<Int> = (1..7).toSet(),
+    // Defaults to "no repeat days" (a one-time alarm) — NOT every day. A
+    // brand-new alarm should point at the next available time (today if
+    // it hasn't passed yet, otherwise tomorrow) and ring once, the same as
+    // every top alarm app. It only becomes a repeating alarm once the user
+    // deliberately picks day chips in the editor.
+    val daysOfWeek: Set<Int> = emptySet(),
     val label: String = ""
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
@@ -83,13 +92,40 @@ data class StrictAlarmEntry(
 }
 
 /**
- * Next trigger time for this alarm after [nowMillis].
- * Returns null if the alarm is disabled or has no days selected.
+ * True when this alarm has no repeat days chosen — a one-time alarm that
+ * rings once (today or tomorrow, whichever is next) and then turns itself
+ * off, instead of repeating daily. This is the default for a brand-new
+ * alarm; it only becomes `false` once the user picks at least one day chip.
+ */
+val StrictAlarmEntry.isOneTime: Boolean get() = daysOfWeek.isEmpty()
+
+/**
+ * Next trigger time for this alarm after [nowMillis]. Returns null only
+ * when the alarm is disabled.
+ *
+ * Two modes, matching how every mainstream alarm app behaves:
+ *   • ONE-TIME (daysOfWeek empty) — next occurrence of hour:minute: today
+ *     if that hasn't passed yet, otherwise tomorrow. Fires exactly once.
+ *   • REPEATING (daysOfWeek set) — next occurrence that falls on one of
+ *     the chosen days, searching up to 7 days ahead.
  */
 fun StrictAlarmEntry.nextTriggerMillis(nowMillis: Long = System.currentTimeMillis()): Long? {
-    if (!enabled || daysOfWeek.isEmpty()) return null
+    if (!enabled) return null
 
     val cal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+
+    if (isOneTime) {
+        val todayAtTime = (cal.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (todayAtTime.timeInMillis > nowMillis) return todayAtTime.timeInMillis
+        return (todayAtTime.clone() as Calendar)
+            .apply { add(Calendar.DAY_OF_YEAR, 1) }
+            .timeInMillis
+    }
 
     for (dayOffset in 0..7) {
         val candidate = (cal.clone() as Calendar).apply {
