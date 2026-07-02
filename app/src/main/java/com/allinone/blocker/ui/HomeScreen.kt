@@ -156,6 +156,7 @@ fun HomeScreen(
     onOpenBlockedWebsites: () -> Unit,
     onSettings: () -> Unit,
     onAlarmClick: () -> Unit = {},
+    onPomodoroClick: () -> Unit = {},
     onOpenStreaks: () -> Unit = {},
     onOpenStats: () -> Unit = {},
     isDarkTheme: Boolean,
@@ -206,6 +207,12 @@ fun HomeScreen(
                     scope.launch {
                         drawerState.close()
                         onAlarmClick()
+                    }
+                },
+                onPomodoroClick = {
+                    scope.launch {
+                        drawerState.close()
+                        onPomodoroClick()
                     }
                 },
                 onSettingsClick = {
@@ -403,7 +410,7 @@ fun StreakBadge(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit) {
+fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit, onPomodoroClick: () -> Unit) {
     ModalDrawerSheet(
         drawerContainerColor = BgDarkest,
         modifier = Modifier
@@ -430,6 +437,8 @@ fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit) {
             HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
             Spacer(Modifier.height(20.dp))
             DrawerItem(icon = Icons.Filled.AlarmOn, label = "Strict Alarm", onClick = onAlarmClick)
+            Spacer(Modifier.height(8.dp))
+            DrawerItem(icon = Icons.Filled.Timer, label = "Pomodoro", onClick = onPomodoroClick)
             Spacer(Modifier.height(8.dp))
             DrawerItem(icon = Icons.Filled.Settings, label = "Settings",     onClick = onSettingsClick)
         }
