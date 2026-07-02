@@ -1,5 +1,11 @@
 package com.allinone.blocker.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,9 +40,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.allinone.blocker.data.BlockPreset
 import com.allinone.blocker.data.BlockedApp
 import com.allinone.blocker.data.BlockerRepository
@@ -119,7 +129,14 @@ private fun BlockedAppsList(apps: List<BlockedApp>, onEdit: (String) -> Unit, mo
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             items(apps, key = { it.packageName }) { app ->
-                BlockedAppRow(app = app, onEdit = onEdit)
+                BlockedAppRow(
+                    app = app,
+                    onEdit = onEdit,
+                    // animateItem() is what makes the rows above and below
+                    // a deleted app slide smoothly into the gap instead of
+                    // jumping there instantly.
+                    modifier = Modifier.animateItem()
+                )
             }
             item { Spacer(Modifier.size(72.dp)) }
         }
@@ -127,9 +144,23 @@ private fun BlockedAppsList(apps: List<BlockedApp>, onEdit: (String) -> Unit, mo
 }
 
 @Composable
-private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit) {
+private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit, modifier: Modifier = Modifier) {
     val icon = remember(app.packageName) { InstalledApps.iconFor(app.packageName) }
     val haptics = rememberHaptics()
+
+    // Controls whether this row is on screen. Deleting an app doesn't
+    // remove it from the real list right away — it first fades + shrinks
+    // out over REMOVE_ANIM_MS, and only then is it actually deleted from
+    // BlockerRepository. That's what turns "row instantly disappears"
+    // into "row plays a little exit animation, then is gone".
+    var visible by remember(app.packageName) { mutableStateOf(true) }
+
+    LaunchedEffect(visible) {
+        if (!visible) {
+            delay(REMOVE_ANIM_MS)
+            BlockerRepository.removeApp(app.packageName)
+        }
+    }
 
     val onToggle: (Boolean) -> Unit = remember(app) {
         { wantsOn ->
@@ -142,67 +173,82 @@ private fun BlockedAppRow(app: BlockedApp, onEdit: (String) -> Unit) {
             }
         }
     }
+    // guard() may run this immediately, or hold it until the person clears
+    // a Strict Mode challenge — either way, all it does here is flip
+    // `visible` to false, which is what kicks off the exit animation above.
     val onDelete: () -> Unit = remember(app.packageName) {
-        { StrictModeGate.guard { BlockerRepository.removeApp(app.packageName) } }
+        { StrictModeGate.guard { visible = false } }
     }
     val onRowClick: () -> Unit = remember(app.packageName) {
         { onEdit(app.packageName) }
     }
 
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .clickable(onClick = onRowClick),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        elevation = CardDefaults.cardElevation(0.dp)
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = fadeIn(tween(REMOVE_ANIM_MS.toInt())) + scaleIn(initialScale = 0.9f, animationSpec = tween(REMOVE_ANIM_MS.toInt())),
+        exit = fadeOut(tween(REMOVE_ANIM_MS.toInt())) + scaleOut(targetScale = 0.85f, animationSpec = tween(REMOVE_ANIM_MS.toInt()))
     ) {
-        Row(
+        Card(
             Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(vertical = 6.dp)
+                .clickable(onClick = onRowClick),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardSurface),
+            elevation = CardDefaults.cardElevation(0.dp)
         ) {
-            AppIconOrLetter(icon = icon, label = app.appName)
-            Spacer(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    app.appName,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary
-                )
-                val summary = remember(app.rules, app.protection, app.preset) {
-                    when (app.preset) {
-                        BlockPreset.MINDFUL       -> "Mindful use · 30 min/day"
-                        BlockPreset.HARD_LIMITS   -> "Hard limits · time window"
-                        BlockPreset.FULLY_BLOCKED -> "Fully blocked"
-                        BlockPreset.CUSTOM        ->
-                            if (app.rules.isEmpty()) "Custom · always blocked"
-                            else "Custom · ${app.rules.size} rule${if (app.rules.size == 1) "" else "s"}"
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AppIconOrLetter(icon = icon, label = app.appName)
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        app.appName,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
+                    val summary = remember(app.rules, app.protection, app.preset) {
+                        when (app.preset) {
+                            BlockPreset.MINDFUL       -> "Mindful use · 30 min/day"
+                            BlockPreset.HARD_LIMITS   -> "Hard limits · time window"
+                            BlockPreset.FULLY_BLOCKED -> "Fully blocked"
+                            BlockPreset.CUSTOM        ->
+                                if (app.rules.isEmpty()) "Custom · always blocked"
+                                else "Custom · ${app.rules.size} rule${if (app.rules.size == 1) "" else "s"}"
+                        }
                     }
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 }
-                Text(summary, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-            }
-            Switch(
-                checked = app.enabled,
-                onCheckedChange = { checked -> haptics.toggleTick(); onToggle(checked) },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor    = Color.White,
-                    checkedTrackColor    = AccentBlue,
-                    checkedBorderColor   = AccentBlue,
-                    uncheckedThumbColor  = TextTertiary,
-                    uncheckedTrackColor  = BgDarkest,
-                    uncheckedBorderColor = TextTertiary
+                Switch(
+                    checked = app.enabled,
+                    onCheckedChange = { checked -> haptics.toggleTick(); onToggle(checked) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor    = Color.White,
+                        checkedTrackColor    = AccentBlue,
+                        checkedBorderColor   = AccentBlue,
+                        uncheckedThumbColor  = TextTertiary,
+                        uncheckedTrackColor  = BgDarkest,
+                        uncheckedBorderColor = TextTertiary
+                    )
                 )
-            )
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = TextSecondary)
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = TextSecondary)
+                }
             }
         }
     }
 }
+
+// Shared duration (in milliseconds) for the row's own fade+scale exit
+// animation. Kept short so deleting still feels instant/responsive, not
+// sluggish.
+private const val REMOVE_ANIM_MS = 180L
 
 private val AVATAR_COLORS = listOf(
     AccentBlue,
