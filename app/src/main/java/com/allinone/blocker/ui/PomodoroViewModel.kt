@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 enum class PomodoroMode {
     FOCUS, SHORT_BREAK, LONG_BREAK
@@ -38,8 +39,14 @@ data class PomodoroState(
     val timerState: TimerState = TimerState.IDLE,
     val timeRemaining: Int = 25 * 60,   // seconds
     val totalTime: Int = 25 * 60,       // seconds
-    val completedSessions: Int = 0,
-    val settings: PomodoroSettings = PomodoroSettings()
+    val completedSessions: Int = 0,     // focus sessions finished today
+    val focusSecondsToday: Int = 0,     // total real focused time today, in seconds
+    val settings: PomodoroSettings = PomodoroSettings(),
+    // Bumped by +1 every time a focus session completes. The screen watches
+    // this (not a plain Boolean) so a LaunchedEffect can fire a celebration
+    // exactly once per completion, even if two completions happen back to
+    // back before the UI recomposes in between.
+    val celebrationTick: Int = 0
 )
 
 class PomodoroViewModel(application: Application) : AndroidViewModel(application) {
@@ -105,9 +112,47 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // DAILY STATS
+    //
+    // "Completed Today" and "Focused Today" only mean something if they
+    // actually reset at midnight. The old version persisted completed
+    // session count forever, so it silently drifted into "completed ever" —
+    // technically wrong and, worse, it made the stat feel meaningless over
+    // time. Both counters now live alongside a day key (year*1000+dayOfYear,
+    // same scheme StreakRepository already uses elsewhere in the app) and
+    // get zeroed the first time they're touched on a new day.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private fun todayKey(): Int {
+        val c = Calendar.getInstance()
+        return c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR)
+    }
+
+    private fun rolloverStatsIfNewDay() {
+        val today = todayKey()
+        val savedDay = prefs.getInt("stats_day_key", today)
+        if (savedDay != today) {
+            prefs.edit()
+                .putInt("stats_day_key", today)
+                .putInt("completed_sessions", 0)
+                .putInt("focus_seconds_today", 0)
+                .apply()
+        }
+    }
+
     private fun loadState() {
+        rolloverStatsIfNewDay()
         val completedSessions = prefs.getInt("completed_sessions", 0)
-        _state.value = _state.value.copy(completedSessions = completedSessions)
+        val focusSecondsToday = prefs.getInt("focus_seconds_today", 0)
+        _state.value = _state.value.copy(
+            completedSessions = completedSessions,
+            focusSecondsToday = focusSecondsToday
+        )
+    }
+
+    private fun persistFocusSecondsToday() {
+        prefs.edit().putInt("focus_seconds_today", _state.value.focusSecondsToday).apply()
     }
 
     fun startTimer() {
@@ -118,8 +163,11 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         timerJob = viewModelScope.launch {
             while (_state.value.timeRemaining > 0 && _state.value.timerState == TimerState.RUNNING) {
                 delay(1000)
+                if (_state.value.timerState != TimerState.RUNNING) break
+                val tickingFocus = _state.value.mode == PomodoroMode.FOCUS
                 _state.value = _state.value.copy(
-                    timeRemaining = (_state.value.timeRemaining - 1).coerceAtLeast(0)
+                    timeRemaining = (_state.value.timeRemaining - 1).coerceAtLeast(0),
+                    focusSecondsToday = if (tickingFocus) _state.value.focusSecondsToday + 1 else _state.value.focusSecondsToday
                 )
             }
 
@@ -132,10 +180,12 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     fun pauseTimer() {
         _state.value = _state.value.copy(timerState = TimerState.PAUSED)
         timerJob?.cancel()
+        persistFocusSecondsToday()
     }
 
     fun resetTimer() {
         timerJob?.cancel()
+        persistFocusSecondsToday()
         val totalTime = when (_state.value.mode) {
             PomodoroMode.FOCUS -> _state.value.settings.focusDuration * 60
             PomodoroMode.SHORT_BREAK -> _state.value.settings.shortBreakDuration * 60
@@ -148,7 +198,29 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    /**
+     * Jumps straight to the next mode without finishing the countdown.
+     * Skipping a FOCUS session deliberately does NOT award a completed
+     * session credit — that stat should mean "actually focused for the
+     * full duration", not "tapped skip". Skipping a break never needed
+     * that protection, so it's a plain, immediate switch either way.
+     */
+    fun skipSession() {
+        if (_state.value.timerState == TimerState.IDLE) return
+        timerJob?.cancel()
+        persistFocusSecondsToday()
+        val currentState = _state.value
+        val nextMode = if (currentState.mode == PomodoroMode.FOCUS) {
+            PomodoroMode.SHORT_BREAK
+        } else {
+            PomodoroMode.FOCUS
+        }
+        switchMode(nextMode, currentState.completedSessions)
+    }
+
     private fun onTimerComplete() {
+        rolloverStatsIfNewDay()
+        persistFocusSecondsToday()
         val currentState = _state.value
         
         // Show notification
@@ -168,6 +240,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 switchMode(nextMode, newCompletedSessions)
+                _state.value = _state.value.copy(celebrationTick = _state.value.celebrationTick + 1)
 
                 if (currentState.settings.autoStartBreaks) {
                     startTimer()
@@ -241,12 +314,16 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun resetStats() {
-        prefs.edit().putInt("completed_sessions", 0).apply()
-        _state.value = _state.value.copy(completedSessions = 0)
+        prefs.edit()
+            .putInt("completed_sessions", 0)
+            .putInt("focus_seconds_today", 0)
+            .apply()
+        _state.value = _state.value.copy(completedSessions = 0, focusSecondsToday = 0)
     }
 
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
+        persistFocusSecondsToday()
     }
 }
