@@ -144,26 +144,30 @@ fun StrictAlarmListScreen(
         onJustAddedAlarmsConsumed()
     }
 
-    // ── Quick "Alarm set for X from now" message after a single save ───────
-    // Same MD3 Snackbar host as the batch message above, but a short,
-    // no-action toast — the same beat as stock Android/Samsung's Clock app
-    // showing "Alarm set for 7 hr 12 min from now" right after you save.
+    // ── Quick "Alarm set for X from now" confirmation ───────────────────────
+    // This one used to reuse the Snackbar host below, but a snackbar's job is
+    // messages that might need an action (Undo, etc.) — this is a pure
+    // "here's what just happened" confirmation, so it gets its own compact
+    // floating pill instead. See AlarmSetToast.kt for the full reasoning.
+    var alarmToastVisible by remember { mutableStateOf(false) }
+    var alarmToastRelativeTime by remember { mutableStateOf("") }
+
     LaunchedEffect(justSavedAlarm) {
         val saved = justSavedAlarm ?: return@LaunchedEffect
         val next  = saved.nextTriggerMillis()
         if (next != null) {
+            alarmToastRelativeTime = formatRelativeAlarmTime(next)
+            alarmToastVisible = true
             scope.launch {
-                snackbarHostState.showSnackbar(
-                    message           = "Alarm set for ${formatRelativeAlarmTime(next)} from now",
-                    withDismissAction = false,
-                    duration          = androidx.compose.material3.SnackbarDuration.Short
-                )
+                delay(2600L)
+                alarmToastVisible = false
             }
         }
         onJustSavedAlarmConsumed()
     }
 
-    Scaffold(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) { data ->
             Snackbar(
                 snackbarData    = data,
@@ -266,6 +270,12 @@ fun StrictAlarmListScreen(
                 }
             )
         }
+        }
+
+        AlarmSetToast(
+            visible      = alarmToastVisible,
+            relativeTime = alarmToastRelativeTime
+        )
     }
 }
 
