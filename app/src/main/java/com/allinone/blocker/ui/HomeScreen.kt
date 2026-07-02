@@ -79,6 +79,8 @@ import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.StreakRepository
+import com.allinone.blocker.ui.motion.AnimatedAppearance
+import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentGreen
@@ -94,6 +96,56 @@ import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME ENTRANCE — "cold open" cascade
+//
+// The first time Home is shown after the app process starts, its main blocks
+// (greeting, screen-time card, shortcuts, quick controls, presets) should
+// gently cascade in one after another — a soft "the app just woke up" feel.
+// But tapping between bottom-nav tabs (Stats → Home, Lockdown → Home, etc.)
+// during the same session should NOT replay it every time.
+//
+// Bottom-nav tab switching in AppRoot (MainActivity.kt) works by flipping a
+// `screen` state and re-entering this composable's branch of a `when` block —
+// which disposes and rebuilds HomeScreen's composition on every switch. A
+// plain `remember { }` living inside HomeScreen would therefore reset (and
+// replay the entrance) on every tab switch, since a fresh composition means a
+// fresh `remember`. To survive that, "have we already played the entrance
+// this app session" is tracked in a plain top-level object instead of
+// composition state — it only resets when the process actually dies, i.e. a
+// real cold start.
+//
+// This mirrors the "once per X" pattern StreaksScreen already uses for its
+// flame entrance (see ENTRANCE_PREFS there) — same idea, adapted: Streaks
+// persists "once per calendar day" via SharedPreferences (it needs to survive
+// an app kill), while Home only needs "once per process", since relaunching
+// the app IS itself a fresh "waking up" moment worth re-playing.
+// ─────────────────────────────────────────────────────────────────────────────
+private object HomeEntranceState {
+    var played = false
+}
+
+/**
+ * Wraps [content] in the shared [AnimatedAppearance] entrance, staggered by
+ * [index] using the same [MotionTokens.StaggerStepMs] timing as the rest of
+ * the app (see StatsScreen/SleepCalculatorScreen for the same pattern) — but
+ * only while [animate] is true. Once the entrance has played for this Home
+ * composition, callers pass `animate = false` and content renders instantly,
+ * with no wrapper at all.
+ */
+@Composable
+private fun HomeEntranceSection(
+    index: Int,
+    animate: Boolean,
+    content: @Composable () -> Unit
+) {
+    if (animate) {
+        AnimatedAppearance(delayMs = index * MotionTokens.StaggerStepMs) { content() }
+    } else {
+        content()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -137,6 +189,14 @@ fun HomeScreen(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // Snapshot "has the entrance already played this session" once, the first
+    // time this composition appears. See HomeEntranceState above for why this
+    // lives outside `remember` state.
+    val shouldAnimateEntrance = remember { !HomeEntranceState.played }
+    LaunchedEffect(Unit) {
+        HomeEntranceState.played = true
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -218,56 +278,66 @@ fun HomeScreen(
             ) {
                 Spacer(Modifier.height(4.dp))
 
-                GreetingHeader(userName = "Arthur")
+                HomeEntranceSection(index = 0, animate = shouldAnimateEntrance) {
+                    GreetingHeader(userName = "Arthur")
+                }
 
-                ScreenTimeCard(
-                    totalMinutes = totalScreenMinutes,
-                    yesterdayMinutes = yesterdayScreenMinutes,
-                    goalMinutes = dailyGoalMinutes,
-                    streak = streak,
-                    brokenToday = brokenToday,
-                    onShowStats = onOpenStats,
-                    onStreakClick = onOpenStreaks
-                )
+                HomeEntranceSection(index = 1, animate = shouldAnimateEntrance) {
+                    ScreenTimeCard(
+                        totalMinutes = totalScreenMinutes,
+                        yesterdayMinutes = yesterdayScreenMinutes,
+                        goalMinutes = dailyGoalMinutes,
+                        streak = streak,
+                        brokenToday = brokenToday,
+                        onShowStats = onOpenStats,
+                        onStreakClick = onOpenStreaks
+                    )
+                }
 
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    HomeSectionHeader(text = "Shortcuts")
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        ShortcutCard(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Filled.Apps,
-                            count = apps.size,
-                            label = "Blocked Apps",
-                            accentColor = AccentBlue,
-                            onClick = onOpenBlockedApps
-                        )
-                        ShortcutCard(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Filled.Language,
-                            count = websites.size,
-                            label = "Blocked Websites",
-                            accentColor = AccentTeal,
-                            onClick = onOpenBlockedWebsites
+                HomeEntranceSection(index = 2, animate = shouldAnimateEntrance) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HomeSectionHeader(text = "Shortcuts")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            ShortcutCard(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Filled.Apps,
+                                count = apps.size,
+                                label = "Blocked Apps",
+                                accentColor = AccentBlue,
+                                onClick = onOpenBlockedApps
+                            )
+                            ShortcutCard(
+                                modifier = Modifier.weight(1f),
+                                icon = Icons.Filled.Language,
+                                count = websites.size,
+                                label = "Blocked Websites",
+                                accentColor = AccentTeal,
+                                onClick = onOpenBlockedWebsites
+                            )
+                        }
+                    }
+                }
+
+                HomeEntranceSection(index = 3, animate = shouldAnimateEntrance) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HomeSectionHeader(text = "Quick Controls")
+                        ToggleCard(
+                            title = "Reels & Shorts",
+                            subtitle = "Instantly block Instagram, YouTube & TikTok feeds",
+                            checked = reels,
+                            accentColor = AccentRed,
+                            icon = Icons.Filled.VideocamOff,
+                            onChange = onReelsChange
                         )
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    HomeSectionHeader(text = "Quick Controls")
-                    ToggleCard(
-                        title = "Reels & Shorts",
-                        subtitle = "Instantly block Instagram, YouTube & TikTok feeds",
-                        checked = reels,
-                        accentColor = AccentRed,
-                        icon = Icons.Filled.VideocamOff,
-                        onChange = onReelsChange
-                    )
+                HomeEntranceSection(index = 4, animate = shouldAnimateEntrance) {
+                    PresetsSection()
                 }
-
-                PresetsSection()
 
                 Spacer(Modifier.height(80.dp))
             }
