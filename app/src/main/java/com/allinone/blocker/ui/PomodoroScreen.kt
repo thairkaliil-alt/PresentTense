@@ -34,6 +34,7 @@ package com.allinone.blocker.ui
 // ═══════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeIn
