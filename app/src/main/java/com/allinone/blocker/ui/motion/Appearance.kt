@@ -14,27 +14,48 @@ package com.allinone.blocker.ui.motion
 //     (the "list settling into place" effect used by Things, Apple Music, etc.).
 //   • AppearWhen           — animate in/out as a boolean flips (cross-fade+rise),
 //     a softer alternative to a bare AnimatedVisibility.
+//
+// PERFORMANCE NOTE (read this before changing anything here)
+//   AnimatedAppearance used to be built on AnimatedVisibility + slideInVertically.
+//   That combo is fine for ONE thing appearing on its own, but it was being used
+//   for entire cascades (5 Home sections, then a further 12 preset cards inside
+//   one of those sections — 17 of them animating within the same second). The
+//   problem: slideInVertically drives a real LAYOUT offset, so every animating
+//   item forces its parent through a fresh measure+layout pass on EVERY
+//   animation frame, not just a redraw. Multiply that by 17 concurrent items and
+//   the main thread falls behind, which is what read as "the whole app is
+//   laggy" right after opening Home, and "the list doesn't even look animated"
+//   for the presets cascade (frames were being dropped, not skipped on purpose).
+//
+//   The fix below drives the same fade + tiny rise through Modifier.graphicsLayer
+//   instead — alpha and translationY there are pure DRAW-phase transforms, so
+//   they never trigger a layout pass. Visually identical, far cheaper with many
+//   items animating at once.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 /**
  * Fades + gently rises its [content] into place the first time it enters
- * composition. Idempotent and cheap — safe to wrap any card or section.
+ * composition. Idempotent and cheap — safe to wrap any card or section, and
+ * safe to use many of at once (see the performance note above).
  *
  * @param delayMs stagger this entrance after others (used by [StaggeredColumn]).
- * @param visible drive the entrance externally; defaults to "animate on first show".
  */
 @Composable
 fun AnimatedAppearance(
@@ -50,25 +71,23 @@ fun AnimatedAppearance(
         return
     }
 
-    // MutableTransitionState lets us start at `false` then flip to `true` after
-    // composition (optionally after a stagger delay), which is what actually
-    // triggers the enter transition.
-    val state = remember { MutableTransitionState(false) }
+    // A single Animatable drives both the fade and the rise. We read it inside
+    // Modifier.graphicsLayer (a draw-phase-only lambda), so recomposing this
+    // value on every animation tick never asks the parent to re-measure or
+    // re-layout — just re-draw, which is the cheap part.
+    val progress = remember { Animatable(0f) }
+    val slidePx = with(LocalDensity.current) { MotionTokens.EnterSlideDp.dp.toPx() }
+
     LaunchedEffect(Unit) {
-        if (delayMs > 0) kotlinx.coroutines.delay(delayMs.toLong())
-        state.targetState = true
+        if (delayMs > 0) delay(delayMs.toLong())
+        progress.animateTo(1f, animationSpec = MotionSpecs.enter(MotionDurations.Emphasized))
     }
 
-    AnimatedVisibility(
-        visibleState = state,
-        modifier = modifier,
-        enter = fadeIn(
-            animationSpec = MotionSpecs.enter(MotionDurations.Emphasized)
-        ) + slideInVertically(
-            animationSpec = MotionSpecs.enter(MotionDurations.Emphasized),
-            initialOffsetY = { withDensity(it, MotionTokens.EnterSlideDp) }
-        ),
-        exit = fadeOut(animationSpec = MotionSpecs.exit())
+    Box(
+        modifier = modifier.graphicsLayer {
+            alpha = progress.value
+            translationY = (1f - progress.value) * slidePx
+        }
     ) {
         content()
     }
@@ -79,6 +98,13 @@ fun AnimatedAppearance(
  * [MotionTokens.StaggerStepMs] after the previous one. The classic "list gently
  * settling in" effect. Keep lists short (≤ ~8 visible) or the tail feels slow.
  *
+ * @param animate set to false to skip the cascade entirely and render every
+ *   item instantly — use this for repeat visits (e.g. switching back to a tab)
+ *   where the entrance has already played once and shouldn't replay.
+ * @param startDelayMs stagger the WHOLE column's cascade after something else
+ *   (e.g. other sections above it animating in first), so it reads as one
+ *   continuous cascade instead of two separate ones stacked back to back.
+ *
  * Usage:
  *   StaggeredColumn(rows) { row -> RowCard(row) }
  */
@@ -88,15 +114,21 @@ fun <T> StaggeredColumn(
     modifier: Modifier = Modifier,
     spacing: androidx.compose.ui.unit.Dp = 0.dp,
     stepMs: Int = MotionTokens.StaggerStepMs,
-    itemContent: @Composable (T) -> Unit
+    animate: Boolean = true,
+    startDelayMs: Int = 0,
+    itemContent: @Composable (item: T, index: Int) -> Unit
 ) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(spacing)
     ) {
         items.forEachIndexed { index, item ->
-            AnimatedAppearance(delayMs = index * stepMs) {
-                itemContent(item)
+            if (animate) {
+                AnimatedAppearance(delayMs = startDelayMs + index * stepMs) {
+                    itemContent(item, index)
+                }
+            } else {
+                itemContent(item, index)
             }
         }
     }
