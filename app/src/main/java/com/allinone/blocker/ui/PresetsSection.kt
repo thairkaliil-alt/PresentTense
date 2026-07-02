@@ -384,7 +384,10 @@ val ALL_PRESETS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PresetsSection() {
+fun PresetsSection(
+    animate: Boolean = true,
+    startDelayMs: Int = 0
+) {
     var selectedPreset by remember { mutableStateOf<BlockingPreset?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -405,15 +408,20 @@ fun PresetsSection() {
 
         // Cards cascade in on first show — a calm "settling into place" that makes
         // the section feel alive without shouting. Stagger is capped low so the
-        // tail of a 12-item list doesn't feel slow.
+        // tail of a 12-item list doesn't feel slow. `animate` lets the caller
+        // (HomeScreen) skip the cascade on repeat visits, and `startDelayMs`
+        // lets it continue on from whatever cascade came before this section
+        // instead of restarting from zero.
         com.allinone.blocker.ui.motion.StaggeredColumn(
             items = ALL_PRESETS,
             spacing = 16.dp,
-            stepMs = 40
-        ) { preset ->
+            stepMs = 40,
+            animate = animate,
+            startDelayMs = startDelayMs
+        ) { preset, index ->
             PresetCard(
                 preset = preset,
-                position = ALL_PRESETS.indexOf(preset) + 1,
+                position = index + 1,
                 total = ALL_PRESETS.size,
                 onClick = { selectedPreset = preset }
             )
