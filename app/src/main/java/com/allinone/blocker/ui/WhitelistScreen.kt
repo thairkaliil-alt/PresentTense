@@ -192,7 +192,12 @@ fun WhitelistScreen(onBack: () -> Unit) {
                     onToggle    = { checked ->
                         if (checked) BlockerRepository.addToWhitelist(device.packageName)
                         else BlockerRepository.removeFromWhitelist(device.packageName)
-                    }
+                    },
+                    // animateItem() smooths out the list whenever rows are
+                    // added/removed here — e.g. typing in the search box
+                    // above, which is what actually changes which rows are
+                    // in this list (see note in WhitelistToggleRow).
+                    modifier = Modifier.animateItem()
                 )
             }
 
@@ -209,7 +214,8 @@ private fun WhitelistToggleRow(
     packageName : String,
     label       : String,
     whitelisted : Boolean,
-    onToggle    : (Boolean) -> Unit
+    onToggle    : (Boolean) -> Unit,
+    modifier    : Modifier = Modifier
 ) {
     val haptics = rememberHaptics()
     val cardBg by animateColorAsState(
@@ -239,7 +245,7 @@ private fun WhitelistToggleRow(
     }
 
     Card(
-        modifier  = Modifier.fillMaxWidth(),
+        modifier  = modifier.fillMaxWidth(),
         shape     = RoundedCornerShape(16.dp),
         colors    = CardDefaults.cardColors(containerColor = cardBg),
         border    = BorderStroke(1.5.dp, borderColor),
