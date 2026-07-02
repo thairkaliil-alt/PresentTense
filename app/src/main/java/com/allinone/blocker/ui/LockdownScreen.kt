@@ -1,6 +1,8 @@
 package com.allinone.blocker.ui
 
+import android.app.Activity
 import android.app.TimePickerDialog
+import android.content.ContextWrapper
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -72,6 +74,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -104,6 +107,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
@@ -192,6 +198,40 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     val goHome: () -> Unit = { LockdownLauncherActivity.launch(context) }
     val reducedMotion = LocalReducedMotion.current
 
+    // ── True edge-to-edge for the void ────────────────────────────────────
+    // fillMaxSize() alone only fills the app's *content* area — Android
+    // reserves a strip at the bottom for the gesture/nav bar ("the ribbon")
+    // and won't let a normal composable paint under it. The same trick
+    // LockdownLauncherActivity already uses (immersive, transient-by-swipe)
+    // is applied here for the few hundred milliseconds of the hold, so the
+    // void genuinely eats the whole physical screen instead of stopping
+    // short at that strip. It's restored immediately if the hold is
+    // released early; if it's committed, LockdownLauncherActivity takes
+    // over the window right after and sets its own immersive flags anyway.
+    val hostActivity = remember(context) {
+        var ctx = context
+        while (ctx is ContextWrapper && ctx !is Activity) ctx = ctx.baseContext
+        ctx as? Activity
+    }
+    fun setImmersive(hidden: Boolean) {
+        val window = hostActivity?.window ?: return
+        WindowCompat.setDecorFitsSystemWindows(window, !hidden)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            if (hidden) {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+    // Safety net: if this screen is ever torn down mid-hold (process death,
+    // back navigation racing the gesture, etc.) don't leave the host
+    // Activity stuck without its system bars.
+    DisposableEffect(Unit) {
+        onDispose { setImmersive(false) }
+    }
+
     // ── Armed duration ───────────────────────────────────────────────────
     // Picking a preset chip or confirming the custom dial no longer starts
     // anything by itself — it only "arms" the orb with a chosen number of
@@ -219,6 +259,10 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     LaunchedEffect(isHolding) {
         if (isHolding) {
             voidCommitted = false
+            // Go edge-to-edge the instant the hold begins, so the void's
+            // very first frame already paints under the nav-bar ribbon
+            // instead of popping late once it catches up.
+            setImmersive(true)
             val chargeMs = if (reducedMotion) 160 else VOID_HOLD_MS
             // Accelerate easing (slow start, fast finish) so the void reads
             // like something gathering pull before rapidly swallowing the
@@ -242,6 +286,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
             if (reducedMotion) voidProgress.snapTo(0f)
             else voidProgress.animateTo(0f, MotionSpecs.exit(MotionDurations.Emphasized))
             holdOrigin = null
+            setImmersive(false)
         }
     }
 
@@ -533,17 +578,28 @@ private fun LiquidGlassOrb(
 // in [LockdownScreen]); releasing early lets this same circle contract
 // back down instead of just vanishing.
 //
-// Motion references: Material 3's expressive-motion guidance for shapes
-// that grow from a touch point and decelerate as they commit, and the
-// hold-to-confirm gestures in iOS's "Hold to power off" and Instagram's
-// record button, where the progress indicator and the payoff are the same
-// visual object rather than two separate animations chained together.
+// Motion references: Material 3 Expressive's "hero moment" guidance — brief,
+// physics-driven beats reserved for the one or two interactions per app that
+// deserve to feel alive rather than efficient — applied to a shape that grows
+// from a touch point and decelerate as it commits; the hold-to-confirm
+// gestures in iOS's "Hold to power off" and Instagram's record button, where
+// the progress indicator and the payoff are the same visual object rather
+// than two separate animations chained together; and the "energy absorption"
+// language mobile games use for consuming/collecting moments (loot vacuuming
+// into a reward chest, a portal pulling in matter) — implemented here as
+// particles spiraling into the void rather than a flat circular wipe, which
+// is what makes a progress reveal feel gamified instead of mechanical.
 // Timing deliberately runs past the ~400ms Doherty threshold this app's
 // motion system otherwise holds to everywhere else (see Motion.kt) —
 // everyday micro-interactions should be fast, but this is a once-a-session
 // ritual, closer to a game's level-transition wipe than a button press.
 
-private const val VOID_HOLD_MS = 900
+// 2200ms — deliberately slower than a typical hold-to-confirm (iOS's "Hold
+// to power off" runs ~2s; Instagram's record button has no fixed ceiling but
+// reads similarly unhurried past the first second). A once-a-session ritual
+// like starting a lockdown benefits from feeling weighty rather than snappy —
+// long enough that letting go early is a real, felt choice, not a twitch.
+private const val VOID_HOLD_MS = 2200
 
 @Composable
 private fun VoidExpansion(origin: Offset, progress: Float) {
@@ -587,24 +643,57 @@ private fun VoidExpansion(origin: Offset, progress: Float) {
             val fillColor = lerp(AccentBlue, lockdownBlack, colorMix)
             val edgeColor = lerp(AccentTeal, lockdownBlack, colorMix)
 
-            // Concentric echo rings continuously emanate from the edge
-            // while there's still energy left (before it's gone fully
-            // black) — a small "portal pulse" that reads as gamified
-            // rather than a flat mechanical wipe, entirely driven by
-            // progress so it never needs its own animation clock.
+            // Concentric echo rings continuously emanate from the edge while
+            // there's still energy left (before it's gone fully black) — a
+            // "portal pulse" stack. Bumped from 3 to 7, tighter-spaced, so
+            // the edge reads as a dense, layered pulse instead of a few
+            // isolated ripples — entirely driven by progress so it never
+            // needs its own animation clock.
+            val ringCount = 7
             if (colorMix < 1f) {
-                for (i in 0 until 3) {
-                    val phase = ((progress * 2.1f) + i / 3f) % 1f
+                for (i in 0 until ringCount) {
+                    val phase = ((progress * 2.6f) + i.toFloat() / ringCount) % 1f
                     val ringRadius = startRadiusPx + (maxRadiusPx - startRadiusPx) * phase
-                    val ringAlpha  = (1f - phase) * 0.22f * (1f - colorMix)
+                    val ringAlpha  = (1f - phase) * 0.20f * (1f - colorMix)
                     if (ringAlpha > 0.01f) {
                         drawCircle(
                             color  = edgeColor.copy(alpha = ringAlpha),
                             radius = ringRadius,
                             center = origin,
-                            style  = Stroke(width = 3.dp.toPx())
+                            style  = Stroke(width = (1.5f + (i % 3)).dp.toPx())
                         )
                     }
+                }
+            }
+
+            // Consumption particles — a wide halo of motes swirling and
+            // spiraling inward toward the growing edge, like matter being
+            // pulled into a portal/vacuum (a common "collect" or "absorb"
+            // beat in mobile games, e.g. loot flying into a reward chest).
+            // Positions are pure functions of progress + index, so this
+            // needs no particle system or extra animation clock — the same
+            // "state IS the visual" approach as the void's radius itself.
+            // Golden-angle spacing (137.5°) gives an even, non-repeating
+            // spread instead of particles clumping into visible rows.
+            if (colorMix < 1f) {
+                val particleCount = 40
+                val spinDeg = progress * 300f
+                for (i in 0 until particleCount) {
+                    val seedAngle  = (i * 137.5f) % 360f
+                    val angleRad   = Math.toRadians((seedAngle + spinDeg).toDouble())
+                    val laneJitter = (i % 5) / 5f
+                    // Orbit sits just outside the growing edge and is pulled
+                    // in closer as progress climbs — the spiral-inward read.
+                    val orbitRadius = radius * (1.08f + laneJitter * 0.35f) * (1f - progress * 0.4f)
+                    val px = origin.x + (orbitRadius * cos(angleRad)).toFloat()
+                    val py = origin.y + (orbitRadius * sin(angleRad)).toFloat()
+                    val particleAlpha = 0.55f * (1f - colorMix) * (0.35f + 0.65f * laneJitter)
+                    val particleRadius = (1f + (i % 3)).dp.toPx()
+                    drawCircle(
+                        color  = edgeColor.copy(alpha = particleAlpha),
+                        radius = particleRadius,
+                        center = Offset(px, py)
+                    )
                 }
             }
 
@@ -618,10 +707,17 @@ private fun VoidExpansion(origin: Offset, progress: Float) {
                 center = origin
             )
 
-            // Bright energetic rim right at the growing edge — the "am I
-            // still charging" read at a glance — fading out as the color
+            // Two-layer rim right at the growing edge — a soft outer bloom
+            // plus a crisp inner line — the "am I still charging" read at a
+            // glance, denser than a single stroke, fading out as the color
             // finishes saturating to black.
             if (colorMix < 1f) {
+                drawCircle(
+                    color  = edgeColor.copy(alpha = 0.20f * (1f - colorMix)),
+                    radius = radius,
+                    center = origin,
+                    style  = Stroke(width = 10.dp.toPx())
+                )
                 drawCircle(
                     color  = Color.White.copy(alpha = 0.35f * (1f - colorMix)),
                     radius = radius,
