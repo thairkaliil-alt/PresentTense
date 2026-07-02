@@ -2,6 +2,7 @@ package com.allinone.blocker.ui
 
 import android.app.TimePickerDialog
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
@@ -150,6 +151,7 @@ private fun defFor(preset: BlockPreset) = PRESETS.first { it.preset == preset }
 @Composable
 fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> Unit, onOpenStrictMode: () -> Unit) {
     val context = LocalContext.current
+    val haptics = com.allinone.blocker.ui.motion.rememberHaptics()
 
     // ── Load existing saved app (null if this is a brand-new addition) ────
     val savedApp = remember {
@@ -202,6 +204,7 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
     fun updateDraft(updated: BlockedApp) { draft = updated }
 
     fun applyPreset(def: PresetDef) {
+        haptics.tap()
         updateDraft(
             current.copy(
                 preset = def.preset,
@@ -285,7 +288,7 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
             PRESETS.forEach { def ->
                 PresetCard(
                     def      = def,
-                    selected = (!isNew || savedApp != null) && current.preset == def.preset,
+                    selected = presetChosen && current.preset == def.preset,
                     onClick  = { applyPreset(def) }
                 )
             }
@@ -353,17 +356,51 @@ fun AppRulesScreen(packageName: String?, isNew: Boolean = false, onBack: () -> U
 
 @Composable
 private fun PresetCard(def: PresetDef, selected: Boolean, onClick: () -> Unit) {
-    val borderColor = if (selected) def.color else Color.Transparent
-    val bgColor     = if (selected) def.color.copy(alpha = 0.10f) else CardSurface
+    // Animate every colour that changes on selection, instead of snapping
+    // instantly — this is what makes the state change read as a deliberate
+    // response to the tap rather than "did anything happen at all?".
+    val borderColor by androidx.compose.animation.animateColorAsState(
+        targetValue   = if (selected) def.color else CardSurfaceAlt,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetBorderColor"
+    )
+    val borderWidth by androidx.compose.animation.core.animateDpAsState(
+        targetValue   = if (selected) 2.dp else 0.5.dp,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetBorderWidth"
+    )
+    val bgColor by androidx.compose.animation.animateColorAsState(
+        targetValue   = if (selected) def.color.copy(alpha = 0.10f) else CardSurface,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetBgColor"
+    )
+    val iconBubbleAlpha by animateFloatAsState(
+        targetValue   = if (selected) 0.22f else 0.14f,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetIconBubbleAlpha"
+    )
+    val labelColor by androidx.compose.animation.animateColorAsState(
+        targetValue   = if (selected) def.color else TextPrimary,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetLabelColor"
+    )
+    val descriptionColor by androidx.compose.animation.animateColorAsState(
+        targetValue   = if (selected) TextPrimary else TextSecondary,
+        animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard(),
+        label = "presetDescriptionColor"
+    )
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick),
+            // Tactile press-squeeze instead of a plain clickable — the card
+            // "gives" slightly under a finger, the same feedback used for
+            // the Strict Mode card below it.
+            .pressable(onClick = onClick),
         shape  = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = bgColor),
-        border = BorderStroke(width = if (selected) 2.dp else 0.5.dp, color = if (selected) borderColor else CardSurfaceAlt),
+        border = BorderStroke(width = borderWidth, color = borderColor),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
         Row(
@@ -378,7 +415,7 @@ private fun PresetCard(def: PresetDef, selected: Boolean, onClick: () -> Unit) {
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(def.color.copy(alpha = if (selected) 0.22f else 0.14f)),
+                    .background(def.color.copy(alpha = iconBubbleAlpha)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -398,7 +435,7 @@ private fun PresetCard(def: PresetDef, selected: Boolean, onClick: () -> Unit) {
                         def.label,
                         style    = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color    = if (selected) def.color else TextPrimary
+                        color    = labelColor
                     )
                     // Tagline pill
                     Box(
@@ -419,12 +456,21 @@ private fun PresetCard(def: PresetDef, selected: Boolean, onClick: () -> Unit) {
                 Text(
                     def.description,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (selected) TextPrimary else TextSecondary
+                    color = descriptionColor
                 )
             }
 
-            // Checkmark when selected
-            if (selected) {
+            // Checkmark pops in with a scale+fade rather than abruptly
+            // appearing — a small flourish that draws the eye right to the
+            // moment selection happened.
+            androidx.compose.animation.AnimatedVisibility(
+                visible = selected,
+                enter = androidx.compose.animation.scaleIn(
+                    initialScale = 0.4f,
+                    animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.expressive()
+                ) + androidx.compose.animation.fadeIn(animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard()),
+                exit = androidx.compose.animation.fadeOut(animationSpec = com.allinone.blocker.ui.motion.MotionSpecs.standard())
+            ) {
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = "Selected",
