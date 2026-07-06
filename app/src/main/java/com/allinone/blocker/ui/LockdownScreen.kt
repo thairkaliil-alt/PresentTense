@@ -3,6 +3,7 @@ package com.allinone.blocker.ui
 import android.app.Activity
 import android.app.TimePickerDialog
 import android.content.ContextWrapper
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -14,6 +15,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -46,9 +51,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -65,8 +72,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -162,6 +167,18 @@ private val DURATION_PRESETS = listOf(
     DurationPreset("90m",   90),
     DurationPreset("2h",   120),
     DurationPreset("Custom", -1)
+)
+
+// Quick-pick presets for a single emergency break's length. Reuses the same
+// DurationChip look as the lockdown-length picker above so the two "pick a
+// duration" moments in this screen feel like one consistent design language
+// instead of two different controls (chips vs. a slider).
+private val BREAK_DURATION_PRESETS = listOf(
+    DurationPreset("5m",  5),
+    DurationPreset("10m", 10),
+    DurationPreset("15m", 15),
+    DurationPreset("20m", 20),
+    DurationPreset("30m", 30)
 )
 
 // ════════════════════════════════════ Screen root ════════════════════════════════════
@@ -1079,6 +1096,201 @@ private fun ActiveLockdownPanel(
     }
 }
 
+// ════════════════════════════════════ Emergency breaks (expandable card) ════════════════════════════════════
+//
+// This used to be a section header plus a card that was always fully open —
+// two sliders and their labels sitting on the screen at all times, whether
+// or not anyone needed to touch them. That's now collapsed into a single
+// expandable card, the same "collapsed summary → tap to reveal" pattern
+// used throughout iOS Settings and Android's own Settings app: the header
+// always shows the current configuration at a glance (e.g. "2 breaks · 10
+// min each"), and the actual controls only appear once someone taps it.
+//
+// The two controls themselves were also upgraded:
+//  - "Breaks per session" (a small, precise range of 0–5) is now a stepper
+//    with +/- buttons instead of a slider — per Nielsen Norman Group's
+//    guidance, steppers give users exact, error-free control over small
+//    numeric ranges, where a slider's imprecise drag makes it easy to
+//    overshoot the number you meant to land on.
+//  - "Break duration" is now quick-pick chips (5/10/15/20/30 min), reusing
+//    the exact same DurationChip look as the lockdown-length picker at the
+//    top of this screen, so the two duration choices in this screen feel
+//    like one design instead of two.
+
+@Composable
+private fun EmergencyBreaksCard() {
+    val breakConfig by BlockerRepository.strictMode.collectAsState()
+    var expanded by remember { mutableStateOf(false) }
+
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        label       = "emergencyBreaksChevron"
+    )
+
+    val noBreaks = breakConfig.maxBreaksPerSession == 0
+    val summary = if (noBreaks) {
+        "No breaks allowed"
+    } else {
+        val breakWord = if (breakConfig.maxBreaksPerSession == 1) "break" else "breaks"
+        "${breakConfig.maxBreaksPerSession} $breakWord · ${breakConfig.breakDurationMinutes} min each"
+    }
+
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(20.dp),
+        colors    = CardDefaults.cardColors(containerColor = CardSurface),
+        border    = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f)),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+
+            // Header — always visible. The whole row is the tap target, and
+            // the subtitle doubles as a live summary so the setting is
+            // scannable even while collapsed.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier         = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(AccentTeal.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Emergency breaks", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                    Spacer(Modifier.height(2.dp))
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = if (noBreaks) AccentRed.copy(alpha = 0.85f) else TextTertiary)
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint     = TextMuted,
+                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = chevronRotation }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter   = expandVertically(animationSpec = tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(220)),
+                exit    = shrinkVertically(animationSpec = tween(180, easing = FastOutSlowInEasing)) + fadeOut(tween(140))
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
+
+                    Text(
+                        "When lockdown is active, you can request a short break. Configure how many and how long each one lasts.",
+                        style = MaterialTheme.typography.bodySmall, color = TextTertiary
+                    )
+
+                    // Breaks per session — stepper
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Breaks per session", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
+                        BreakCountStepper(
+                            value         = breakConfig.maxBreaksPerSession,
+                            range         = 0..5,
+                            onValueChange = { BlockerRepository.setStrictMode(breakConfig.copy(maxBreaksPerSession = it)) }
+                        )
+                        if (noBreaks) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AccentRed.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text("No breaks allowed. Once lockdown starts, it runs until it ends.", style = MaterialTheme.typography.bodySmall, color = AccentRed)
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
+
+                    // Break duration — quick-pick chips
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Break duration", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            BREAK_DURATION_PRESETS.forEach { preset ->
+                                DurationChip(
+                                    preset   = preset,
+                                    selected = breakConfig.breakDurationMinutes == preset.minutes,
+                                    modifier = Modifier.weight(1f),
+                                    onClick  = { BlockerRepository.setStrictMode(breakConfig.copy(breakDurationMinutes = preset.minutes)) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A small precise range (0–5) reads and adjusts far more reliably as a
+// stepper than as a slider: every tap is exactly ±1, there's no risk of
+// dragging past the number you meant to land on, and "None" is spelled out
+// in words rather than just showing "0", which is easy to misread as "min".
+@Composable
+private fun BreakCountStepper(value: Int, range: IntRange, onValueChange: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(TextTertiary.copy(alpha = 0.07f))
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        StepperIconButton(
+            icon    = Icons.Filled.Remove,
+            enabled = value > range.first,
+            onClick = { onValueChange((value - 1).coerceIn(range)) }
+        )
+
+        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (value == 0) "None" else "$value",
+                style      = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color      = if (value == 0) AccentRed else TextPrimary
+            )
+            Text(
+                if (value == 0) "no breaks" else if (value == 1) "break" else "breaks",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        }
+
+        StepperIconButton(
+            icon    = Icons.Filled.Add,
+            enabled = value < range.last,
+            onClick = { onValueChange((value + 1).coerceIn(range)) }
+        )
+    }
+}
+
+// Shared +/- button for the stepper above. Disabled (rather than hidden) at
+// the ends of the range, per standard stepper accessibility guidance, so the
+// control never visually jumps around as the value nears its limits.
+@Composable
+private fun StepperIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    val bg   = if (enabled) AccentTeal.copy(alpha = 0.16f) else TextTertiary.copy(alpha = 0.06f)
+    val tint = if (enabled) AccentTeal else TextMuted.copy(alpha = 0.35f)
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(50.dp))
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
 // ════════════════════════════════════ Section header + schedule cards ════════════════════════════════════
 
 @Composable
@@ -1196,69 +1408,9 @@ private fun EmbeddedLockdownLazyColumn(
             Spacer(Modifier.height(4.dp))
         }
 
-        // ── 3. Emergency breaks ────────────────────────────────────────────
-        item(key = "emergency_breaks_header") { SectionHeader(title = "Emergency breaks") }
-
+        // ── 3. Emergency breaks (expandable — see EmergencyBreaksCard) ──────
         item(key = "emergency_breaks_card") {
-            val breakConfig by BlockerRepository.strictMode.collectAsState()
-            Card(
-                modifier  = Modifier.fillMaxWidth(),
-                shape     = RoundedCornerShape(20.dp),
-                colors    = CardDefaults.cardColors(containerColor = CardSurface),
-                elevation = CardDefaults.cardElevation(0.dp)
-            ) {
-                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                    Text("When lockdown is active, you can request a short break. Configure how many and how long each one lasts.", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Breaks per session", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
-                            EmergencyBreakPill(
-                                label = if (breakConfig.maxBreaksPerSession == 0) "None" else "${breakConfig.maxBreaksPerSession}",
-                                color = if (breakConfig.maxBreaksPerSession == 0) AccentRed else AccentTeal
-                            )
-                        }
-                        Slider(
-                            value         = breakConfig.maxBreaksPerSession.toFloat(),
-                            onValueChange = { BlockerRepository.setStrictMode(breakConfig.copy(maxBreaksPerSession = it.toInt())) },
-                            valueRange    = 0f..5f,
-                            steps         = 4,
-                            colors        = SliderDefaults.colors(thumbColor = AccentTeal, activeTrackColor = AccentTeal, inactiveTrackColor = AccentTeal.copy(alpha = 0.2f))
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("0 (none)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                            Text("5", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                        }
-                        if (breakConfig.maxBreaksPerSession == 0) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AccentRed.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Text("No breaks allowed. Once lockdown starts, it runs until it ends.", style = MaterialTheme.typography.bodySmall, color = AccentRed)
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Break duration", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
-                            EmergencyBreakPill(label = "${breakConfig.breakDurationMinutes} min", color = AccentTeal)
-                        }
-                        Slider(
-                            value         = breakConfig.breakDurationMinutes.toFloat(),
-                            onValueChange = { BlockerRepository.setStrictMode(breakConfig.copy(breakDurationMinutes = it.toInt())) },
-                            valueRange    = 1f..30f,
-                            steps         = 28,
-                            colors        = SliderDefaults.colors(thumbColor = AccentTeal, activeTrackColor = AccentTeal, inactiveTrackColor = AccentTeal.copy(alpha = 0.2f))
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("1 min", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                            Text("30 min", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                        }
-                    }
-                }
-            }
+            EmergencyBreaksCard()
         }
 
         // ── 4. Daily schedules ─────────────────────────────────────────────
@@ -1451,11 +1603,4 @@ private fun pickTime(context: android.content.Context, currentMinutes: Int, onPi
 private fun formatCountdown(totalSec: Long): String {
     val h = totalSec / 3600; val m = (totalSec % 3600) / 60; val s = totalSec % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
-
-@Composable
-private fun EmergencyBreakPill(label: String, color: Color) {
-    Box(modifier = Modifier.clip(RoundedCornerShape(50.dp)).background(color.copy(alpha = 0.16f)).padding(horizontal = 12.dp, vertical = 4.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = color)
-    }
 }
