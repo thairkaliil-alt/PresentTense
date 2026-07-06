@@ -1,5 +1,6 @@
 package com.allinone.blocker.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,7 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -45,13 +46,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionSpecs
+import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -172,21 +176,51 @@ fun AppPickerScreen(onBack: () -> Unit, onPicked: (String) -> Unit) {
                 return@Scaffold
             }
 
+            // PERFORMANCE + BUGFIX (same pattern as BlockedAppsScreen): the
+            // "settle into place" entrance should play exactly ONCE, the
+            // first time this screen opens — not every time a row scrolls
+            // back into view, and not on every keystroke while searching.
+            // LazyColumn throws away and rebuilds rows that scroll off
+            // screen, so without this screen-level flag every row would
+            // have no memory of "have I already appeared" and would try to
+            // re-appear constantly, which is what reads as "no real
+            // animation" (it's playing, just re-triggering nonstop and
+            // fighting with scroll for frame time).
+            var entranceAnimationPlayed by remember { mutableStateOf(false) }
+            val showPopularSection = popularApps.isNotEmpty() && query.isBlank()
+            // Only the first ANIMATED_ROW_CAP rows of EACH section cascade in —
+            // "keep cascades short or the tail feels slow" (see Appearance.kt).
+            // The "All apps" section's cascade starts right after the popular
+            // section's finishes, so the two read as one continuous settle
+            // instead of two separate pops.
+            val popularAnimCount = if (showPopularSection) minOf(popularApps.size, ANIMATED_ROW_CAP) else 0
+            val allSectionStartDelay = popularAnimCount * MotionTokens.StaggerStepMs
+
+            LaunchedEffect(Unit) {
+                val cascadeMs = allSectionStartDelay +
+                    MotionTokens.StaggerStepMs * ANIMATED_ROW_CAP +
+                    MotionDurations.Emphasized
+                delay(cascadeMs.toLong())
+                entranceAnimationPlayed = true
+            }
+
             LazyColumn(Modifier.fillMaxSize()) {
 
                 // ── Popular to block section ──────────────────────────────
-                if (popularApps.isNotEmpty() && query.isBlank()) {
+                if (showPopularSection) {
                     item {
                         SectionHeader(
                             title    = "Popular to block",
                             subtitle = "Apps most people add first"
                         )
                     }
-                    items(popularApps, key = { "pop_${it.packageName}" }) { device ->
+                    itemsIndexed(popularApps, key = { _, app -> "pop_${app.packageName}" }) { index, device ->
                         PickerRow(
-                            device         = device,
-                            alreadyBlocked = blockedPkgs.contains(device.packageName),
-                            onPick         = { pick(device) }
+                            device          = device,
+                            alreadyBlocked  = blockedPkgs.contains(device.packageName),
+                            onPick          = { pick(device) },
+                            animateEntrance = !entranceAnimationPlayed && index < ANIMATED_ROW_CAP,
+                            entranceDelayMs = index * MotionTokens.StaggerStepMs
                         )
                     }
                     item {
@@ -198,11 +232,13 @@ fun AppPickerScreen(onBack: () -> Unit, onPicked: (String) -> Unit) {
                 }
 
                 // ── Full list (or search results) ─────────────────────────
-                items(filteredAll, key = { it.packageName }) { device ->
+                itemsIndexed(filteredAll, key = { _, app -> app.packageName }) { index, device ->
                     PickerRow(
-                        device         = device,
-                        alreadyBlocked = blockedPkgs.contains(device.packageName),
-                        onPick         = { pick(device) }
+                        device          = device,
+                        alreadyBlocked  = blockedPkgs.contains(device.packageName),
+                        onPick          = { pick(device) },
+                        animateEntrance = !entranceAnimationPlayed && index < ANIMATED_ROW_CAP,
+                        entranceDelayMs = allSectionStartDelay + index * MotionTokens.StaggerStepMs
                     )
                 }
 
@@ -211,6 +247,11 @@ fun AppPickerScreen(onBack: () -> Unit, onPicked: (String) -> Unit) {
         }
     }
 }
+
+// Cap on how many rows play the entrance cascade per section — matches the
+// app-wide "keep staggered cascades short" convention (see Appearance.kt and
+// BlockedAppsScreen.kt).
+private const val ANIMATED_ROW_CAP = 8
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION HEADER
@@ -241,9 +282,28 @@ private fun SectionHeader(title: String, subtitle: String) {
 private fun PickerRow(
     device: DeviceApp,
     alreadyBlocked: Boolean,
-    onPick: () -> Unit
+    onPick: () -> Unit,
+    animateEntrance: Boolean = false,
+    entranceDelayMs: Int = 0
 ) {
     val haptics = rememberHaptics()
+    val reducedMotionForEntrance = LocalReducedMotion.current
+
+    // Entrance cascade — same technique as BlockedAppsScreen's rows: a plain
+    // Animatable read only inside Modifier.graphicsLayer (a draw-phase-only
+    // callback), so animating it never forces a fresh measure/layout pass.
+    // That's what makes it safe to have several of these animating in a
+    // LazyColumn at once without the scroll/fling stuttering.
+    val entranceProgress = remember(device.packageName) {
+        Animatable(if (animateEntrance && !reducedMotionForEntrance) 0f else 1f)
+    }
+    val enterSlidePx = with(LocalDensity.current) { MotionTokens.EnterSlideDp.dp.toPx() }
+    LaunchedEffect(device.packageName, animateEntrance) {
+        if (animateEntrance && !reducedMotionForEntrance) {
+            if (entranceDelayMs > 0) delay(entranceDelayMs.toLong())
+            entranceProgress.animateTo(1f, animationSpec = MotionSpecs.enter(MotionDurations.Emphasized))
+        }
+    }
 
     // The icon is USUALLY already sitting in InstalledApps' cache by the time
     // this row shows up (the scan loads every icon before the app list is
@@ -283,6 +343,10 @@ private fun PickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                alpha = entranceProgress.value
+                translationY = (1f - entranceProgress.value) * enterSlidePx
+            }
             .clickable(enabled = !alreadyBlocked, onClick = { haptics.tap(); onPick() })
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
