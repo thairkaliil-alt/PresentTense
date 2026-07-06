@@ -1,6 +1,7 @@
 package com.allinone.blocker.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -20,7 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,10 +55,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.ui.motion.LocalReducedMotion
+import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.MotionSpecs
+import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.rememberHaptics
+import kotlinx.coroutines.delay
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -131,6 +138,18 @@ fun WhitelistScreen(onBack: () -> Unit) {
         ),
         label = "dotBlink"
     )
+
+    // Entrance cascade — same "play once, then never again" pattern as
+    // BlockedAppsScreen and AppPickerScreen. Without this flag, every row
+    // that scrolls off-screen and back (or reappears after a search) would
+    // replay its "settle into place" animation forever, which is what reads
+    // as janky/laggy rather than as a one-time polish moment.
+    var entranceAnimationPlayed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val cascadeMs = MotionTokens.StaggerStepMs * ANIMATED_ROW_CAP + MotionDurations.Emphasized
+        delay(cascadeMs.toLong())
+        entranceAnimationPlayed = true
+    }
 
     Scaffold(
         containerColor = BgDarkest,
@@ -223,7 +242,7 @@ fun WhitelistScreen(onBack: () -> Unit) {
                 }
             }
 
-            items(filtered, key = { it.packageName }) { device ->
+            itemsIndexed(filtered, key = { _, app -> app.packageName }) { index, device ->
                 WhitelistToggleRow(
                     packageName = device.packageName,
                     label       = device.label,
@@ -233,6 +252,8 @@ fun WhitelistScreen(onBack: () -> Unit) {
                         if (checked) BlockerRepository.addToWhitelist(device.packageName)
                         else BlockerRepository.removeFromWhitelist(device.packageName)
                     },
+                    animateEntrance = !entranceAnimationPlayed && index < ANIMATED_ROW_CAP,
+                    entranceDelayMs = index * MotionTokens.StaggerStepMs,
                     // animateItem() smooths out the list whenever rows are
                     // added/removed here — e.g. typing in the search box
                     // above, which is what actually changes which rows are
@@ -246,19 +267,44 @@ fun WhitelistScreen(onBack: () -> Unit) {
     }
 }
 
+// Cap on how many rows play the entrance cascade — matches the app-wide
+// "keep staggered cascades short" convention (see Appearance.kt and
+// BlockedAppsScreen.kt).
+private const val ANIMATED_ROW_CAP = 8
+
 // One row per installed app — colored to match the allowed/blocked state, with
 // the same soft color-fade + status dot used elsewhere in the lockdown flow so
 // the manager screen feels like part of the same feature, not a bolted-on page.
 @Composable
 private fun WhitelistToggleRow(
-    packageName   : String,
-    label         : String,
-    whitelisted   : Boolean,
-    dotAlphaState : androidx.compose.runtime.State<Float>,
-    onToggle      : (Boolean) -> Unit,
-    modifier      : Modifier = Modifier
+    packageName     : String,
+    label           : String,
+    whitelisted     : Boolean,
+    dotAlphaState   : androidx.compose.runtime.State<Float>,
+    onToggle        : (Boolean) -> Unit,
+    modifier        : Modifier = Modifier,
+    animateEntrance : Boolean = false,
+    entranceDelayMs : Int = 0
 ) {
     val haptics = rememberHaptics()
+    val reducedMotion = LocalReducedMotion.current
+
+    // Entrance cascade — a plain Animatable read only inside
+    // Modifier.graphicsLayer (draw-phase-only), so it never forces a
+    // measure/layout pass. Same technique as BlockedAppsScreen's rows and
+    // AppPickerScreen's PickerRow, kept consistent across every app-list
+    // screen in the app.
+    val entranceProgress = remember(packageName) {
+        Animatable(if (animateEntrance && !reducedMotion) 0f else 1f)
+    }
+    val enterSlidePx = with(LocalDensity.current) { MotionTokens.EnterSlideDp.dp.toPx() }
+    LaunchedEffect(packageName, animateEntrance) {
+        if (animateEntrance && !reducedMotion) {
+            if (entranceDelayMs > 0) delay(entranceDelayMs.toLong())
+            entranceProgress.animateTo(1f, animationSpec = MotionSpecs.enter(MotionDurations.Emphasized))
+        }
+    }
+
     val cardBg by animateColorAsState(
         targetValue   = if (whitelisted) AccentTeal.copy(alpha = 0.10f) else AccentRed.copy(alpha = 0.10f),
         animationSpec = tween(durationMillis = 400),
@@ -271,7 +317,12 @@ private fun WhitelistToggleRow(
     )
 
     Card(
-        modifier  = modifier.fillMaxWidth(),
+        modifier  = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = entranceProgress.value
+                translationY = (1f - entranceProgress.value) * enterSlidePx
+            },
         shape     = RoundedCornerShape(16.dp),
         colors    = CardDefaults.cardColors(containerColor = cardBg),
         border    = BorderStroke(1.5.dp, borderColor),
