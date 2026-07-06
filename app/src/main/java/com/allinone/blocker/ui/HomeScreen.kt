@@ -57,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +83,7 @@ import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.motion.AnimatedAppearance
 import com.allinone.blocker.ui.motion.MotionTokens
+import com.allinone.blocker.ui.motion.animatedCountAsState
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentGreen
@@ -93,7 +95,9 @@ import com.allinone.blocker.ui.theme.CardSurface
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -125,6 +129,23 @@ import kotlin.math.sin
 // ─────────────────────────────────────────────────────────────────────────────
 private object HomeEntranceState {
     var played = false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME SCREEN-TIME CACHE — survives Home being disposed/rebuilt on tab switch
+//
+// Home's screen-time numbers are loaded on a background thread (see the
+// LaunchedEffect in HomeScreen below) so they never block the tab-switch
+// animation. Without this cache, every fresh visit to Home would briefly show
+// "0m" while the background load ran, even though the previous numbers were
+// already known — a visible flicker. Stashing the last-loaded values here
+// (same "outlives composition" trick as HomeEntranceState above) means Home
+// shows the last real numbers instantly, then quietly refreshes them.
+// ─────────────────────────────────────────────────────────────────────────────
+private object HomeScreenTimeCache {
+    var totalMinutes = 0
+    var yesterdayMinutes = 0
+    var goalMinutes = 0
 }
 
 /**
@@ -172,18 +193,41 @@ fun HomeScreen(
     val streak      by StreakRepository.streak.collectAsState()
     val brokenToday by StreakRepository.brokenToday.collectAsState()
 
-   val totalScreenMinutes = remember(refreshKey) {
-        // Force a reconcile so the cache is warm on every home visit
-        ScreenTimeTracker.reconcile(context, force = true)
-        ScreenTimeTracker.todayTotalMinutes(context)
-    }
+    // PERF FIX (tab-switch stutter): this used to call ScreenTimeTracker.reconcile()
+    // and read the database directly inside remember(refreshKey) — which runs
+    // during composition, on the main/UI thread. reconcile() talks to Android's
+    // UsageStatsManager (a cross-process call) and writes to SQLite, both of
+    // which take real time. Doing that synchronously meant the ENTIRE screen —
+    // including the tab-switch animation — was stuck waiting for it to finish
+    // before it could even start drawing. That's what caused the visible pause
+    // every time Home reloaded (returning from another tab, resuming the app).
+    //
+    // Fix: do the same work in a coroutine on Dispatchers.IO (background thread)
+    // instead, so composition + the animation can proceed immediately. The
+    // small HomeScreenTimeCache below remembers the last values that were
+    // loaded so returning to Home shows real numbers right away instead of
+    // flashing "0" while the fresh numbers load in the background.
+    var totalScreenMinutes     by remember { mutableIntStateOf(HomeScreenTimeCache.totalMinutes) }
+    var yesterdayScreenMinutes by remember { mutableIntStateOf(HomeScreenTimeCache.yesterdayMinutes) }
+    var dailyGoalMinutes       by remember { mutableIntStateOf(HomeScreenTimeCache.goalMinutes) }
 
-    val yesterdayScreenMinutes = remember(refreshKey) {
-        ScreenTimeTracker.yesterdayTotalMinutes(context)
-    }
-
-    val dailyGoalMinutes = remember(refreshKey) {
-        BlockerRepository.dailyGoalMinutes()
+    LaunchedEffect(refreshKey) {
+        val (today, yesterday, goal) = withContext(Dispatchers.IO) {
+            // Force a reconcile so the cache is warm on every home visit —
+            // same behavior as before, just off the main thread now.
+            ScreenTimeTracker.reconcile(context, force = true)
+            Triple(
+                ScreenTimeTracker.todayTotalMinutes(context),
+                ScreenTimeTracker.yesterdayTotalMinutes(context),
+                BlockerRepository.dailyGoalMinutes()
+            )
+        }
+        totalScreenMinutes = today
+        yesterdayScreenMinutes = yesterday
+        dailyGoalMinutes = goal
+        HomeScreenTimeCache.totalMinutes = today
+        HomeScreenTimeCache.yesterdayMinutes = yesterday
+        HomeScreenTimeCache.goalMinutes = goal
     }
     val onReelsChange: (Boolean) -> Unit = remember {
         { BlockerRepository.setReelsKillSwitch(it) }
@@ -605,44 +649,52 @@ fun ScreenTimeCard(
 ) {
     val hasGoal = goalMinutes > 0
 
+    // Smoothly counts toward totalMinutes instead of snapping straight to it.
+    // Home now opens instantly on cached numbers and loads the fresh ones in
+    // the background (see HomeScreen above) — when those fresh numbers land,
+    // this makes the headline number visibly tick up/down to the new value,
+    // and the color/label/progress-bar below ride along with it, instead of
+    // everything just popping to a new state.
+    val displayMinutes by animatedCountAsState(totalMinutes)
+
     val usageRatio by animateFloatAsState(
-        targetValue = if (hasGoal) (totalMinutes.toFloat() / goalMinutes.toFloat()).coerceIn(0f, 1f)
-                      else (totalMinutes / 180f).coerceIn(0f, 1f),
+        targetValue = if (hasGoal) (displayMinutes.toFloat() / goalMinutes.toFloat()).coerceIn(0f, 1f)
+                      else (displayMinutes / 180f).coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 900),
         label = "usageBar"
     )
 
-    val noData = totalMinutes == 0
+    val noData = displayMinutes == 0
 
     // Colour encodes urgency — thresholds use the real goal if one is set
     val threshold1 = if (hasGoal) goalMinutes else 180
     val threshold2 = if (hasGoal) (goalMinutes * 0.33).toInt() else 60
     val accentColor: Color = when {
-        totalMinutes >= threshold1 -> AccentAmber
-        totalMinutes >= threshold2 -> AccentBlue
-        else                       -> AccentTeal
+        displayMinutes >= threshold1 -> AccentAmber
+        displayMinutes >= threshold2 -> AccentBlue
+        else                         -> AccentTeal
     }
 
     val mutedColor = Color(0xFF8A8FA8)
 
     // Single inline label sitting just below the big number
     val statusLabel = when {
-        noData                                     -> "No data yet"
-        hasGoal && totalMinutes >= goalMinutes      -> "Goal reached"
-        hasGoal                                    -> "${goalMinutes - totalMinutes} min left"
-        totalMinutes < 60                          -> "Light day"
-        totalMinutes in 60..179                    -> "Moderate"
-        else                                       -> "Heavy day"
+        noData                                       -> "No data yet"
+        hasGoal && displayMinutes >= goalMinutes      -> "Goal reached"
+        hasGoal                                      -> "${goalMinutes - displayMinutes} min left"
+        displayMinutes < 60                           -> "Light day"
+        displayMinutes in 60..179                     -> "Moderate"
+        else                                          -> "Heavy day"
     }
 
     // Percentage of the actual saved goal (0 = no goal set)
-    val goalPercent = if (hasGoal) ((totalMinutes.toFloat() / goalMinutes.toFloat()) * 100).toInt().coerceAtMost(100) else 0
+    val goalPercent = if (hasGoal) ((displayMinutes.toFloat() / goalMinutes.toFloat()) * 100).toInt().coerceAtMost(100) else 0
 
     // Quiet positive-only comparison vs. yesterday. Only ever shows improvement -
     // if today is equal to or higher than yesterday, this is simply null and the
     // pill doesn't render. No red state, no "worse than yesterday" message ever.
-    val improvementPercent: Int? = if (yesterdayMinutes > 0 && totalMinutes < yesterdayMinutes) {
-        (((yesterdayMinutes - totalMinutes).toFloat() / yesterdayMinutes.toFloat()) * 100)
+    val improvementPercent: Int? = if (yesterdayMinutes > 0 && displayMinutes < yesterdayMinutes) {
+        (((yesterdayMinutes - displayMinutes).toFloat() / yesterdayMinutes.toFloat()) * 100)
             .toInt()
             .coerceIn(1, 99)
     } else null
@@ -679,7 +731,7 @@ fun ScreenTimeCard(
 
             // ── 2. Big number — the only hero element ─────────────────────
             Text(
-                text = if (noData) "–" else formatMinutes(totalMinutes),
+                text = if (noData) "–" else formatMinutes(displayMinutes),
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
                 color = if (noData) mutedColor else accentColor
