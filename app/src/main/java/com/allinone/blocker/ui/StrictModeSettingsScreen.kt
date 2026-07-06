@@ -10,8 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationOn
@@ -154,15 +153,31 @@ private val STRICT_PRESETS = listOf(
     )
 )
 
-private fun frictionLabel(type: FrictionType): String = when (type) {
-    FrictionType.COOLDOWN      -> "Cooldown timer"
-    FrictionType.MATH_PUZZLE   -> "Math puzzle"
-    FrictionType.WORD_SCRAMBLE -> "Word scramble"
-    FrictionType.PIN           -> "PIN code"
-    FrictionType.TYPING_PLEDGE -> "Typing pledge"
-    FrictionType.LOCATION_LOCK -> "Location lock"
-    FrictionType.PLAN_LOCK     -> "Active plan"
+// Plain-English, one-line explanation of what each friction layer actually
+// DOES — shown as a checklist on the preset cards so a non-technical user
+// can tell what they're turning on without needing to already know what
+// e.g. "Word scramble" means.
+private fun frictionExplanation(type: FrictionType): String = when (type) {
+    FrictionType.COOLDOWN      -> "Short timed wait before a block can be switched off"
+    FrictionType.MATH_PUZZLE   -> "Solve a quick math problem before you're let through"
+    FrictionType.WORD_SCRAMBLE -> "Unscramble a word before you're let through"
+    FrictionType.PIN           -> "Enter a PIN code that only you know"
+    FrictionType.TYPING_PLEDGE -> "Type out a pledge phrase you wrote to yourself"
+    FrictionType.LOCATION_LOCK -> "Locks automatically while you're inside a place you chose"
+    FrictionType.PLAN_LOCK     -> "Locks this plan in place for a set time — no early changes"
 }
+
+// Fixed order so the checklist reads the same way on every preset card,
+// regardless of the order frictions happen to be stored in.
+private val FRICTION_DISPLAY_ORDER = listOf(
+    FrictionType.COOLDOWN,
+    FrictionType.MATH_PUZZLE,
+    FrictionType.WORD_SCRAMBLE,
+    FrictionType.PIN,
+    FrictionType.TYPING_PLEDGE,
+    FrictionType.LOCATION_LOCK,
+    FrictionType.PLAN_LOCK
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN SCREEN
@@ -402,7 +417,7 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
 // PRESET CARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StrictPresetCard(
     preset: StrictPreset,
@@ -480,23 +495,50 @@ private fun StrictPresetCard(
                 lineHeight = 18.sp
             )
 
-            // Friction chips
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            // "What's included" checklist — a plain-English sentence per
+            // layer instead of a jargon tag, so it's clear at a glance what
+            // the plan actually does (not just its internal feature name).
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accent.copy(alpha = 0.06f))
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                preset.frictions.forEach { friction ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(accent.copy(alpha = 0.12f))
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                Text(
+                    "WHAT THIS INCLUDES",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = accent.copy(alpha = 0.85f),
+                    letterSpacing = 0.6.sp
+                )
+                FRICTION_DISPLAY_ORDER.filter { it in preset.frictions }.forEach { friction ->
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 1.dp)
+                                .size(16.dp)
+                                .clip(RoundedCornerShape(50.dp))
+                                .background(accent.copy(alpha = 0.20f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
                         Text(
-                            frictionLabel(friction),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = accent,
-                            fontWeight = FontWeight.Medium
+                            frictionExplanation(friction),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
