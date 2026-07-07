@@ -197,10 +197,19 @@ private val BgDarkestDark  = Color(0xFF0E1219)    // was #0F1117 — matches the
 private val CardSurfaceDark    = Color(0xFF1C2333) // was #222529 — blue-grey tint
 private val CardSurfaceAltDark = Color(0xFF232A3A) // was #2C3036 — same family
 
-private val BgScreenLight   = LightBackground      // #F7F6F3 — warm off-white
-private val BgDarkestLight  = Color(0xFFEDEBE6)    // one shade deeper than the screen bg
-private val CardSurfaceLight    = LightSurface         // #E7E5E0
-private val CardSurfaceAltLight = LightSurfaceVariant  // #D8DCE0
+// Cards used to sit almost exactly on top of the screen background (both were
+// near-identical warm greys), so nothing ever looked "lifted" — the whole
+// screen read as one flat surface instead of a stack of distinct cards. Real
+// premium-feeling apps (Notion, Linear, Revolut) lean on a strong contrast
+// step between "page" and "card": a soft neutral page behind crisp white (or
+// near-white) cards that get their separation from a real drop shadow, not
+// just a 10%-opacity border. See the `elevation` params added on Card(...)
+// calls in LockdownScreen.kt — those shadows only read correctly once there's
+// an actual brightness gap for them to fall onto.
+private val BgScreenLight   = Color(0xFFF2F1EE)    // slightly deeper than pure white so white cards clearly lift off it
+private val BgDarkestLight  = Color(0xFFE9E7E1)    // top bar / bottom nav — one clear step down from the screen
+private val CardSurfaceLight    = Color(0xFFFFFFFF)    // crisp white card — was a near-invisible grey-on-grey
+private val CardSurfaceAltLight = Color(0xFFEAF2F8)    // soft blue-tinted white for the "hero" card, so it reads as the primary action without shouting
 
 val BgScreen: Color
     @Composable get() = if (LocalIsDarkTheme.current) BgScreenDark else BgScreenLight
