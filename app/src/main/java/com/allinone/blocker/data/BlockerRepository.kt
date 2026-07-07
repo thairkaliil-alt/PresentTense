@@ -243,12 +243,14 @@ object BlockerRepository {
         _manualLockUntil.value = until
         prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, until).apply()
         resetBreaksForNewSession()
+        LockdownGuard.ensureRunning(appContext)
     }
 
     fun startManualLockIndefinite() {
         _manualLockUntil.value = Long.MAX_VALUE
         prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, Long.MAX_VALUE).apply()
         resetBreaksForNewSession()
+        LockdownGuard.ensureRunning(appContext)
     }
 
     // No endManualLock(): a running lockdown always runs its course. The
