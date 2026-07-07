@@ -200,9 +200,20 @@ object BlockerRepository {
     }
 
     fun addToWhitelist(pkg: String) {
+        // The phone's Settings app is where Accessibility Service / Device
+        // Admin get turned off — i.e. the actual kill switch for lockdown
+        // enforcement — so it can never be added to the whitelist, no
+        // matter what calls this. (Defense in depth: the accessibility
+        // service also hard-corrals it regardless of whitelist state —
+        // see AppBlockerAccessibilityService.shouldCorralDuringLockdown —
+        // this just stops it from ever getting saved in the first place.)
+        if (LockdownEngine.isSystemSettingsPackage(pkg)) return
         _whitelist.value = _whitelist.value + pkg
         persistWhitelist()
     }
+
+    /** True for entries the whitelist UI should refuse to toggle on — see [addToWhitelist]. */
+    fun isProtectedFromWhitelist(pkg: String): Boolean = LockdownEngine.isSystemSettingsPackage(pkg)
 
     fun removeFromWhitelist(pkg: String) {
         _whitelist.value = _whitelist.value - pkg
