@@ -126,6 +126,7 @@ import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
+import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
@@ -160,13 +161,15 @@ private val DAY_ORDER = listOf(
 
 private data class DurationPreset(val label: String, val minutes: Int)
 
+// No "Custom" entry anymore — the dial in the Pick Duration card can reach
+// any value directly, so these are now pure quick-jump shortcuts rather than
+// the only way to pick a duration.
 private val DURATION_PRESETS = listOf(
     DurationPreset("15m",   15),
     DurationPreset("25m",   25),
     DurationPreset("50m",   50),
     DurationPreset("90m",   90),
-    DurationPreset("2h",   120),
-    DurationPreset("Custom", -1)
+    DurationPreset("2h",   120)
 )
 
 // Quick-pick presets for a single emergency break's length. Reuses the same
@@ -193,8 +196,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
 
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var showAddSchedule    by remember { mutableStateOf<LockdownSchedule?>(null) }
-    var showCustomMinutes  by remember { mutableStateOf(false) }
-    var customStartMinutes by remember { mutableStateOf(45) }
 
     val decisionPreview = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
@@ -250,12 +251,14 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     }
 
     // ── Armed duration ───────────────────────────────────────────────────
-    // Picking a preset chip or confirming the custom dial no longer starts
+    // Dragging the dial (or tapping a quick-jump pill) never starts
     // anything by itself — it only "arms" the orb with a chosen number of
     // minutes. The ONLY way a lockdown actually begins is holding the orb
-    // down until the void below finishes swallowing the screen.
-    var armedMinutes by remember { mutableStateOf<Int?>(null) }
-    var armedIsCustom by remember { mutableStateOf(false) }
+    // down until the void below finishes swallowing the screen. Starts
+    // pre-loaded at 25 minutes (a classic single focus-block length) so
+    // there's always a sensible value ready the first time someone opens
+    // this screen, rather than forcing a choice before the orb does anything.
+    var armedMinutes by remember { mutableStateOf(25) }
 
     // ── Hold-to-void ignition state ──────────────────────────────────────
     // Lives here, at the screen root, rather than down inside the hero
@@ -295,8 +298,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 BlockerRepository.startManualLock(mins)
                 goHome()
             }
-            armedMinutes  = null
-            armedIsCustom = false
         } else if (!voidCommitted) {
             // Released early — ease back down instead of snapping, so
             // letting go still feels deliberate rather than broken.
@@ -344,9 +345,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 schedules           = schedules,
                 onManageWhitelist   = onManageWhitelist,
                 armedMinutes        = armedMinutes,
-                armedIsCustom       = armedIsCustom,
-                onSelectPreset      = { mins -> armedMinutes = mins; armedIsCustom = false },
-                onCustom            = { prefill -> customStartMinutes = prefill; showCustomMinutes = true },
+                onSelectPreset      = { mins -> armedMinutes = mins },
                 voidProgress        = voidProgress.value,
                 onHoldStart         = { origin, mins -> holdOrigin = origin; holdArmedMinutes = mins; isHolding = true },
                 onHoldEnd           = { isHolding = false },
@@ -381,21 +380,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
             }
         )
     }
-
-    if (showCustomMinutes) {
-        RadialTimerDialog(
-            initialMinutes = customStartMinutes,
-            onDismiss      = { showCustomMinutes = false },
-            onConfirm      = { mins ->
-                // Confirming the dial only arms the orb with this duration —
-                // it does NOT start the lockdown. Holding the orb is what
-                // actually triggers it.
-                armedMinutes      = mins
-                armedIsCustom     = true
-                showCustomMinutes = false
-            }
-        )
-    }
 }
 
 // ════════════════════════════════════ Liquid Glass Orb ════════════════════════════════════
@@ -414,7 +398,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
 @Composable
 private fun LiquidGlassOrb(
     modifier    : Modifier = Modifier,
-    armedMinutes: Int?     = null,
+    armedMinutes: Int      = 25,
     progress    : Float    = 0f,
     onHoldStart : (Offset, Int) -> Unit = { _, _ -> },
     onHoldEnd   : () -> Unit = {}
@@ -442,11 +426,7 @@ private fun LiquidGlassOrb(
         label = "glow_alpha"
     )
 
-    // shakeOffset gives a quick "no" wobble if someone holds without a
-    // duration picked yet — the only bit of hold feedback still local to
-    // the orb, since it's a rejection that never becomes a void at all.
     var orbCenterInRoot by remember { mutableStateOf(Offset.Zero) }
-    val shakeOffset      = remember { Animatable(0f) }
 
     // As the hold progresses, the glass glows brighter and eases in very
     // slightly — a physical "gathering energy" read — and the inner icon
@@ -465,30 +445,12 @@ private fun LiquidGlassOrb(
                 val p = coords.positionInRoot()
                 orbCenterInRoot = Offset(p.x + coords.size.width / 2f, p.y + coords.size.height / 2f)
             }
-            .graphicsLayer { translationX = shakeOffset.value }
             .pointerInput(armedMinutes, reducedMotion) {
                 coroutineScope {
                     while (true) {
                         awaitPointerEventScope { awaitFirstDown(requireUnconsumed = false) }
-
-                        val mins = armedMinutes
-                        if (mins == null) {
-                            // Nothing armed — reject immediately with a
-                            // shake rather than letting someone hold
-                            // indefinitely for nothing.
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            launch {
-                                shakeOffset.animateTo(12f, tween(55))
-                                shakeOffset.animateTo(-12f, tween(85))
-                                shakeOffset.animateTo(6f, tween(70))
-                                shakeOffset.animateTo(0f, tween(70))
-                            }
-                            awaitPointerEventScope { waitForUpOrCancellation() }
-                            continue
-                        }
-
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onHoldStart(orbCenterInRoot, mins)
+                        onHoldStart(orbCenterInRoot, armedMinutes)
                         awaitPointerEventScope { waitForUpOrCancellation() }
                         onHoldEnd()
                     }
@@ -750,25 +712,12 @@ private fun VoidExpansion(origin: Offset, progress: Float) {
 
 @Composable
 private fun LockdownHeroSection(
-    armedMinutes  : Int?,
-    armedIsCustom : Boolean,
+    armedMinutes  : Int,
     voidProgress  : Float,
-    onSelectPreset: (Int?) -> Unit,
-    onCustom      : (Int) -> Unit,
+    onSelectPreset: (Int) -> Unit,
     onHoldStart   : (Offset, Int) -> Unit = { _, _ -> },
     onHoldEnd     : () -> Unit = {}
 ) {
-    // Which chip should read as highlighted. A fixed preset chip is selected
-    // when its minute value matches the armed value AND that value didn't
-    // come from the custom dial; the Custom chip is selected purely off
-    // armedIsCustom, since a custom time could coincidentally match a preset
-    // number (e.g. dialing in exactly 25m).
-    val selectedPreset = when {
-        armedIsCustom        -> DURATION_PRESETS.last()
-        armedMinutes != null -> DURATION_PRESETS.firstOrNull { it.minutes == armedMinutes }
-        else                 -> null
-    }
-
     Column(
         modifier              = Modifier.fillMaxWidth(),
         horizontalAlignment   = Alignment.CenterHorizontally
@@ -776,8 +725,8 @@ private fun LockdownHeroSection(
         Spacer(Modifier.height(8.dp))
         LiquidGlassOrb(
             // The orb only ever fires from a hold gesture — see
-            // [LiquidGlassOrb] below. Picking a chip or confirming the
-            // custom dial just sets armedMinutes; nothing else in this
+            // [LiquidGlassOrb] below. Dragging the dial or tapping a
+            // quick-jump pill just sets armedMinutes; nothing else in this
             // screen is allowed to start a lockdown directly.
             armedMinutes = armedMinutes,
             progress     = voidProgress,
@@ -798,76 +747,103 @@ private fun LockdownHeroSection(
 
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape    = RoundedCornerShape(24.dp),
+            shape    = RoundedCornerShape(28.dp),
             colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt)
         ) {
             Column(
-                modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp),
+                modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(18.dp))
+                    Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                }
                 Spacer(Modifier.height(4.dp))
                 Text("Everything except your whitelist will be blocked.", style = MaterialTheme.typography.bodySmall, color = TextMuted, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(4.dp))
+
+                // The live readout IS the primary feedback for this control —
+                // big enough to read at a glance while dragging, so the dial
+                // never needs a separate "confirm" step to know what's armed.
+                Text(
+                    formatDuration(armedMinutes),
+                    style      = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color      = TextPrimary
+                )
+                Spacer(Modifier.height(12.dp))
+
+                // The dial itself is the primary control — drag anywhere on
+                // the ring to set any minute value directly, rather than
+                // picking from a fixed menu of options. See [RadialDial].
+                RadialDial(minutes = armedMinutes, onMinutesChange = onSelectPreset)
+
                 Spacer(Modifier.height(20.dp))
 
-                // 3-per-row chip grid
-                DURATION_PRESETS.chunked(3).forEach { rowPresets ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        rowPresets.forEach { preset ->
-                            DurationChip(
-                                preset   = preset,
-                                selected = selectedPreset == preset,
-                                modifier = Modifier.weight(1f),
-                                onClick  = {
-                                    if (preset.minutes == -1) {
-                                        // Custom has no fixed number — always
-                                        // open the dial so a value can be
-                                        // picked (or re-picked). Confirming
-                                        // it is what actually arms the orb.
-                                        onCustom(armedMinutes?.takeIf { armedIsCustom } ?: 45)
-                                    } else if (selectedPreset == preset) {
-                                        // Tapping the already-armed chip again disarms it.
-                                        onSelectPreset(null)
-                                    } else {
-                                        onSelectPreset(preset.minutes)
-                                    }
-                                }
-                            )
-                        }
-                        repeat((3 - rowPresets.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                }
-
-                selectedPreset?.let { preset ->
-                    Spacer(Modifier.height(4.dp))
-                    HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
-                    Spacer(Modifier.height(16.dp))
-
-                    // No "Start" button here on purpose — the chips/dial only
-                    // arm a duration. The orb above is the single trigger for
-                    // actually starting a lockdown; this is just confirming
-                    // what's armed and nudging people back up to it.
-                    val armedLabel = if (armedIsCustom) formatDuration(armedMinutes ?: 0) else preset.label
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
-                        Text(
-                            "Hold the orb above to start a $armedLabel lockdown",
-                            style      = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color      = TextPrimary,
-                            textAlign  = TextAlign.Center
+                // Quick-jump pills — shortcuts onto the dial for the most
+                // common lengths, not the primary way to choose a duration
+                // anymore. Tapping one snaps the dial straight there; you can
+                // still drag from that point to fine-tune.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    DURATION_PRESETS.forEach { preset ->
+                        DurationJumpPill(
+                            label    = preset.label,
+                            selected = armedMinutes == preset.minutes,
+                            onClick  = { onSelectPreset(preset.minutes) }
                         )
                     }
-                    if (armedIsCustom) {
-                        Spacer(Modifier.height(10.dp))
-                        TextButton(onClick = { onCustom(armedMinutes ?: 45) }) {
-                            Text("Change time", color = AccentBlue, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
+                Spacer(Modifier.height(16.dp))
+
+                // No "Start" button here on purpose — the dial only arms a
+                // duration. The orb above is the single trigger for actually
+                // starting a lockdown; this is just confirming what's armed
+                // and nudging people back up to it.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
+                    Text(
+                        "Hold the orb above to start a ${formatDuration(armedMinutes)} lockdown",
+                        style      = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color      = TextPrimary,
+                        textAlign  = TextAlign.Center
+                    )
                 }
             }
         }
+    }
+}
+
+// Small pill used only as a quick-jump shortcut under the dial — visually
+// lighter than [DurationChip] on purpose, since it's now a secondary shortcut
+// rather than the primary way to pick a duration.
+@Composable
+private fun DurationJumpPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bgColor     = if (selected) AccentBlue.copy(alpha = 0.18f) else CardSurface
+    val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.18f)
+    val textColor   = if (selected) AccentBlue else TextSecondary
+
+    Box(
+        modifier         = Modifier.clip(RoundedCornerShape(999.dp)).background(bgColor).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            drawRoundRect(color = borderColor, cornerRadius = CornerRadius(999.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
+        }
+        Text(
+            text       = label,
+            style      = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color      = textColor,
+            modifier   = Modifier.padding(vertical = 8.dp, horizontal = 14.dp),
+            textAlign  = TextAlign.Center
+        )
     }
 }
 
@@ -1344,10 +1320,8 @@ private fun EmbeddedLockdownLazyColumn(
     breaksRemaining  : Int,
     schedules        : List<LockdownSchedule>,
     onManageWhitelist: () -> Unit,
-    armedMinutes     : Int?,
-    armedIsCustom    : Boolean,
-    onSelectPreset   : (Int?) -> Unit,
-    onCustom         : (Int) -> Unit,
+    armedMinutes     : Int,
+    onSelectPreset   : (Int) -> Unit,
     voidProgress     : Float,
     onHoldStart      : (Offset, Int) -> Unit,
     onHoldEnd        : () -> Unit,
@@ -1377,10 +1351,8 @@ private fun EmbeddedLockdownLazyColumn(
         item(key = "session_header") {
             if (!sessionRunning) LockdownHeroSection(
                 armedMinutes   = armedMinutes,
-                armedIsCustom  = armedIsCustom,
                 voidProgress   = voidProgress,
                 onSelectPreset = onSelectPreset,
-                onCustom       = onCustom,
                 onHoldStart    = onHoldStart,
                 onHoldEnd      = onHoldEnd
             )
@@ -1437,43 +1409,17 @@ private fun EmbeddedLockdownLazyColumn(
     }
 }
 
-// ════════════════════════════════════ Radial timer dialog ════════════════════════════════════
-
-@Composable
-private fun RadialTimerDialog(initialMinutes: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
-    var minutes by remember { mutableStateOf(initialMinutes.coerceIn(1, 240)) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = CardSurfaceAlt,
-        title            = { Text("Custom Duration", fontWeight = FontWeight.Bold, color = TextPrimary) },
-        text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Text("Drag the dial to set your focus time", style = MaterialTheme.typography.bodySmall, color = TextTertiary, textAlign = TextAlign.Center)
-                RadialDial(minutes = minutes, onMinutesChange = { minutes = it })
-                Text(formatDuration(minutes), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = TextPrimary)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NudgeButton("−15m") { minutes = (minutes - 15).coerceAtLeast(1) }
-                    NudgeButton("−5m")  { minutes = (minutes - 5).coerceAtLeast(1) }
-                    NudgeButton("+5m")  { minutes = (minutes + 5).coerceAtMost(240) }
-                    NudgeButton("+15m") { minutes = (minutes + 15).coerceAtMost(240) }
-                }
-                // This only arms the orb — it doesn't start anything. Said
-                // explicitly here so it's clear the lockdown still needs the
-                // hold gesture back on the main screen.
-                Text("This sets the time — you'll still hold the orb to start", style = MaterialTheme.typography.labelSmall, color = TextMuted, textAlign = TextAlign.Center)
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onConfirm(minutes) }, colors = ButtonDefaults.buttonColors(containerColor = AccentBlue), shape = MaterialTheme.shapes.medium) {
-                Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Use ${formatDuration(minutes)}", fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
-    )
-}
+// ════════════════════════════════════ Radial dial ════════════════════════════════════
+//
+// This used to only exist inside a separate "Custom Duration" AlertDialog,
+// reachable by tapping a 6th "Custom" chip. It's now the primary control
+// living directly inside the Pick Duration card (see [LockdownHeroSection]) —
+// any value from 1 minute to 4 hours is reachable by dragging, with the small
+// pills below it as shortcuts rather than the only way in. Bumped from 200dp
+// to 240dp now that it's the card's main content instead of a secondary
+// dialog, and a soft haptic tick fires every 5 minutes crossed while
+// dragging — the same tactile-precision cue iOS/Android's native pickers use
+// so a continuous drag reads as deliberately steppable, not a flat slider.
 
 @Composable
 private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
@@ -1481,10 +1427,12 @@ private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
     var centerY by remember { mutableStateOf(0f) }
     val tickColor      = TextPrimary
     val dialTrackColor = CardSurface
+    val haptics        = rememberHaptics()
+    var lastHapticMinute by remember { mutableStateOf(minutes) }
 
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier.size(200.dp).pointerInput(Unit) {
+        modifier = Modifier.size(240.dp).pointerInput(Unit) {
             detectDragGestures { change, _ ->
                 change.consume()
                 val dx = change.position.x - centerX
@@ -1498,7 +1446,12 @@ private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
                     minutes % 60 < 10 && minsFromAngle > 50 && fullLaps > 0  -> (fullLaps - 1) * 60 + minsFromAngle
                     else -> candidate
                 }
-                onMinutesChange(adjusted.coerceIn(1, 240))
+                val clamped = adjusted.coerceIn(1, 240)
+                if (kotlin.math.abs(clamped - lastHapticMinute) >= 5) {
+                    haptics.digitTick()
+                    lastHapticMinute = clamped
+                }
+                onMinutesChange(clamped)
             }
         }
     ) {
@@ -1535,19 +1488,6 @@ private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
                 drawCircle(color = AccentBlue.copy(alpha = 0.7f), radius = 5.dp.toPx(), center = Offset(dotStartX + lap * dotSpacing, centerY + 28.dp.toPx()))
             }
         }
-    }
-}
-
-@Composable
-private fun NudgeButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick          = onClick,
-        shape            = MaterialTheme.shapes.small,
-        border           = BorderStroke(1.dp, TextMuted.copy(alpha = 0.3f)),
-        colors           = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-        contentPadding   = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.labelSmall)
     }
 }
 
