@@ -804,7 +804,8 @@ private fun LockdownHeroSection(
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape    = RoundedCornerShape(28.dp),
-            colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt)
+            colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
         ) {
             Column(
                 modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
@@ -956,7 +957,7 @@ private fun WhitelistSummaryCard(
             .pressable(onClick = onClick),
         shape    = RoundedCornerShape(20.dp),
         colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Row(
             modifier          = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
@@ -1065,7 +1066,8 @@ private fun ActiveLockdownPanel(
         colors   = CardDefaults.cardColors(
             containerColor = if (decision.onBreak) MaterialTheme.colorScheme.tertiaryContainer
                              else MaterialTheme.colorScheme.errorContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             val badgeTint = if (decision.onBreak) AccentTeal else AccentRed
@@ -1183,8 +1185,7 @@ private fun EmergencyBreaksCard(sessionRunning: Boolean) {
         modifier  = Modifier.fillMaxWidth(),
         shape     = RoundedCornerShape(20.dp),
         colors    = CardDefaults.cardColors(containerColor = CardSurface),
-        border    = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f)),
-        elevation = CardDefaults.cardElevation(0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
 
@@ -1379,7 +1380,8 @@ private fun EmptyHintCard(text: String) {
         modifier = Modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(20.dp),
         colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
+        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.14f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 28.dp),
@@ -1404,7 +1406,7 @@ private fun ScheduleCard(schedule: LockdownSchedule, onToggle: (Boolean) -> Unit
         modifier = Modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(20.dp),
         colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -1573,7 +1575,16 @@ private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
             drawCircle(color = dialTrackColor, radius = radius, center = Offset(centerX, centerY))
 
             val sweepAngle = ((minutes % 60) / 60f) * 360f
-            drawArc(color = AccentBlue, startAngle = -90f, sweepAngle = sweepAngle, useCenter = false, style = Stroke(width = 18.dp.toPx(), cap = StrokeCap.Round))
+            // Below ~8° a rounded-cap arc's two end-caps are close enough
+            // together to visually merge into a single "blob" sitting right
+            // on top of the duration number above it — that's the glitch
+            // that showed up at low values like 1m. Skipping the arc entirely
+            // below that threshold and relying on just the handle dot (drawn
+            // further down) keeps low values looking clean instead of showing
+            // a stray smudge.
+            if (sweepAngle > 8f) {
+                drawArc(color = AccentBlue, startAngle = -90f, sweepAngle = sweepAngle, useCenter = false, style = Stroke(width = 18.dp.toPx(), cap = StrokeCap.Round))
+            }
 
             for (i in 0 until 12) {
                 val tickAngle = Math.toRadians((i * 30.0) - 90.0)
@@ -1581,10 +1592,10 @@ private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
                 val innerR    = radius - (if (isLarge) 28.dp.toPx() else 20.dp.toPx())
                 val outerR    = radius - 10.dp.toPx()
                 drawLine(
-                    color       = if (isLarge) tickColor.copy(alpha = 0.4f) else tickColor.copy(alpha = 0.15f),
+                    color       = if (isLarge) tickColor.copy(alpha = 0.55f) else tickColor.copy(alpha = 0.25f),
                     start       = Offset(centerX + (innerR * cos(tickAngle)).toFloat(), centerY + (innerR * sin(tickAngle)).toFloat()),
                     end         = Offset(centerX + (outerR * cos(tickAngle)).toFloat(), centerY + (outerR * sin(tickAngle)).toFloat()),
-                    strokeWidth = if (isLarge) 2.dp.toPx() else 1.dp.toPx()
+                    strokeWidth = if (isLarge) 2.5.dp.toPx() else 1.5.dp.toPx()
                 )
             }
 
