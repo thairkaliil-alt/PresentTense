@@ -7,12 +7,15 @@ import android.view.accessibility.AccessibilityEvent
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownEngine
+import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.UrlExtractor
 import com.allinone.blocker.ui.InstalledApps
 import com.allinone.blocker.ui.LockdownLauncherActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class AppBlockerAccessibilityService : AccessibilityService() {
@@ -41,20 +44,62 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     /** Cached set of third-party HOME launcher packages (excludes our own app). */
     private var thirdPartyHomeLaunchers: Set<String>? = null
 
+    /** Backstop loop that keeps a live lockdown session protected — see [tickLockdownGuard]. */
+    private var lockdownGuardJob: Job? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
         overlay = OverlayManager(this)
-        // NOTE: BlockerForegroundService (and its persistent "Protecting your
-        // focus" notification) is intentionally NOT started here anymore.
-        // All real blocking (app blocks, lockdown, strict mode, reels kill
-        // switch) happens right here in this accessibility service, which
-        // Android keeps running without requiring any notification. The
-        // foreground service's only other job — a steady 60-second screen-time
-        // tick — is no longer needed: reconcile() already runs on every app
-        // switch (see onAccessibilityEvent below), so usage data stays
-        // accurate, just possibly a bit delayed during long single-app
-        // sessions instead of updating every 60 seconds.
+        // All real-time blocking (app blocks, lockdown, strict mode, reels
+        // kill switch) happens right here in this accessibility service,
+        // which Android keeps running without requiring any notification.
+        // The one exception is lockdown sessions: those get an extra
+        // notification + watchdog, started/stopped by the loop below, since
+        // they're the one mode worth defending against the whole app being
+        // killed (e.g. swiped out of Recent Apps) — see LockdownGuard.
+        startLockdownGuardLoop()
+    }
+
+    /**
+     * Runs every ~10s for as long as this service is alive. While a
+     * lockdown session is live it (a) makes sure the "Lockdown active"
+     * notification + watchdog alarm are armed (LockdownGuard), and (b)
+     * proactively checks the actual foreground window, so a *scheduled*
+     * lockdown that just started gets enforced immediately even if the
+     * user hasn't switched apps yet to trigger the normal event-based
+     * check. Once the session ends, it turns the guard back off.
+     */
+    private fun startLockdownGuardLoop() {
+        lockdownGuardJob?.cancel()
+        lockdownGuardJob = ioScope.launch {
+            while (true) {
+                runCatching { tickLockdownGuard() }
+                delay(10_000L)
+            }
+        }
+    }
+
+    private fun tickLockdownGuard() {
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        if (!decision.active && !decision.onBreak) {
+            LockdownGuard.ensureStopped(applicationContext)
+            return
+        }
+
+        LockdownGuard.ensureRunning(applicationContext)
+        if (!decision.active) return // on an emergency break — don't corral right now
+
+        val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
+        val activePkg = activeRoot?.packageName?.toString()
+        val activeClass = activeRoot?.className?.toString()
+        activeRoot?.recycle()
+        if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
+            corralToLockdownLauncher(activePkg)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -315,6 +360,10 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (this::overlay.isInitialized) overlay.hide()
+        // Cancel our own loop, but deliberately leave LockdownGuard's
+        // notification/watchdog alarm running — those are what protect a
+        // live session if this service is the thing getting killed.
+        lockdownGuardJob?.cancel()
         super.onDestroy()
     }
 
