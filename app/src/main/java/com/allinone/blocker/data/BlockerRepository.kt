@@ -305,9 +305,44 @@ object BlockerRepository {
         resetBreaksForNewSession()
     }
 
+    /**
+     * True while a lockdown session (manual or scheduled) is currently live —
+     * including while an emergency break is running, since a break is a
+     * temporary pause *within* a session, not the end of one. Used to freeze
+     * the emergency-break settings themselves (see [setStrictMode]) so a
+     * session can't be quietly loosened from the inside.
+     */
+    fun isLockdownSessionRunning(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = _manualLockUntil.value,
+            schedules = _schedules.value,
+            nowMillis = nowMillis,
+            breakUntilMillis = _breakUntil.value
+        )
+        return decision.active || decision.onBreak
+    }
+
     fun setStrictMode(config: StrictModeConfig) {
-        _strictMode.value = config
-        prefs.edit().putString(KEY_STRICT_MODE, config.toJson().toString()).apply()
+        // Emergency-break count/duration are the one part of Strict Mode
+        // config that must never change mid-session — otherwise "2 breaks
+        // of 5 minutes" is just a suggestion you can raise to "99 breaks of
+        // 60 minutes" the moment you're inside a break, which defeats the
+        // entire point of the limit (this was a real bug). Every other field
+        // (PIN, frictions, pledge, location zones) is left alone here —
+        // those already have their own guards on the settings screen
+        // (StrictModeGate) — this only pins the two break fields back to
+        // their session-start values while a session is live.
+        val safeConfig = if (isLockdownSessionRunning()) {
+            val current = _strictMode.value
+            config.copy(
+                maxBreaksPerSession = current.maxBreaksPerSession,
+                breakDurationMinutes = current.breakDurationMinutes
+            )
+        } else {
+            config
+        }
+        _strictMode.value = safeConfig
+        prefs.edit().putString(KEY_STRICT_MODE, safeConfig.toJson().toString()).apply()
     }
 
     /** One blocked app that is currently mid-block for a reason that has a built-in end time. */
