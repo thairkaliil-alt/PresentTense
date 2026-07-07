@@ -109,4 +109,15 @@ object LockdownEngine {
         if (sms != null && pkg == sms) return true
         return false
     }
+
+    /**
+     * True for the phone's own system Settings app — every AOSP-based
+     * Android build (stock, Samsung, Pixel, MIUI, etc.) ships this under the
+     * same package name. This is where someone would turn off this app's
+     * Accessibility Service or Device Admin — i.e. disable enforcement
+     * itself — so it's treated as never-exempt during lockdown regardless
+     * of whitelist status (see AppBlockerAccessibilityService.shouldCorralDuringLockdown
+     * and BlockerRepository.addToWhitelist).
+     */
+    fun isSystemSettingsPackage(pkg: String): Boolean = pkg == "com.android.settings"
 }
