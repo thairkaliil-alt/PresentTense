@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
@@ -247,6 +248,7 @@ fun WhitelistScreen(onBack: () -> Unit) {
                     packageName = device.packageName,
                     label       = device.label,
                     whitelisted = whitelist.contains(device.packageName),
+                    locked      = BlockerRepository.isProtectedFromWhitelist(device.packageName),
                     dotAlphaState = sharedDotAlphaState,
                     onToggle    = { checked ->
                         if (checked) BlockerRepository.addToWhitelist(device.packageName)
@@ -283,6 +285,7 @@ private fun WhitelistToggleRow(
     dotAlphaState   : androidx.compose.runtime.State<Float>,
     onToggle        : (Boolean) -> Unit,
     modifier        : Modifier = Modifier,
+    locked          : Boolean = false,
     animateEntrance : Boolean = false,
     entranceDelayMs : Int = 0
 ) {
@@ -346,23 +349,29 @@ private fun WhitelistToggleRow(
                     // triggers recomposition of this row (or the list) — it just
                     // redraws this one small layer each frame. Whitelisted rows
                     // stay fully opaque (no need to even look at the pulse).
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .graphicsLayer { alpha = if (whitelisted) 1f else dotAlphaState.value }
-                            .background(if (whitelisted) AccentTeal else AccentRed)
-                    )
-                    Spacer(Modifier.size(6.dp))
+                    if (locked) {
+                        Icon(Icons.Filled.Lock, contentDescription = null, tint = TextMuted, modifier = Modifier.size(12.dp))
+                        Spacer(Modifier.size(6.dp))
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .graphicsLayer { alpha = if (whitelisted) 1f else dotAlphaState.value }
+                                .background(if (whitelisted) AccentTeal else AccentRed)
+                        )
+                        Spacer(Modifier.size(6.dp))
+                    }
                     Text(
-                        text  = if (whitelisted) "Allowed in lockdown" else "Blocked in lockdown",
+                        text  = if (locked) "Can't be allowed — needed to enforce lockdown" else if (whitelisted) "Allowed in lockdown" else "Blocked in lockdown",
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (whitelisted) AccentTeal else AccentRed
+                        color = if (locked) TextMuted else if (whitelisted) AccentTeal else AccentRed
                     )
                 }
             }
             Switch(
                 checked         = whitelisted,
+                enabled         = !locked,
                 onCheckedChange = { checked -> haptics.toggleTick(); onToggle(checked) },
                 colors          = SwitchDefaults.colors(
                     checkedThumbColor    = Color.White,
