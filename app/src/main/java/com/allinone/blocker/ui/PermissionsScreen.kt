@@ -38,6 +38,7 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     val hasAccessibility = remember(refreshKey) { Permissions.hasAccessibility(context) }
     val hasOverlay       = remember(refreshKey) { Permissions.hasOverlay(context) }
     val hasUsage         = remember(refreshKey) { Permissions.hasUsageAccess(context) }
+    val hasDeviceAdmin   = remember(refreshKey) { Permissions.hasDeviceAdmin(context) }
 
     Scaffold(
         topBar = {
@@ -82,6 +83,26 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
                 description = "Tracks per-app screen time for daily limits and stats.",
                 granted     = hasUsage,
                 onGrant     = { Permissions.openUsageAccessSettings(context) }
+            )
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Extra protection (optional, but recommended for Strict Mode)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Not required for basic blocking, but closes the easiest way around a block: " +
+                    "just uninstalling the app.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            PermissionRow(
+                title       = "Uninstall protection",
+                description = "Prevents Present Tense from being uninstalled without first " +
+                    "turning this off in Settings — which is itself blocked while a lockdown " +
+                    "session is running.",
+                granted     = hasDeviceAdmin,
+                onGrant     = { Permissions.requestDeviceAdmin(context) }
             )
         }
     }
