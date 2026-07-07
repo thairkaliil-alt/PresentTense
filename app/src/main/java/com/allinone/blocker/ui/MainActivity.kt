@@ -321,40 +321,57 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
         return
     }
 
-    Scaffold(
-        containerColor = com.allinone.blocker.ui.theme.BgScreen,
-        bottomBar = {
-            AppBottomNav(
-                currentScreen = screen,
-                onTabSelected = { screen = it }
-            )
+    // This Box is the true full screen — the same one that also holds the
+    // bottom tab bar below. Wrapping the root Scaffold in it (instead of
+    // just using the Scaffold on its own) gives us a place to paint the
+    // lockdown "void" overlay ON TOP of the tab bar, rather than being
+    // boxed into whatever slot the Scaffold hands its content. See
+    // [LockdownVoidOverlayState] for why this is needed.
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = com.allinone.blocker.ui.theme.BgScreen,
+            bottomBar = {
+                AppBottomNav(
+                    currentScreen = screen,
+                    onTabSelected = { screen = it }
+                )
+            }
+        ) { innerPadding ->
+            // Cross-fade between root tabs so switching tabs feels designed, not cut.
+            com.allinone.blocker.ui.motion.ScreenSwitch(targetState = screen) { current ->
+            when (current) {
+                Screen.HOME -> HomeScreen(
+                    refreshKey            = refreshKey,
+                    onPermissions         = { screen = Screen.PERMISSIONS },
+                    onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
+                    onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
+                    onSettings            = { screen = Screen.SETTINGS },
+                    onAlarmClick          = { screen = Screen.STRICT_ALARM_LIST },
+                    onPomodoroClick       = { screen = Screen.POMODORO },
+                    onOpenStreaks         = { screen = Screen.STREAKS },
+                    onOpenStats           = { screen = Screen.STATS },
+                    isDarkTheme           = isDarkTheme,
+                    onThemeToggle         = onThemeToggle
+                )
+                Screen.STRICT_MODE -> StrictModeSettingsScreen(onBack = { screen = Screen.HOME })
+                Screen.STATS       -> StatsScreen(onBack = { screen = Screen.HOME }, onOpenStreaks = { screen = Screen.STREAKS })
+                Screen.LOCKDOWN    -> LockdownScreen(
+                    onBack            = { screen = Screen.HOME },
+                    onManageWhitelist = { screen = Screen.WHITELIST }
+                )
+                Screen.PROFILE     -> ProfilePlaceholderScreen()
+                else -> { /* sub-screens handled above */ }
+            }
+            }
         }
-    ) { innerPadding ->
-        // Cross-fade between root tabs so switching tabs feels designed, not cut.
-        com.allinone.blocker.ui.motion.ScreenSwitch(targetState = screen) { current ->
-        when (current) {
-            Screen.HOME -> HomeScreen(
-                refreshKey            = refreshKey,
-                onPermissions         = { screen = Screen.PERMISSIONS },
-                onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
-                onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
-                onSettings            = { screen = Screen.SETTINGS },
-                onAlarmClick          = { screen = Screen.STRICT_ALARM_LIST },
-                onPomodoroClick       = { screen = Screen.POMODORO },
-                onOpenStreaks         = { screen = Screen.STREAKS },
-                onOpenStats           = { screen = Screen.STATS },
-                isDarkTheme           = isDarkTheme,
-                onThemeToggle         = onThemeToggle
-            )
-            Screen.STRICT_MODE -> StrictModeSettingsScreen(onBack = { screen = Screen.HOME })
-            Screen.STATS       -> StatsScreen(onBack = { screen = Screen.HOME }, onOpenStreaks = { screen = Screen.STREAKS })
-            Screen.LOCKDOWN    -> LockdownScreen(
-                onBack            = { screen = Screen.HOME },
-                onManageWhitelist = { screen = Screen.WHITELIST }
-            )
-            Screen.PROFILE     -> ProfilePlaceholderScreen()
-            else -> { /* sub-screens handled above */ }
-        }
+
+        // The hold-driven lockdown void, mirrored live from LockdownScreen via
+        // [LockdownVoidOverlayState]. Painted as a sibling of the Scaffold
+        // above (not inside its content slot), so it grows over the ENTIRE
+        // screen — bottom tab bar included — instead of stopping at the
+        // Lockdown tab's own content area.
+        LockdownVoidOverlayState.origin?.let { origin ->
+            VoidExpansion(origin = origin, progress = LockdownVoidOverlayState.progress)
         }
     }
 }
