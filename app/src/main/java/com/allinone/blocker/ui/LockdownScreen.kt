@@ -904,14 +904,19 @@ private fun DurationJumpPill(label: String, selected: Boolean, onClick: () -> Un
 }
 
 @Composable
-private fun DurationChip(preset: DurationPreset, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun DurationChip(preset: DurationPreset, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
     val bgColor     = if (selected) AccentBlue.copy(alpha = 0.18f) else CardSurface
     val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.18f)
     val textColor   = if (selected) AccentBlue else TextPrimary
     val borderWidth = if (selected) 1.5.dp else 1.dp
+    val contentAlpha = if (enabled) 1f else 0.4f
 
     Box(
-        modifier         = modifier.clip(RoundedCornerShape(12.dp)).background(bgColor).clickable(onClick = onClick),
+        modifier         = modifier
+            .graphicsLayer { alpha = contentAlpha }
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
@@ -1149,9 +1154,17 @@ private fun ActiveLockdownPanel(
 //    like one design instead of two.
 
 @Composable
-private fun EmergencyBreaksCard() {
+private fun EmergencyBreaksCard(sessionRunning: Boolean) {
     val breakConfig by BlockerRepository.strictMode.collectAsState()
     var expanded by remember { mutableStateOf(false) }
+
+    // Locked the moment a lockdown session (or a break inside one) is live —
+    // otherwise "2 breaks of 5 minutes" is just a suggestion, since anyone
+    // could open this same card mid-break and dial it up to "10 breaks of
+    // 60 minutes" right before their current break runs out. Change these
+    // BEFORE you start your next lockdown instead. BlockerRepository.setStrictMode
+    // enforces this too (belt-and-suspenders), so this is UI-level only.
+    val locked = sessionRunning
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
@@ -1197,6 +1210,15 @@ private fun EmergencyBreaksCard() {
                     Spacer(Modifier.height(2.dp))
                     Text(summary, style = MaterialTheme.typography.bodySmall, color = if (noBreaks) AccentRed.copy(alpha = 0.85f) else TextTertiary)
                 }
+                if (locked) {
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = "Locked while a lockdown session is running",
+                        tint     = TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = if (expanded) "Collapse" else "Expand",
@@ -1221,12 +1243,28 @@ private fun EmergencyBreaksCard() {
                         style = MaterialTheme.typography.bodySmall, color = TextTertiary
                     )
 
+                    if (locked) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(TextMuted.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Lock, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Locked while this lockdown session is running — including during a break. Change these before your next session starts.",
+                                    style = MaterialTheme.typography.bodySmall, color = TextMuted
+                                )
+                            }
+                        }
+                    }
+
                     // Breaks per session — stepper
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Breaks per session", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
                         BreakCountStepper(
                             value         = breakConfig.maxBreaksPerSession,
                             range         = 0..5,
+                            locked        = locked,
                             onValueChange = { BlockerRepository.setStrictMode(breakConfig.copy(maxBreaksPerSession = it)) }
                         )
                         if (noBreaks) {
@@ -1249,6 +1287,7 @@ private fun EmergencyBreaksCard() {
                                     preset   = preset,
                                     selected = breakConfig.breakDurationMinutes == preset.minutes,
                                     modifier = Modifier.weight(1f),
+                                    enabled  = !locked,
                                     onClick  = { BlockerRepository.setStrictMode(breakConfig.copy(breakDurationMinutes = preset.minutes)) }
                                 )
                             }
@@ -1265,7 +1304,7 @@ private fun EmergencyBreaksCard() {
 // dragging past the number you meant to land on, and "None" is spelled out
 // in words rather than just showing "0", which is easy to misread as "min".
 @Composable
-private fun BreakCountStepper(value: Int, range: IntRange, onValueChange: (Int) -> Unit) {
+private fun BreakCountStepper(value: Int, range: IntRange, locked: Boolean = false, onValueChange: (Int) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1277,7 +1316,7 @@ private fun BreakCountStepper(value: Int, range: IntRange, onValueChange: (Int) 
     ) {
         StepperIconButton(
             icon    = Icons.Filled.Remove,
-            enabled = value > range.first,
+            enabled = !locked && value > range.first,
             onClick = { onValueChange((value - 1).coerceIn(range)) }
         )
 
@@ -1297,7 +1336,7 @@ private fun BreakCountStepper(value: Int, range: IntRange, onValueChange: (Int) 
 
         StepperIconButton(
             icon    = Icons.Filled.Add,
-            enabled = value < range.last,
+            enabled = !locked && value < range.last,
             onClick = { onValueChange((value + 1).coerceIn(range)) }
         )
     }
@@ -1453,7 +1492,7 @@ private fun EmbeddedLockdownLazyColumn(
 
         // ── 3. Emergency breaks (expandable — see EmergencyBreaksCard) ──────
         item(key = "emergency_breaks_card") {
-            EmergencyBreaksCard()
+            EmergencyBreaksCard(sessionRunning = sessionRunning)
         }
 
         // ── 4. Daily schedules ─────────────────────────────────────────────
