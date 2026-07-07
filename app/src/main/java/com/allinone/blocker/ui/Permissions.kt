@@ -2,6 +2,7 @@ package com.allinone.blocker.ui
 
 import android.Manifest
 import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.os.Process
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.core.content.ContextCompat
+import com.allinone.blocker.admin.BlockerDeviceAdminReceiver
 import com.allinone.blocker.service.AppBlockerAccessibilityService
 
 /** Helpers to check and request the permissions the blocker depends on (README 12). */
@@ -92,5 +94,41 @@ object Permissions {
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+    }
+
+    /**
+     * True once the user has made Present Tense an active Device
+     * Administrator. This is what actually blocks uninstalling the app: on
+     * stock Android, an app can't be uninstalled (from Settings or the Play
+     * Store) while it's an active device admin — the user is forced to
+     * deactivate it first, which routes back through the Settings app and
+     * is therefore itself blocked while a lockdown session is live (see
+     * AppBlockerAccessibilityService.shouldCorralDuringLockdown).
+     */
+    fun hasDeviceAdmin(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE)
+            as? DevicePolicyManager ?: return false
+        return dpm.isAdminActive(BlockerDeviceAdminReceiver.componentName(context))
+    }
+
+    /**
+     * Opens Android's built-in "Activate device admin app?" screen for
+     * Present Tense. There's no code-only way to grant this — same as
+     * Accessibility, the user has to confirm it themselves on that system
+     * screen.
+     */
+    fun requestDeviceAdmin(context: Context) {
+        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(
+                DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                BlockerDeviceAdminReceiver.componentName(context)
+            )
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Stops Present Tense from being uninstalled as a shortcut around a block."
+            )
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 }
