@@ -4,16 +4,13 @@ import android.app.Activity
 import android.app.TimePickerDialog
 import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -56,9 +53,9 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -100,6 +97,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -126,6 +124,7 @@ import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
+import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -320,9 +319,16 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
         }
     }
 
+    // Subtle scroll-aware top bar: stays flat/transparent-feeling while the
+    // list is at rest, and picks up a faint tone shift once content actually
+    // scrolls underneath it — the same small "the surface has depth" cue
+    // Gmail/Notion/Slack use, instead of a bar that looks identical whether
+    // or not anything is happening beneath it.
+    val topBarScroll = TopAppBarDefaults.pinnedScrollBehavior()
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
-            modifier       = Modifier.fillMaxSize(),
+            modifier       = Modifier.fillMaxSize().nestedScroll(topBarScroll.nestedScrollConnection),
             containerColor = BgDarkest,
             topBar = {
                 TopAppBar(
@@ -332,7 +338,11 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor         = BgDarkest,
+                        scrolledContainerColor = CardSurface
+                    ),
+                    scrollBehavior = topBarScroll
                 )
             }
         ) { pad ->
@@ -888,18 +898,11 @@ private fun WhitelistSummaryCard(
     previewApps : List<DeviceApp>,
     onClick     : () -> Unit
 ) {
-    val pressScale by animateFloatAsState(
-        targetValue   = 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-        label         = "whitelistCardScale"
-    )
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .scale(pressScale)
             .clip(RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick),
+            .pressable(onClick = onClick),
         shape    = RoundedCornerShape(20.dp),
         colors   = CardDefaults.cardColors(containerColor = CardSurface),
         border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
@@ -1014,13 +1017,19 @@ private fun ActiveLockdownPanel(
         )
     ) {
         Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                if (decision.onBreak) Icons.Filled.Bolt else Icons.Filled.Lock,
-                contentDescription = null,
-                tint               = if (decision.onBreak) AccentTeal else AccentRed,
-                modifier           = Modifier.size(34.dp)
-            )
-            Spacer(Modifier.height(10.dp))
+            val badgeTint = if (decision.onBreak) AccentTeal else AccentRed
+            Box(
+                modifier         = Modifier.size(56.dp).clip(CircleShape).background(badgeTint.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (decision.onBreak) Icons.Filled.Bolt else Icons.Filled.Lock,
+                    contentDescription = null,
+                    tint               = badgeTint,
+                    modifier           = Modifier.size(26.dp)
+                )
+            }
+            Spacer(Modifier.height(14.dp))
             Text(
                 if (decision.onBreak) "Emergency Break active" else "Lockdown is active",
                 style      = MaterialTheme.typography.titleMedium,
@@ -1281,14 +1290,37 @@ private fun SectionHeader(title: String, action: String? = null, onAction: (() -
 
 @Composable
 private fun EmptyHintCard(text: String) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = CardSurface)) {
-        Text(text, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(20.dp),
+        colors   = CardDefaults.cardColors(containerColor = CardSurface),
+        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
+    ) {
+        Column(
+            modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier         = Modifier.size(44.dp).clip(CircleShape).background(TextMuted.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Schedule, contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = TextTertiary, textAlign = TextAlign.Center)
+        }
     }
 }
 
 @Composable
 private fun ScheduleCard(schedule: LockdownSchedule, onToggle: (Boolean) -> Unit, onDelete: () -> Unit, onEdit: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = CardSurface)) {
+    Card(
+        onClick  = onEdit,
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(20.dp),
+        colors   = CardDefaults.cardColors(containerColor = CardSurface),
+        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.10f))
+    ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 if (schedule.label.isNotBlank()) Text(schedule.label, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -1303,7 +1335,7 @@ private fun ScheduleCard(schedule: LockdownSchedule, onToggle: (Boolean) -> Unit
                 onCheckedChange = onToggle,
                 colors          = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentTeal)
             )
-            IconButton(onClick = onEdit) { Icon(Icons.Filled.Shield, contentDescription = "Edit", tint = TextMuted, modifier = Modifier.size(20.dp)) }
+            Spacer(Modifier.width(4.dp))
             IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = AccentRed.copy(alpha = 0.7f), modifier = Modifier.size(20.dp)) }
         }
     }
@@ -1371,13 +1403,6 @@ private fun EmbeddedLockdownLazyColumn(
                 previewApps = whitelistedApps,
                 onClick     = onManageWhitelist
             )
-        }
-
-        // Divider before the rest of the settings
-        item(key = "divider_after_whitelist") {
-            Spacer(Modifier.height(4.dp))
-            HorizontalDivider(color = TextMuted.copy(alpha = 0.10f))
-            Spacer(Modifier.height(4.dp))
         }
 
         // ── 3. Emergency breaks (expandable — see EmergencyBreaksCard) ──────
