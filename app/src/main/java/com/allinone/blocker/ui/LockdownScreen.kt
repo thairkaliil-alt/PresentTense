@@ -720,6 +720,7 @@ private fun VoidExpansion(origin: Offset, progress: Float) {
 
 // ════════════════════════════════════ Hero / Pick Duration ════════════════════════════════════
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LockdownHeroSection(
     armedMinutes  : Int,
