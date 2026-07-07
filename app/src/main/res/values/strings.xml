@@ -6,6 +6,8 @@
     <string name="notif_channel_name">Blocking Active</string>
     <string name="notif_title">Present Tense is active</string>
     <string name="notif_text">Protecting your focus in the background.</string>
+    <string name="notif_lockdown_title">Lockdown is active</string>
+    <string name="notif_lockdown_text">Stay present. Tap to see your remaining time.</string>
     <string name="alarm_channel_name">Strict Alarm</string>
     <string name="alarm_notif_title">Strict Alarm is ringing</string>
     <string name="alarm_notif_text">Solve the puzzle to turn it off.</string>
