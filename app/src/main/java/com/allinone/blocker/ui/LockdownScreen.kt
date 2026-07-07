@@ -77,6 +77,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -246,7 +247,11 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     // back navigation racing the gesture, etc.) don't leave the host
     // Activity stuck without its system bars.
     DisposableEffect(Unit) {
-        onDispose { setImmersive(false) }
+        onDispose {
+            setImmersive(false)
+            LockdownVoidOverlayState.origin = null
+            LockdownVoidOverlayState.progress = 0f
+        }
     }
 
     // ── Armed duration ───────────────────────────────────────────────────
@@ -326,6 +331,21 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     // or not anything is happening beneath it.
     val topBarScroll = TopAppBarDefaults.pinnedScrollBehavior()
 
+    // ── Mirror the void into the app-wide overlay ────────────────────────
+    // VoidExpansion used to be drawn right here, in a Box wrapping this
+    // screen's own Scaffold — but that Box only fills the content slot
+    // MainActivity's outer Scaffold hands to the Lockdown tab, which stops
+    // short of the bottom tab bar. That made the void look like it covered
+    // "the lockdown screen" instead of "the whole phone", which is the
+    // point of the animation. Instead, every frame's origin/progress is
+    // mirrored into [LockdownVoidOverlayState], a tiny shared holder that
+    // AppRoot reads to paint the real VoidExpansion above EVERYTHING,
+    // bottom bar included. See AppRoot in MainActivity.kt.
+    SideEffect {
+        LockdownVoidOverlayState.origin   = holdOrigin
+        LockdownVoidOverlayState.progress = voidProgress.value
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier       = Modifier.fillMaxSize().nestedScroll(topBarScroll.nestedScrollConnection),
@@ -368,14 +388,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 onDeleteSchedule    = { s -> StrictModeGate.guard { BlockerRepository.removeSchedule(s.id) } },
                 onEditSchedule      = { showAddSchedule = it }
             )
-        }
-
-        // The hold-driven void. Only present while a hold has ever started
-        // this cycle (holdOrigin != null); its radius tracks voidProgress
-        // continuously, whether growing (still held), shrinking (released
-        // early) or pinned at 1f (committed, waiting on goHome()).
-        holdOrigin?.let { origin ->
-            VoidExpansion(origin = origin, progress = voidProgress.value)
         }
     }
 
@@ -591,7 +603,7 @@ private fun LiquidGlassOrb(
 private const val VOID_HOLD_MS = 2200
 
 @Composable
-private fun VoidExpansion(origin: Offset, progress: Float) {
+fun VoidExpansion(origin: Offset, progress: Float) {
     if (progress <= 0f) return
 
     val density = LocalDensity.current
