@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Persistent foreground service, started only while a lockdown session is
- * live (see LockdownGuard). It does three things:
+ * live (see LockdownGuard). It does four things:
  *  1. Shows a visible, low-priority "Lockdown active" notification. Having a
  *     real foreground notification makes Android — and phone-maker battery
  *     managers / "clean up recent apps" features — much less eager to kill
@@ -30,16 +30,27 @@ import kotlinx.coroutines.launch
  *     instant-on-switch updates the accessibility service already triggers.
  *  3. Fights back the instant it's swiped out of Recent Apps: see
  *     onTaskRemoved() below.
+ *  4. Independently double-checks, every 20s, that lockdown is still
+ *     actually active — see selfCheckLoop() below. This is what guarantees
+ *     the notification can never outlive a session: it doesn't only rely on
+ *     something else remembering to call LockdownGuard.ensureStopped().
  */
 class BlockerForegroundService : Service() {
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job)
     private var tickLoopStarted = false
+    private var selfCheckLoopStarted = false
+
+    override fun onCreate() {
+        super.onCreate()
+        running = true
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(BlockerApp.NOTIF_ID, buildNotification())
         startTickLoopOnce()
+        startSelfCheckLoopOnce()
         return START_STICKY
     }
 
@@ -50,6 +61,39 @@ class BlockerForegroundService : Service() {
             while (true) {
                 runCatching { ScreenTimeTracker.reconcile(applicationContext) }
                 delay(60_000L)
+            }
+        }
+    }
+
+    /**
+     * Backstop that makes the notification self-correcting: every 20s, this
+     * checks whether a lockdown session is still active/on-break, and if
+     * not, stops itself right away — instead of relying purely on the
+     * accessibility service's own loop to notice and call
+     * LockdownGuard.ensureStopped(). Two independent checkers mean the
+     * notification can't get stuck showing forever if the other one is ever
+     * delayed, disabled, or killed (e.g. an aggressive phone-maker battery
+     * manager targeting the accessibility service specifically).
+     */
+    private fun startSelfCheckLoopOnce() {
+        if (selfCheckLoopStarted) return
+        selfCheckLoopStarted = true
+        scope.launch {
+            while (true) {
+                delay(20_000L)
+                val stillLive = runCatching {
+                    if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
+                    val decision = LockdownEngine.evaluate(
+                        manualLockUntil = BlockerRepository.manualLockUntil.value,
+                        schedules = BlockerRepository.schedules.value
+                    )
+                    decision.active || decision.onBreak
+                }.getOrDefault(true) // if the check itself fails, fail safe and keep the notification up
+                if (!stillLive) {
+                    LockdownGuard.disarmWatchdog(applicationContext)
+                    stopSelf()
+                    return@launch
+                }
             }
         }
     }
@@ -98,9 +142,23 @@ class BlockerForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         job.cancel()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        // In-memory only, on purpose: this just needs to reflect whether
+        // *this process* currently has the service up, so LockdownGuard can
+        // skip redundant start/stop calls. A fresh process (e.g. one woken
+        // by the watchdog alarm after the app was killed) naturally starts
+        // at false, which is correct — it doesn't have the service running
+        // yet either.
+        @Volatile private var running = false
+
+        /** True while this service is actually alive in this process. */
+        fun isRunning(): Boolean = running
+    }
 }
