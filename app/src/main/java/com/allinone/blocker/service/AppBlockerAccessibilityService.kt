@@ -62,42 +62,41 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Runs every ~3s for as long as this service is alive. While a
-     * lockdown session is live it (a) makes sure the "Lockdown active"
-     * notification + watchdog alarm are armed (LockdownGuard), and (b)
-     * proactively checks the actual foreground window, so a *scheduled*
-     * lockdown that just started gets enforced immediately even if the
-     * user hasn't switched apps yet to trigger the normal event-based
-     * check. Once the session ends, it turns the guard back off.
+     * Runs for as long as this service is alive, at an ADAPTIVE pace:
+     * every 3s while a lockdown session (or a break inside one) is
+     * actually live — that's the only time there's anything to defend,
+     * so it's the only time the extra wakeups are worth it — and every
+     * 30s the rest of the time, just often enough to notice a *scheduled*
+     * lockdown crossing its start time even if the user isn't touching
+     * the phone (real-time protection for everything else is already
+     * event-driven, via onAccessibilityEvent above — this loop is only
+     * the backstop for the rare cases those events miss). This keeps the
+     * background battery cost close to zero on an ordinary day where
+     * lockdown never runs, instead of ticking fast 24/7.
      */
     private fun startLockdownGuardLoop() {
         lockdownGuardJob?.cancel()
         lockdownGuardJob = ioScope.launch {
             while (true) {
-                runCatching { tickLockdownGuard() }
-                // 3s rather than the original 10s: this loop is the backstop
-                // for anything the event-based checks above miss (e.g. an
-                // OEM that reports some window changes in a way Android
-                // doesn't classify as WINDOW_STATE_CHANGED/CONTENT_CHANGED).
-                // Shorter tick = a smaller worst-case window to act in
-                // before getting corralled back to the lockdown screen.
-                delay(3_000L)
+                val sessionLive = runCatching { tickLockdownGuard() }.getOrDefault(false)
+                delay(if (sessionLive) 3_000L else 30_000L)
             }
         }
     }
 
-    private fun tickLockdownGuard() {
+    /** @return true if a lockdown session (active or on break) is currently live. */
+    private fun tickLockdownGuard(): Boolean {
         val decision = LockdownEngine.evaluate(
             manualLockUntil = BlockerRepository.manualLockUntil.value,
             schedules = BlockerRepository.schedules.value
         )
         if (!decision.active && !decision.onBreak) {
             LockdownGuard.ensureStopped(applicationContext)
-            return
+            return false
         }
 
         LockdownGuard.ensureRunning(applicationContext)
-        if (!decision.active) return // on an emergency break — don't corral right now
+        if (!decision.active) return true // on an emergency break — don't corral right now
 
         val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
         val activePkg = activeRoot?.packageName?.toString()
@@ -106,6 +105,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
             corralToLockdownLauncher(activePkg)
         }
+        return true
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
