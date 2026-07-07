@@ -37,25 +37,42 @@ object LockdownGuard {
     private const val WATCHDOG_REQUEST_CODE = 71_001
     private const val WATCHDOG_TICK_MS = 45_000L
 
-    /** Starts (or keeps alive) the notification + watchdog alarm. Safe to call repeatedly. */
+    /**
+     * Starts (or keeps alive) the notification + watchdog alarm. Safe to call
+     * repeatedly — this is called every ~3s while a session is live, so it
+     * only actually talks to Android when the service isn't already up
+     * (tracked via [BlockerForegroundService.isRunning]), instead of
+     * re-issuing startForegroundService() and rebuilding the notification on
+     * every single tick.
+     */
     fun ensureRunning(context: Context) {
         val appContext = context.applicationContext
-        val serviceIntent = Intent(appContext, BlockerForegroundService::class.java)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                appContext.startForegroundService(serviceIntent)
-            } else {
-                appContext.startService(serviceIntent)
+        if (!BlockerForegroundService.isRunning()) {
+            val serviceIntent = Intent(appContext, BlockerForegroundService::class.java)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    appContext.startForegroundService(serviceIntent)
+                } else {
+                    appContext.startService(serviceIntent)
+                }
             }
         }
         armWatchdog(appContext)
     }
 
-    /** Stops the notification and cancels the watchdog alarm. Call once a session is truly over. */
+    /**
+     * Stops the notification and cancels the watchdog alarm. Call once a
+     * session is truly over. Skips the stopService() call (and its binder
+     * round-trip) when the service isn't running, since this gets called on
+     * every idle tick of the background loop, not just on the one real
+     * transition from "running" to "stopped".
+     */
     fun ensureStopped(context: Context) {
         val appContext = context.applicationContext
-        runCatching {
-            appContext.stopService(Intent(appContext, BlockerForegroundService::class.java))
+        if (BlockerForegroundService.isRunning()) {
+            runCatching {
+                appContext.stopService(Intent(appContext, BlockerForegroundService::class.java))
+            }
         }
         disarmWatchdog(appContext)
     }
