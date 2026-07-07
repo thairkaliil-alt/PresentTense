@@ -371,7 +371,11 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
         // screen — bottom tab bar included — instead of stopping at the
         // Lockdown tab's own content area.
         LockdownVoidOverlayState.origin?.let { origin ->
-            VoidExpansion(origin = origin, progress = LockdownVoidOverlayState.progress)
+            // Reading .value right here, in this one small block, is what
+            // keeps this 60fps-during-a-hold read scoped to just this
+            // overlay — not the Scaffold/tab content above it.
+            val progress = LockdownVoidOverlayState.progressState?.value ?: 0f
+            VoidExpansion(origin = origin, progress = progress)
         }
     }
 }
