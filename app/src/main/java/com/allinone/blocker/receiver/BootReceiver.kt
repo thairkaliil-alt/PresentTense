@@ -6,6 +6,8 @@ import android.content.Intent
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
+import com.allinone.blocker.data.LockdownEngine
+import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.ScreenTimeTracker
 import kotlin.concurrent.thread
@@ -30,9 +32,18 @@ class BootReceiver : BroadcastReceiver() {
         // the lock silently stops working after every restart.
         GeofenceManager.rearm(context)
 
-        // BlockerForegroundService is no longer restarted here — blocking
-        // runs entirely through the accessibility service, which Android
-        // re-enables on its own after reboot (as long as Accessibility
-        // permission was granted) and needs no persistent notification.
+        // Blocking itself runs through the accessibility service, which
+        // Android re-enables on its own after reboot (as long as
+        // Accessibility permission was granted). But if a lockdown session
+        // was already running across the reboot (e.g. an overnight
+        // schedule), re-arm its notification + watchdog alarm right away
+        // instead of waiting for the accessibility service to notice.
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        if (decision.active || decision.onBreak) {
+            LockdownGuard.ensureRunning(context.applicationContext)
+        }
     }
 }
