@@ -62,7 +62,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Runs every ~10s for as long as this service is alive. While a
+     * Runs every ~3s for as long as this service is alive. While a
      * lockdown session is live it (a) makes sure the "Lockdown active"
      * notification + watchdog alarm are armed (LockdownGuard), and (b)
      * proactively checks the actual foreground window, so a *scheduled*
@@ -75,7 +75,13 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         lockdownGuardJob = ioScope.launch {
             while (true) {
                 runCatching { tickLockdownGuard() }
-                delay(10_000L)
+                // 3s rather than the original 10s: this loop is the backstop
+                // for anything the event-based checks above miss (e.g. an
+                // OEM that reports some window changes in a way Android
+                // doesn't classify as WINDOW_STATE_CHANGED/CONTENT_CHANGED).
+                // Shorter tick = a smaller worst-case window to act in
+                // before getting corralled back to the lockdown screen.
+                delay(3_000L)
             }
         }
     }
@@ -163,6 +169,25 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             }
             ioScope.launch { ScreenTimeTracker.reconcile(applicationContext) }
         } else if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            // IMPORTANT: this fires for every content change *inside* an app
+            // that's already in the foreground (e.g. tapping deeper into a
+            // settings screen) — appSwitched is false because the package
+            // never changed. Lockdown corralling used to only run in the
+            // "appSwitched" branch above, which meant: once you were already
+            // sitting inside a non-whitelisted app (say, the phone's own
+            // Settings, opened right as a schedule kicked in, or from before
+            // lockdown even started), you could navigate freely deep inside
+            // it — e.g. all the way to turning off this app's Accessibility
+            // Service — and NOTHING here would kick you back out, since this
+            // branch used to just `return` early. Only the ~10s background
+            // watchdog loop (tickLockdownGuard) would eventually catch it.
+            // Checking the corral here too closes that gap immediately,
+            // event-by-event, instead of leaving up to ~10 seconds of free
+            // navigation inside an already-open blocked app.
+            if (shouldCorralDuringLockdown(pkg, className)) {
+                corralToLockdownLauncher(pkg)
+                return
+            }
             if (pkg in UrlExtractor.BROWSER_PACKAGES) {
                 handleBrowserContentChanged(pkg)
             }
@@ -330,6 +355,16 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
         if (pkg.contains("systemui", ignoreCase = true)) return true
         if (isThirdPartyHomeLauncher(pkg)) return true
+
+        // The phone's own Settings app is a special case: it's how someone
+        // would turn off this app's Accessibility Service or Device Admin —
+        // i.e. the actual off switch for enforcement itself — so it must
+        // never be reachable during lockdown, full stop. This check is
+        // deliberately BEFORE the whitelist check, so it can't be
+        // circumvented by whitelisting it (old installs may have it
+        // whitelisted from before this existed — BlockerRepository also
+        // refuses new whitelist entries for it, see addToWhitelist).
+        if (LockdownEngine.isSystemSettingsPackage(pkg)) return true
 
         if (BlockerRepository.isWhitelisted(pkg)) return false
         if (LockdownEngine.isAlwaysExempt(this, pkg)) return false
