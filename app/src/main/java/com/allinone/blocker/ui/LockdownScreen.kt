@@ -79,7 +79,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -243,17 +245,6 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
             }
         }
     }
-    // Safety net: if this screen is ever torn down mid-hold (process death,
-    // back navigation racing the gesture, etc.) don't leave the host
-    // Activity stuck without its system bars.
-    DisposableEffect(Unit) {
-        onDispose {
-            setImmersive(false)
-            LockdownVoidOverlayState.origin = null
-            LockdownVoidOverlayState.progress = 0f
-        }
-    }
-
     // ── Armed duration ───────────────────────────────────────────────────
     // Dragging the dial (or tapping a quick-jump pill) never starts
     // anything by itself — it only "arms" the orb with a chosen number of
@@ -279,6 +270,37 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     var isHolding         by remember { mutableStateOf(false) }
     var voidCommitted     by remember { mutableStateOf(false) }
     val voidProgress      = remember { Animatable(0f) }
+
+    // A stable State<Float> wrapper around voidProgress's live value.
+    // Passing THIS object down the tree below (instead of voidProgress.value
+    // as a plain Float) is the whole fix for the lag: a Compose State
+    // object's IDENTITY never changes, only its .value does, so composables
+    // that just forward it along — the scrollable list, the hero section —
+    // don't need to recompose 60 times a second anymore just to keep a
+    // number moving through them. Only the one spot that actually reads
+    // .value (deep inside the orb, and the void overlay in MainActivity)
+    // re-renders on every animation frame, exactly like it should.
+    val voidProgressState = remember { derivedStateOf { voidProgress.value } }
+
+    // Safety net: if this screen is ever torn down mid-hold (process death,
+    // back navigation racing the gesture, etc.) don't leave the host
+    // Activity stuck without its system bars.
+    DisposableEffect(Unit) {
+        onDispose {
+            setImmersive(false)
+            // Only wipe the shared overlay if a lockdown never actually
+            // committed. If the hold DID finish (voidCommitted == true),
+            // startManualLock()/goHome() are already mid-flight — clearing
+            // the overlay here, right as this screen tears down for the
+            // navigation, would yank the finished black screen away instead
+            // of letting it hand off cleanly. Leaving it be is harmless:
+            // the sessionRunning effect below cleans it up properly once
+            // the new lockdown session is confirmed active.
+            if (!voidCommitted) {
+                LockdownVoidOverlayState.origin = null
+            }
+        }
+    }
 
     LaunchedEffect(isHolding) {
         if (isHolding) {
@@ -337,13 +359,20 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
     // MainActivity's outer Scaffold hands to the Lockdown tab, which stops
     // short of the bottom tab bar. That made the void look like it covered
     // "the lockdown screen" instead of "the whole phone", which is the
-    // point of the animation. Instead, every frame's origin/progress is
-    // mirrored into [LockdownVoidOverlayState], a tiny shared holder that
-    // AppRoot reads to paint the real VoidExpansion above EVERYTHING,
-    // bottom bar included. See AppRoot in MainActivity.kt.
+    // point of the animation. Instead, origin and a reference to the live
+    // progress state are mirrored into [LockdownVoidOverlayState], a tiny
+    // shared holder that AppRoot reads to paint the real VoidExpansion
+    // above EVERYTHING, bottom bar included. See AppRoot in MainActivity.kt.
+    //
+    // Note this SideEffect only needs to fire when holdOrigin actually
+    // changes (hold starts/ends) — not every animation frame. voidProgressState
+    // is a stable object handed over once; AppRoot reads its .value directly
+    // wherever it draws the void, so the live progress ticks flow straight
+    // from this screen's Animatable to AppRoot's Canvas without needing
+    // LockdownScreen itself to recompose 60 times a second in between.
     SideEffect {
-        LockdownVoidOverlayState.origin   = holdOrigin
-        LockdownVoidOverlayState.progress = voidProgress.value
+        LockdownVoidOverlayState.origin        = holdOrigin
+        LockdownVoidOverlayState.progressState = voidProgressState
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -376,7 +405,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 onManageWhitelist   = onManageWhitelist,
                 armedMinutes        = armedMinutes,
                 onSelectPreset      = { mins -> armedMinutes = mins },
-                voidProgress        = voidProgress.value,
+                voidProgress        = voidProgressState,
                 onHoldStart         = { origin, mins -> holdOrigin = origin; holdArmedMinutes = mins; isHolding = true },
                 onHoldEnd           = { isHolding = false },
                 onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
@@ -421,7 +450,7 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
 private fun LiquidGlassOrb(
     modifier    : Modifier = Modifier,
     armedMinutes: Int      = 25,
-    progress    : Float    = 0f,
+    progress    : State<Float>,
     onHoldStart : (Offset, Int) -> Unit = { _, _ -> },
     onHoldEnd   : () -> Unit = {}
 ) {
@@ -454,10 +483,14 @@ private fun LiquidGlassOrb(
     // slightly — a physical "gathering energy" read — and the inner icon
     // fades out, since the growing void is about to visually swallow it
     // anyway. progress comes from the root's voidProgress, so this orb and
-    // the full-screen void it feeds are always perfectly in sync.
-    val chargeGlow = glowAlpha * (1f + progress * 0.7f)
-    val pressEase  = 1f - (progress * 0.05f)
-    val iconAlpha  = 1f - (progress * 0.85f)
+    // the full-screen void it feeds are always perfectly in sync. Reading
+    // .value here, right where it's used, is what scopes the 60fps
+    // recomposition to just this small composable instead of everything
+    // that happens to forward the State object along the way.
+    val progressValue = progress.value
+    val chargeGlow = glowAlpha * (1f + progressValue * 0.7f)
+    val pressEase  = 1f - (progressValue * 0.05f)
+    val iconAlpha  = 1f - (progressValue * 0.85f)
 
     Box(
         contentAlignment = Alignment.Center,
@@ -736,7 +769,7 @@ fun VoidExpansion(origin: Offset, progress: Float) {
 @Composable
 private fun LockdownHeroSection(
     armedMinutes  : Int,
-    voidProgress  : Float,
+    voidProgress  : State<Float>,
     onSelectPreset: (Int) -> Unit,
     onHoldStart   : (Offset, Int) -> Unit = { _, _ -> },
     onHoldEnd     : () -> Unit = {}
@@ -1367,7 +1400,7 @@ private fun EmbeddedLockdownLazyColumn(
     onManageWhitelist: () -> Unit,
     armedMinutes     : Int,
     onSelectPreset   : (Int) -> Unit,
-    voidProgress     : Float,
+    voidProgress     : State<Float>,
     onHoldStart      : (Offset, Int) -> Unit,
     onHoldEnd        : () -> Unit,
     onEmergencyBreak : () -> Unit,
