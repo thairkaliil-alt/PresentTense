@@ -35,9 +35,16 @@
         android:theme="@style/Theme.Blocker"
         tools:targetApi="34">
 
+        <!-- excludeFromRecents: closes the "swipe Present Tense away in
+             Recent Apps" escape hatch. Without this, swiping the app's card
+             away in the app-switcher can kill its whole process — including
+             the accessibility service that enforces lockdown — which is
+             exactly how lockdown was being bypassed. The app is still
+             reached normally from the home-screen icon or notification. -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.Blocker">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -147,6 +154,15 @@
         <!-- Geofence: receives enter/exit events from the OS -->
         <receiver
             android:name=".receiver.GeofenceBroadcastReceiver"
+            android:exported="false" />
+
+        <!-- Lockdown watchdog: an AlarmManager tick that fires every ~45s
+             while a lockdown session is live (see LockdownGuard). It's the
+             last line of defense — if the whole app process was killed
+             (e.g. swiped out of Recent Apps), this still wakes up in a
+             fresh process and restores the lockdown screen. -->
+        <receiver
+            android:name=".receiver.LockdownWatchdogReceiver"
             android:exported="false" />
 
     </application>
