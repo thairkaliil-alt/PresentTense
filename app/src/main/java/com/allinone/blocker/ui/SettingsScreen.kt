@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.RateReview
@@ -40,7 +41,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -196,6 +199,29 @@ private fun PermissionsSummaryRow(refreshKey: Int, onClick: () -> Unit) {
     val grantedCount = checks.count { it }
     val allGranted = grantedCount == checks.size
 
+    // Lockdown-awareness here is purely cosmetic — it swaps the granted
+    // count for a "Locked" badge so tapping (or not) makes sense at a
+    // glance. The actual block on opening the screen lives in
+    // MainActivity.AppRoot (goTo/isLockedRightNow), which is the one place
+    // that can't be bypassed even if some other entry point ever calls
+    // onClick directly. Ticks every second while a lockdown is active/on a
+    // break and every 30s otherwise, matching the battery-aware pattern
+    // LockdownScreen.kt already uses elsewhere in the app.
+    val manualLockUntil by com.allinone.blocker.data.BlockerRepository.manualLockUntil.collectAsState()
+    val schedules by com.allinone.blocker.data.BlockerRepository.schedules.collectAsState()
+    val breakUntil by com.allinone.blocker.data.BlockerRepository.breakUntil.collectAsState()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    val decision = remember(manualLockUntil, schedules, breakUntil, now) {
+        com.allinone.blocker.data.LockdownEngine.evaluate(manualLockUntil, schedules, now, breakUntil)
+    }
+    androidx.compose.runtime.LaunchedEffect(decision.active, decision.onBreak) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(if (decision.active || decision.onBreak) 1_000 else 30_000)
+        }
+    }
+    val isLocked = decision.active
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -204,27 +230,50 @@ private fun PermissionsSummaryRow(refreshKey: Int, onClick: () -> Unit) {
     ) {
         SettingsRow(
             icon = Icons.Filled.Security,
-            iconTint = if (allGranted) AccentTeal else AccentRed,
+            iconTint = when {
+                isLocked   -> TextTertiary
+                allGranted -> AccentTeal
+                else       -> AccentRed
+            },
             title = "Permissions",
-            subtitle = "What the app can access on your device.",
+            subtitle = if (isLocked) {
+                "Locked while your lockdown session is active."
+            } else {
+                "What the app can access on your device."
+            },
             onClick = onClick,
             trailing = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = "$grantedCount/${checks.size} granted",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (allGranted) AccentTeal else AccentRed
-                    )
-                    Icon(
-                        imageVector = Icons.Filled.ChevronRight,
-                        contentDescription = null,
-                        tint = TextTertiary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    if (isLocked) {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = TextTertiary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Locked",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextTertiary
+                        )
+                    } else {
+                        Text(
+                            text = "$grantedCount/${checks.size} granted",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (allGranted) AccentTeal else AccentRed
+                        )
+                        Icon(
+                            imageVector = Icons.Filled.ChevronRight,
+                            contentDescription = null,
+                            tint = TextTertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         )
