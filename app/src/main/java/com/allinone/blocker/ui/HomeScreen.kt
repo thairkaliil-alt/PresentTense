@@ -29,6 +29,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.AlarmOn
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -71,6 +73,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -78,6 +81,7 @@ import androidx.compose.ui.text.withStyle
 import java.util.Calendar
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.StreakRepository
@@ -86,9 +90,7 @@ import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.animatedCountAsState
 import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
-import com.allinone.blocker.ui.theme.AccentGreen
 import com.allinone.blocker.ui.theme.AccentRed
-import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.BgScreen
 import com.allinone.blocker.ui.theme.CardSurface
@@ -176,6 +178,7 @@ fun HomeScreen(
     onPermissions: () -> Unit,
     onOpenBlockedApps: () -> Unit,
     onOpenBlockedWebsites: () -> Unit,
+    onOpenPresets: () -> Unit,
     onSettings: () -> Unit,
     onAlarmClick: () -> Unit = {},
     onPomodoroClick: () -> Unit = {},
@@ -366,7 +369,7 @@ fun HomeScreen(
                                 icon = Icons.Filled.Language,
                                 count = websites.size,
                                 label = "Blocked Websites",
-                                accentColor = AccentTeal,
+                                accentColor = AccentBlue,
                                 onClick = onOpenBlockedWebsites
                             )
                         }
@@ -387,23 +390,78 @@ fun HomeScreen(
                     }
                 }
 
-                // Not wrapped in HomeEntranceSection like the sections above —
-                // PresetsSection cascades its OWN 12 cards in one at a time
-                // (see StaggeredColumn inside it). Wrapping it in a second,
-                // outer entrance animation used to mean 12 cards animating
-                // inside an already-animating wrapper: two cascades stacked
-                // on top of each other, which is what made the cascade look
-                // like it "didn't play" (frames dropped, not a deliberate
-                // instant show) and cost real jank on Home's first frame.
-                // Passing the animate flag + a start delay straight through
-                // makes this one continuous cascade instead.
-                PresetsSection(
-                    animate = shouldAnimateEntrance,
-                    startDelayMs = 4 * MotionTokens.StaggerStepMs
-                )
+                // The 12 preset cards used to live inline right here. They now
+                // live on their own screen (PresetsScreen.kt), opened by
+                // tapping this single row — one entry point instead of 12
+                // cards competing for attention on first load.
+                HomeEntranceSection(index = 4, animate = shouldAnimateEntrance) {
+                    QuickStartPresetsCard(onClick = onOpenPresets)
+                }
 
                 Spacer(Modifier.height(80.dp))
             }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QUICK START PRESETS CARD
+//
+// Collapses what used to be 12 inline preset cards on Home into one row.
+// Tapping it opens PresetsScreen, where all 12 presets live now. Styled to
+// match the existing "Blocked Apps" / "Blocked Websites" shortcut cards
+// (same card surface, corner shape, icon-chip treatment) so it reads as part
+// of the same family, just full-width.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun QuickStartPresetsCard(onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(AccentBlue.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Bolt,
+                    contentDescription = null,
+                    tint = AccentBlue,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Quick start a preset",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "12 ready-made blocking modes",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = TextTertiary
+            )
         }
     }
 }
@@ -479,7 +537,7 @@ fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit, onPo
                 .padding(vertical = 24.dp, horizontal = 20.dp)
         ) {
             Text(
-                text = "AllinOne Blocker",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary
@@ -570,20 +628,20 @@ private fun TrendPill(percent: Int) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .background(AccentGreen.copy(alpha = 0.12f))
+            .background(AccentBlue.copy(alpha = 0.12f))
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         TrendDownArrow(
-            color = AccentGreen,
+            color = AccentBlue,
             modifier = Modifier.size(10.dp)
         )
         Text(
             text = "$percent% better than yesterday",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
-            color = AccentGreen
+            color = AccentBlue
         )
     }
 }
@@ -666,14 +724,11 @@ fun ScreenTimeCard(
 
     val noData = displayMinutes == 0
 
-    // Colour encodes urgency — thresholds use the real goal if one is set
-    val threshold1 = if (hasGoal) goalMinutes else 180
-    val threshold2 = if (hasGoal) (goalMinutes * 0.33).toInt() else 60
-    val accentColor: Color = when {
-        displayMinutes >= threshold1 -> AccentAmber
-        displayMinutes >= threshold2 -> AccentBlue
-        else                         -> AccentTeal
-    }
+    // Previously this color changed with usage (amber near/over goal, teal
+    // under threshold, blue in between) to encode urgency. As part of the
+    // Home screen color pass, this is now a single consistent accent —
+    // see the "what to test" notes for a flag on this tradeoff.
+    val accentColor: Color = AccentBlue
 
     val mutedColor = Color(0xFF8A8FA8)
 
