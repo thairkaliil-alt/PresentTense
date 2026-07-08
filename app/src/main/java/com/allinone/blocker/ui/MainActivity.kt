@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
                     Screen.SLEEP_CALCULATOR -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
                     Screen.STREAKS          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     Screen.POMODORO         -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
-                    Screen.PERMISSIONS      -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.PERMISSIONS      -> { currentScreen.value = Screen.SETTINGS;         backPressedOnce = false }
                     Screen.SETTINGS         -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     Screen.PROFILE          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     else -> { currentScreen.value = Screen.HOME; backPressedOnce = false }
@@ -311,8 +311,12 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
     }
 )
                 Screen.SLEEP_CALCULATOR -> SleepCalculatorScreen(onBack = { screen = Screen.STRICT_ALARM_LIST })
-                Screen.PERMISSIONS -> PermissionsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
-                Screen.SETTINGS -> SettingsScreen(refreshKey = refreshKey, onBack = { screen = Screen.HOME })
+                Screen.PERMISSIONS -> PermissionsScreen(refreshKey = refreshKey, onBack = { screen = Screen.SETTINGS })
+                Screen.SETTINGS -> SettingsScreen(
+                    refreshKey = refreshKey,
+                    onBack = { screen = Screen.HOME },
+                    onPermissions = { screen = Screen.PERMISSIONS }
+                )
                 Screen.STREAKS -> StreaksScreen(onBack = { screen = Screen.HOME })
                 Screen.POMODORO -> PomodoroScreen(onBack = { screen = Screen.HOME })
                 else -> { /* root screens render in the scaffold below */ }
@@ -342,6 +346,12 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
             when (current) {
                 Screen.HOME -> HomeScreen(
                     refreshKey            = refreshKey,
+                    // NOTE: HomeScreen currently never calls this itself (no
+                    // permissions button on Home yet), so in practice
+                    // Permissions is only ever opened from Settings right now.
+                    // If a Home shortcut is added later, its "back" would
+                    // currently return to Settings too (see Screen.PERMISSIONS
+                    // below) — worth revisiting then.
                     onPermissions         = { screen = Screen.PERMISSIONS },
                     onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
                     onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
