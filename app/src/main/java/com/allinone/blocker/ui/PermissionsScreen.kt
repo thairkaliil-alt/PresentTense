@@ -43,7 +43,7 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Permissions & setup", style = MaterialTheme.typography.titleLarge) },
+                title = { Text("Permissions", style = MaterialTheme.typography.titleLarge) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
