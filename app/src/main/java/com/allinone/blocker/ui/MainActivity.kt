@@ -220,6 +220,63 @@ fun AppRoot(
     var justSavedAlarm  by remember { mutableStateOf<com.allinone.blocker.data.StrictAlarmEntry?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    // ── LOCKDOWN GATE for Permissions ────────────────────────────────────
+    // The Permissions screen is where Accessibility / Overlay / Usage
+    // Access / Device Admin can all be switched off — i.e. the actual
+    // levers that would cripple enforcement. It's the one screen locked
+    // out entirely while a lockdown session is active (extend
+    // [lockdownLockedScreens] if Strict Mode should do the same later).
+    //
+    // Two layers, so this can't be cheated around either direction:
+    //   1. goTo() is how Permissions is opened from anywhere in this file —
+    //      it re-checks live, with the real current time, at the moment of
+    //      the tap. A stale "not locked yet" read isn't possible.
+    //   2. The eviction LaunchedEffect further down handles the case where
+    //      a *scheduled* lockdown kicks in while the user is already
+    //      sitting on Permissions — it ticks every second while that
+    //      screen is open and boots them out the instant the schedule
+    //      flips on, instead of waiting for their next tap or app resume.
+    val lockdownLockedScreens = setOf(Screen.PERMISSIONS)
+
+    fun isLockedRightNow(target: Screen): Boolean {
+        if (target !in lockdownLockedScreens) return false
+        return com.allinone.blocker.data.LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value,
+            breakUntilMillis = BlockerRepository.breakUntil.value
+        ).active
+    }
+
+    fun goTo(target: Screen) {
+        if (isLockedRightNow(target)) {
+            Toast.makeText(
+                context,
+                "Permissions are locked during your lockdown session",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        screen = target
+    }
+
+    // Only ticks while the user is actually sitting on a locked-during-
+    // lockdown screen — idle the rest of the time, so this costs nothing
+    // in the common case.
+    LaunchedEffect(screen) {
+        while (screen in lockdownLockedScreens) {
+            if (isLockedRightNow(screen)) {
+                Toast.makeText(
+                    context,
+                    "Permissions are locked during your lockdown session",
+                    Toast.LENGTH_SHORT
+                ).show()
+                screen = Screen.SETTINGS
+                break
+            }
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+
     val pendingAction by StrictModeGate.pendingAction.collectAsState()
     val strictConfig  by BlockerRepository.strictMode.collectAsState()
 
@@ -315,7 +372,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                 Screen.SETTINGS -> SettingsScreen(
                     refreshKey = refreshKey,
                     onBack = { screen = Screen.HOME },
-                    onPermissions = { screen = Screen.PERMISSIONS }
+                    onPermissions = { goTo(Screen.PERMISSIONS) }
                 )
                 Screen.STREAKS -> StreaksScreen(onBack = { screen = Screen.HOME })
                 Screen.POMODORO -> PomodoroScreen(onBack = { screen = Screen.HOME })
@@ -349,10 +406,9 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     // NOTE: HomeScreen currently never calls this itself (no
                     // permissions button on Home yet), so in practice
                     // Permissions is only ever opened from Settings right now.
-                    // If a Home shortcut is added later, its "back" would
-                    // currently return to Settings too (see Screen.PERMISSIONS
-                    // below) — worth revisiting then.
-                    onPermissions         = { screen = Screen.PERMISSIONS },
+                    // Routed through goTo() anyway so it's covered by the
+                    // lockdown gate the moment a Home shortcut is added.
+                    onPermissions         = { goTo(Screen.PERMISSIONS) },
                     onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
                     onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
                     onSettings            = { screen = Screen.SETTINGS },
