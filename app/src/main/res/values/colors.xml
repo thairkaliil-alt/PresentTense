@@ -6,8 +6,8 @@
   ║  SEED COLORS (reference only — do not use directly in layouts)       ║
   ║    Light primary seed : #0F2A43   Dark primary seed : #5C9CC4        ║
   ║    Light primary-light: #3B6E91   Dark primary-dim : #3B6E91         ║
-  ║    Light background   : #F7F6F3   Dark background  : #15171A         ║
-  ║    Light surface      : #E7E5E0   Dark surface     : #222529         ║
+  ║    Light background   : #F7F6F3   Dark background  : #11141B         ║
+  ║    Light surface      : #E7E5E0   Dark surface     : #1D2433         ║
   ║    Light error        : #D9663B   Dark error       : #E4895F         ║
   ║                                                                      ║
   ║  HOW TO USE                                                          ║
@@ -98,12 +98,17 @@
     <color name="md_theme_dark_errorContainer">#7C3015</color>
     <color name="md_theme_dark_onErrorContainer">#FFDAD2</color>
 
-    <!-- Background & Surface -->
-    <color name="md_theme_dark_background">#15171A</color>
+    <!-- Background & Surface
+         Premium dark-mode pass: background/surface/surfaceVariant now form a
+         clearer elevation ladder (~8% / ~14% / ~18% lightness) instead of
+         sitting almost on top of each other, so cards visibly lift off the
+         page the way Material's tonal-elevation guidance intends. See the
+         matching comment in Theme.kt for the full reasoning. -->
+    <color name="md_theme_dark_background">#11141B</color>
     <color name="md_theme_dark_onBackground">#E2E2E5</color>
-    <color name="md_theme_dark_surface">#222529</color>
+    <color name="md_theme_dark_surface">#1D2433</color>
     <color name="md_theme_dark_onSurface">#E2E2E5</color>
-    <color name="md_theme_dark_surfaceVariant">#2C3036</color>
+    <color name="md_theme_dark_surfaceVariant">#232C3E</color>
     <color name="md_theme_dark_onSurfaceVariant">#C1C7CC</color>
 
     <!-- Outline & Inverse -->
