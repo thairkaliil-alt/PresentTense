@@ -191,6 +191,7 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
 
     var showCustom by remember { mutableStateOf(false) }
     var showPinSetup by remember { mutableStateOf(false) }
+    var showPinConfirm by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
     var pendingPreset by remember { mutableStateOf<StrictPreset?>(null) }
 
@@ -300,8 +301,26 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                     onSelect = {
                         when {
                             preset.needsPin && config.pinHash.isBlank() -> {
+                                // No PIN exists yet at all — this is the
+                                // first time this device has ever needed
+                                // one, so make the user create it now.
                                 pendingPreset = preset
                                 showPinSetup = true
+                            }
+                            preset.needsPin -> {
+                                // BUGFIX: a PIN already exists (set earlier,
+                                // maybe during a different preset, maybe
+                                // forgotten entirely) but this used to apply
+                                // the preset immediately and silently reuse
+                                // that old PIN — so the app could lock
+                                // itself with a PIN the user was never
+                                // asked for *this time* and may not
+                                // remember. Now it always makes them prove
+                                // they still know it before turning the
+                                // preset on, with an escape hatch to set a
+                                // fresh one if they don't.
+                                pendingPreset = preset
+                                showPinConfirm = true
                             }
                             else -> applyPreset(preset)
                         }
@@ -396,6 +415,26 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                 }
                 showPinSetup = false
                 pendingPreset = null
+            }
+        )
+    }
+
+    // ── PIN confirm (BUGFIX: presets that reuse an existing PIN) ────────────
+    if (showPinConfirm) {
+        PinConfirmDialog(
+            expectedHash = config.pinHash,
+            onDismiss = { showPinConfirm = false; pendingPreset = null },
+            onConfirmed = {
+                val preset = pendingPreset
+                if (preset != null) applyPreset(preset)
+                showPinConfirm = false
+                pendingPreset = null
+            },
+            onForgotReset = {
+                // Keep pendingPreset set — PinSetupDialog above already
+                // knows how to apply it once a fresh PIN is saved.
+                showPinConfirm = false
+                showPinSetup = true
             }
         )
     }
@@ -663,12 +702,34 @@ private fun CustomFrictionSheet(
 
     fun setFriction(type: FrictionType, on: Boolean) {
         if (!on && StrictModeGate.isSettingsLockedByPlan(config)) return
-        val updated = if (on) config.activeFrictions + type else config.activeFrictions - type
-        val newConfig = config.copy(activeFrictions = updated)
-        BlockerRepository.setStrictMode(newConfig)
-        if (type == FrictionType.LOCATION_LOCK) {
-            if (on) GeofenceManager.sync(context, newConfig.locationZones)
-            else GeofenceManager.sync(context, emptyList())
+
+        fun apply() {
+            val updated = if (on) config.activeFrictions + type else config.activeFrictions - type
+            val newConfig = config.copy(activeFrictions = updated)
+            BlockerRepository.setStrictMode(newConfig)
+            if (type == FrictionType.LOCATION_LOCK) {
+                if (on) GeofenceManager.sync(context, newConfig.locationZones)
+                else GeofenceManager.sync(context, emptyList())
+            }
+        }
+
+        if (!on && config.enabled) {
+            // BUGFIX (bypass): turning a layer OFF while Strict Mode is
+            // enabled weakens your protection, so it must pass the exact
+            // same challenge as disabling Strict Mode entirely from the
+            // main switch. We guard using the CURRENT set of active
+            // frictions (before removal), so turning off Cooldown itself
+            // requires sitting through the cooldown wait, turning off the
+            // PIN requires the PIN, etc. Without this, someone could open
+            // "Build your own" and switch every layer off one at a time
+            // with zero friction, leaving Strict Mode with nothing left to
+            // challenge when they then hit the main OFF switch.
+            StrictModeGate.guard { apply() }
+        } else {
+            // Turning a layer ON only ever adds protection, so it stays
+            // instant — there's no reason to challenge someone for making
+            // Strict Mode stricter.
+            apply()
         }
     }
 
@@ -717,17 +778,70 @@ private fun CustomFrictionSheet(
                     onCheckedChange = { on -> setFriction(FrictionType.COOLDOWN, on) }
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // BUGFIX (bypass): this used to write straight to
+                        // BlockerRepository on every pixel of the drag, with
+                        // no challenge at all — so you could drag a 5-minute
+                        // wait down to 10 seconds instantly. `liveValue` is a
+                        // local copy that moves freely while dragging (so the
+                        // slider still feels smooth and the number shown
+                        // below updates as you drag); the actual decision on
+                        // whether the change is allowed happens once, when
+                        // the finger lifts, in onValueChangeFinished below.
+                        // It's keyed on config.cooldownSeconds so it
+                        // re-syncs to whatever's actually saved any time
+                        // that changes.
+                        var liveValue by remember(config.cooldownSeconds) {
+                            mutableStateOf(config.cooldownSeconds.toFloat())
+                        }
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Wait time", style = MaterialTheme.typography.labelLarge, color = TextSecondary, fontWeight = FontWeight.SemiBold)
-                            DurationPill(label = formatSeconds(config.cooldownSeconds), color = AccentBlue)
+                            DurationPill(label = formatSeconds(liveValue.toInt()), color = AccentBlue)
                         }
                         Slider(
-                            value = config.cooldownSeconds.toFloat(),
-                            onValueChange = { BlockerRepository.setStrictMode(config.copy(cooldownSeconds = it.toInt())) },
+                            value = liveValue,
+                            onValueChange = { liveValue = it },
+                            onValueChangeFinished = {
+                                val newSeconds = liveValue.toInt()
+                                val currentSeconds = config.cooldownSeconds
+                                when {
+                                    newSeconds >= currentSeconds -> {
+                                        // Keeping the wait the same or making
+                                        // it longer only adds protection —
+                                        // no challenge needed.
+                                        BlockerRepository.setStrictMode(config.copy(cooldownSeconds = newSeconds))
+                                    }
+                                    config.enabled && FrictionType.COOLDOWN in config.activeFrictions -> {
+                                        // Shortening the wait while Cooldown
+                                        // is actively protecting something is
+                                        // just as much a weakening move as
+                                        // switching Cooldown off entirely, so
+                                        // it gets the same challenge. Snap
+                                        // the slider back to the currently
+                                        // saved value first so it doesn't
+                                        // visually sit on the lower number
+                                        // while the challenge is pending —
+                                        // it'll jump to the new value on its
+                                        // own once the challenge succeeds and
+                                        // config.cooldownSeconds updates.
+                                        liveValue = currentSeconds.toFloat()
+                                        StrictModeGate.guard {
+                                            BlockerRepository.setStrictMode(config.copy(cooldownSeconds = newSeconds))
+                                        }
+                                    }
+                                    else -> {
+                                        // Strict Mode is off, or Cooldown
+                                        // isn't one of the active layers
+                                        // right now — nothing is actually
+                                        // being protected, so this is just
+                                        // ordinary configuration.
+                                        BlockerRepository.setStrictMode(config.copy(cooldownSeconds = newSeconds))
+                                    }
+                                }
+                            },
                             valueRange = 10f..300f, steps = 28,
                             colors = SliderDefaults.colors(
                                 thumbColor = AccentBlue,
@@ -1021,6 +1135,55 @@ private fun PinSetupDialog(onDismiss: () -> Unit, onSaved: (String) -> Unit) {
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
             ) { Text("Save", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
+    )
+}
+
+@Composable
+private fun PinConfirmDialog(
+    expectedHash: String,
+    onDismiss: () -> Unit,
+    onConfirmed: () -> Unit,
+    onForgotReset: () -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurfaceAlt,
+        title = { Text("Confirm your PIN", fontWeight = FontWeight.Bold, color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "This plan uses the PIN you already set on this device. Enter it to turn the plan on.",
+                    style = MaterialTheme.typography.bodySmall, color = TextTertiary
+                )
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) { pin = it; error = null } },
+                    label = { Text("6-digit PIN") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = onForgotReset) {
+                    Text("Forgot it? Set a new PIN instead", color = AccentBlue, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    when {
+                        pin.length != 6 -> error = "PIN must be 6 digits"
+                        !PinHasher.matches(pin, expectedHash) -> error = "That's not the right PIN"
+                        else -> onConfirmed()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+            ) { Text("Confirm", fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) } }
     )
