@@ -330,16 +330,32 @@ private fun AlarmCard(
     val haptics   = rememberHaptics()
     val dragScope = rememberCoroutineScope()
 
-    // Width of the red action button once fully revealed.
+    // Width of the red action button once fully revealed. This is also the
+    // hard stop for a FIRST swipe — see below.
     val revealWidthPx = with(density) { 78.dp.toPx() }
-    // Swiping (or flinging) past this point commits to delete outright —
-    // this is the "swipe again, further or faster" gesture.
-    val commitPx = revealWidthPx * 1.9f
-    // Hard stop so a wild drag can't fling the card off past a sane point.
-    val maxDragPx = revealWidthPx * 2.4f
+    // How much FURTHER (beyond revealWidthPx) a SECOND swipe has to travel
+    // to commit to delete. Kept as extra distance, not an absolute value,
+    // so it always reads as "swipe again, a good chunk further."
+    val extraCommitPx = revealWidthPx * 0.9f
+    val absoluteCommitPx = revealWidthPx + extraCommitPx
+    // Hard stop for the second swipe so a wild drag can't fling the card
+    // off past a sane point. Only ever reachable once already revealed.
+    val maxDragPx = revealWidthPx + extraCommitPx * 1.5f
 
     val offsetX = remember(entry.id) { Animatable(0f) }
     var buzzedReveal by remember(entry.id) { mutableStateOf(false) }
+    var buzzedCommit by remember(entry.id) { mutableStateOf(false) }
+    // Captured once per gesture, at the moment a drag begins: was the card
+    // already sitting fully revealed when this swipe started? This is the
+    // one flag that makes the whole two-step feel work —
+    //   • false → this is a FIRST swipe. However far or fast you drag or
+    //     fling, it can only ever end up revealed or closed. It can never
+    //     delete by itself, no matter how hard it's flicked.
+    //   • true  → this is a SECOND swipe, starting from an already-open
+    //     card. Only this gesture is allowed to travel into "delete"
+    //     territory, and it does so with real resistance (like pushing
+    //     against a soft latch) instead of tracking your finger 1:1.
+    var dragStartedFromRevealed by remember(entry.id) { mutableStateOf(false) }
 
     // A different card was swiped open, or the parent asked this one to
     // close — snap shut instead of ever leaving two cards open at once.
@@ -347,16 +363,35 @@ private fun AlarmCard(
         if (!isRevealed && offsetX.value != 0f) {
             offsetX.animateTo(0f, MotionSpecs.tactile())
             buzzedReveal = false
+            buzzedCommit = false
         }
     }
 
     // Where the drag/fling ends up decides the outcome: snap shut, settle
-    // into the "revealed" position, or commit to deleting.
-    suspend fun settleDrag(velocity: Float) {
-        val current    = offsetX.value
-        val flungFast  = velocity < -900f
+    // into the "revealed" position, or (second swipe only) commit to
+    // deleting.
+    suspend fun settleDrag(velocity: Float, startedFromRevealed: Boolean) {
+        val current = offsetX.value
+
+        if (!startedFromRevealed) {
+            // FIRST swipe: deleting is never on the table here, by design.
+            // It either opens to the reveal position or snaps fully shut.
+            if (current <= -revealWidthPx * 0.5f) {
+                offsetX.animateTo(-revealWidthPx, MotionSpecs.tactile())
+                onRevealChange(true)
+            } else {
+                offsetX.animateTo(0f, MotionSpecs.tactile())
+                onRevealChange(false)
+                buzzedReveal = false
+            }
+            return
+        }
+
+        // SECOND swipe, starting from an already-revealed card: this is the
+        // only gesture that's allowed to commit to delete.
+        val flungFast = velocity < -700f
         when {
-            current <= -commitPx || (flungFast && current <= -revealWidthPx * 0.9f) -> {
+            current <= -absoluteCommitPx || (flungFast && current <= -revealWidthPx * 1.3f) -> {
                 haptics.confirm()
                 onRevealChange(false)
                 onDelete()
@@ -369,6 +404,7 @@ private fun AlarmCard(
                 offsetX.animateTo(0f, MotionSpecs.tactile())
                 onRevealChange(false)
                 buzzedReveal = false
+                buzzedCommit = false
             }
         }
     }
@@ -378,6 +414,7 @@ private fun AlarmCard(
             offsetX.animateTo(0f, MotionSpecs.tactile())
             onRevealChange(false)
             buzzedReveal = false
+            buzzedCommit = false
         }
     }
 
@@ -436,20 +473,63 @@ private fun AlarmCard(
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { delta ->
                         dragScope.launch {
-                            val next = (offsetX.value + delta).coerceIn(-maxDragPx, 0f)
-                            offsetX.snapTo(next)
-                            // One light tick exactly when the swipe crosses
-                            // into "revealed" territory — the same felt
-                            // confirmation a physical latch gives you.
-                            if (!buzzedReveal && next <= -revealWidthPx) {
-                                haptics.tap()
-                                buzzedReveal = true
-                            } else if (next > -revealWidthPx * 0.5f) {
-                                buzzedReveal = false
+                            val current = offsetX.value
+
+                            if (!dragStartedFromRevealed) {
+                                // FIRST swipe: hard-capped at the reveal
+                                // position. No amount of speed or distance
+                                // gets you past this — this is the fix for
+                                // the old "one flick deletes it" feel.
+                                val next = (current + delta).coerceIn(-revealWidthPx, 0f)
+                                offsetX.snapTo(next)
+                                if (!buzzedReveal && next <= -revealWidthPx * 0.99f) {
+                                    haptics.tap()
+                                    buzzedReveal = true
+                                } else if (next > -revealWidthPx * 0.5f) {
+                                    buzzedReveal = false
+                                }
+                            } else {
+                                // SECOND swipe, starting from revealed: free
+                                // 1:1 movement up to the reveal edge, then
+                                // real rubber-band resistance beyond it —
+                                // the same "pushing against a soft latch"
+                                // feel as iOS Mail's full-swipe-to-delete.
+                                // Each further pixel of finger travel moves
+                                // the card less and less, right up to a firm
+                                // hard stop at maxDragPx.
+                                val scaledDelta = if (current <= -revealWidthPx && delta < 0f) {
+                                    val extra    = (-current - revealWidthPx).coerceAtLeast(0f)
+                                    val maxExtra = maxDragPx - revealWidthPx
+                                    val resistance = 1f - (extra / maxExtra).coerceIn(0f, 1f) * 0.72f
+                                    delta * resistance
+                                } else delta
+                                val next = (current + scaledDelta).coerceIn(-maxDragPx, 0f)
+                                offsetX.snapTo(next)
+
+                                if (!buzzedReveal && next <= -revealWidthPx * 0.99f) {
+                                    haptics.tap()
+                                    buzzedReveal = true
+                                } else if (next > -revealWidthPx * 0.5f) {
+                                    buzzedReveal = false
+                                }
+                                // A second, distinct tick right as the swipe
+                                // crosses into "will delete if released now"
+                                // territory — the same felt confirmation a
+                                // physical latch gives you right before it
+                                // gives way.
+                                if (!buzzedCommit && next <= -absoluteCommitPx) {
+                                    haptics.tap()
+                                    buzzedCommit = true
+                                } else if (next > -absoluteCommitPx * 0.9f) {
+                                    buzzedCommit = false
+                                }
                             }
                         }
                     },
-                    onDragStopped = { velocity -> settleDrag(velocity) }
+                    onDragStarted = {
+                        dragStartedFromRevealed = offsetX.value <= -revealWidthPx * 0.99f
+                    },
+                    onDragStopped = { velocity -> settleDrag(velocity, dragStartedFromRevealed) }
                 )
         ) {
             Column(
