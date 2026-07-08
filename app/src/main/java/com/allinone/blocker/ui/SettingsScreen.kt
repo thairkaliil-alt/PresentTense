@@ -14,17 +14,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StarRate
 import androidx.compose.material.icons.filled.Vibration
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,8 +63,9 @@ import com.allinone.blocker.ui.theme.TextTertiary
 //
 // PLAIN-ENGLISH SUMMARY:
 // This is the actual Settings page the user sees. It's split into 3 sections:
-//   1. Permissions    — shows whether Accessibility / Usage Access / Display-
-//                        over-other-apps are granted, tap to fix any that aren't
+//   1. Permissions    — one row showing how many permissions are granted
+//                        (e.g. "3/4 granted"), tap to open the full
+//                        Permissions screen (PermissionsScreen.kt)
 //   2. Notifications  — 3 on/off switches, saved permanently via DataStore
 //   3. About & Support — app version, Rate, Feedback, Privacy Policy, Terms
 //
@@ -85,7 +85,8 @@ import com.allinone.blocker.ui.theme.TextTertiary
 @Composable
 fun SettingsScreen(
     refreshKey: Int,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onPermissions: () -> Unit
 ) {
     val viewModel: SettingsViewModel = viewModel()
 
@@ -128,8 +129,13 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
 
             // ── 1. PERMISSIONS SECTION ───────────────────────────────────────
+            // A single row that opens the dedicated Permissions screen, instead
+            // of duplicating the full permission list here. That screen is the
+            // one place that lists every permission the app needs (now and any
+            // added later) — which also makes it the one place to lock behind
+            // Lockdown/Strict Mode later, instead of two.
             SectionHeader(title = "Permissions")
-            PermissionsSection(refreshKey = refreshKey)
+            PermissionsSummaryRow(refreshKey = refreshKey, onClick = onPermissions)
 
             Spacer(Modifier.height(8.dp))
 
@@ -165,21 +171,30 @@ private fun SectionHeader(title: String) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. PERMISSIONS SECTION
-// Reuses the same Permissions.kt helper object that PermissionsScreen.kt
-// uses, so the "is this granted?" logic lives in exactly one place in the
-// whole app.
+// One row, showing how many of the permissions are granted right now, that
+// opens PermissionsScreen.kt — the single dedicated screen with the full
+// list (and any new permission added down the line). No permission-checking
+// logic lives here anymore; it all lives in Permissions.kt, used by both this
+// row and PermissionsScreen.kt.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun PermissionsSection(refreshKey: Int) {
+private fun PermissionsSummaryRow(refreshKey: Int, onClick: () -> Unit) {
     val context = LocalContext.current
 
     // remember(refreshKey) re-checks each permission only when refreshKey
     // changes (i.e. when the user comes back to this screen), not on every
     // recomposition — same pattern PermissionsScreen.kt already uses.
-    val hasAccessibility = remember(refreshKey) { Permissions.hasAccessibility(context) }
-    val hasUsage          = remember(refreshKey) { Permissions.hasUsageAccess(context) }
-    val hasOverlay         = remember(refreshKey) { Permissions.hasOverlay(context) }
+    val checks = remember(refreshKey) {
+        listOf(
+            Permissions.hasAccessibility(context),
+            Permissions.hasUsageAccess(context),
+            Permissions.hasOverlay(context),
+            Permissions.hasDeviceAdmin(context)
+        )
+    }
+    val grantedCount = checks.count { it }
+    val allGranted = grantedCount == checks.size
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -187,75 +202,32 @@ private fun PermissionsSection(refreshKey: Int) {
         colors = CardDefaults.cardColors(containerColor = CardSurface),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
-        Column {
-            PermissionItem(
-                icon = Icons.Filled.AccessibilityNew,
-                title = "Accessibility Service",
-                subtitle = "Lets the app detect which app is open, so blocks can be enforced.",
-                granted = hasAccessibility,
-                onClick = { Permissions.openAccessibilitySettings(context) }
-            )
-            ItemDivider()
-            PermissionItem(
-                icon = Icons.Filled.QueryStats,
-                title = "Usage Access",
-                subtitle = "Lets the app track screen time for daily limits and stats.",
-                granted = hasUsage,
-                onClick = { Permissions.openUsageAccessSettings(context) }
-            )
-            ItemDivider()
-            PermissionItem(
-                icon = Icons.Filled.Visibility,
-                title = "Display Over Other Apps",
-                subtitle = "Lets the app show the block screen on top of blocked apps.",
-                granted = hasOverlay,
-                onClick = { Permissions.openOverlaySettings(context) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun PermissionItem(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    granted: Boolean,
-    onClick: () -> Unit
-) {
-    SettingsRow(
-        icon = icon,
-        iconTint = if (granted) AccentTeal else AccentRed,
-        title = title,
-        subtitle = subtitle,
-        onClick = onClick,
-        trailing = { StatusBadge(granted = granted) }
-    )
-}
-
-/** Small green "Active" / red "Missing" pill shown on the right of each permission row. */
-@Composable
-private fun StatusBadge(granted: Boolean) {
-    val color = if (granted) AccentTeal else AccentRed
-    val label = if (granted) "Active" else "Missing"
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = color
+        SettingsRow(
+            icon = Icons.Filled.Security,
+            iconTint = if (allGranted) AccentTeal else AccentRed,
+            title = "Permissions",
+            subtitle = "What the app can access on your device.",
+            onClick = onClick,
+            trailing = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "$grantedCount/${checks.size} granted",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (allGranted) AccentTeal else AccentRed
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = TextTertiary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         )
-        if (!granted) {
-            Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = TextTertiary,
-                modifier = Modifier.size(18.dp)
-            )
-        }
     }
 }
 
