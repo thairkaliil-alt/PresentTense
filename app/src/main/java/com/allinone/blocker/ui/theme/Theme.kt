@@ -6,8 +6,8 @@ package com.allinone.blocker.ui.theme
 // PALETTE REFERENCE (seed values — do not use directly in screens)
 //   Light  primary       : #0F2A43    Dark  primary       : #5C9CC4
 //   Light  primary-light : #3B6E91    Dark  primary-dim   : #3B6E91
-//   Light  background    : #F7F6F3    Dark  background    : #15171A
-//   Light  surface       : #E7E5E0    Dark  surface       : #222529
+//   Light  background    : #F7F6F3    Dark  background    : #11141B
+//   Light  surface       : #E7E5E0    Dark  surface       : #1D2433
 //   Light  error         : #D9663B    Dark  error         : #E4895F
 //
 // HOW TO USE COLORS IN SCREENS
@@ -95,11 +95,11 @@ val DarkOnError               = Color(0xFF5C1900)
 val DarkErrorContainer        = Color(0xFF7C3015)
 val DarkOnErrorContainer      = Color(0xFFFFDAD2)
 
-val DarkBackground            = Color(0xFF15171A)
+val DarkBackground            = Color(0xFF11141B)
 val DarkOnBackground          = Color(0xFFE2E2E5)
-val DarkSurface               = Color(0xFF222529)
+val DarkSurface               = Color(0xFF1D2433)
 val DarkOnSurface             = Color(0xFFE2E2E5)
-val DarkSurfaceVariant        = Color(0xFF2C3036)
+val DarkSurfaceVariant        = Color(0xFF232C3E)
 val DarkOnSurfaceVariant      = Color(0xFFC1C7CC)
 
 val DarkOutline               = Color(0xFF8B9198)
@@ -192,10 +192,25 @@ val TextMuted: Color
 // Background / surface aliases — same idea. BgDarkest is the slightly deeper
 // layer used for things like the bottom nav bar; it now has its own light
 // counterpart instead of always being near-black.
-private val BgScreenDark   = Color(0xFF13171F)    // was #15171A — subtle blue shift
-private val BgDarkestDark  = Color(0xFF0E1219)    // was #0F1117 — matches the shift
-private val CardSurfaceDark    = Color(0xFF1C2333) // was #222529 — blue-grey tint
-private val CardSurfaceAltDark = Color(0xFF232A3A) // was #2C3036 — same family
+//
+// PREMIUM DARK MODE PASS (elevation ladder)
+// The old dark palette was too flat: background (#13171F, ~9% lightness) and
+// card (#1C2333, ~14%) sat only about 5 points apart, so cards never looked
+// like they were "lifted" off the page — the whole screen read as one grey
+// slab. Apps that feel premium in dark mode (Linear, Notion, Revolut) use a
+// clearly stepped ladder instead: a deep, near-black floor, then each layer
+// on top gets noticeably lighter, the same way a Material "elevation
+// overlay" lightens a surface the closer it sits to the light source. This
+// pass keeps the same navy-blue brand hue (so it still looks like Present
+// Tense, not a generic grey app) but stretches the steps out:
+//   BgDarkest   ~5%  → the floor: bottom nav / deepest recess
+//   BgScreen    ~8%  → the page itself (close to Material's classic #121212)
+//   CardSurface ~14% → a normal card — now clearly "lifted" above the page
+//   CardSurfaceAlt ~20% → the one hero/featured card per screen — richer still
+private val BgScreenDark   = Color(0xFF11141B)    // was #13171F — page background
+private val BgDarkestDark  = Color(0xFF0B0D12)    // was #0E1219 — bottom nav / deepest recess
+private val CardSurfaceDark    = Color(0xFF1D2433) // was #1C2333 — normal card, now a bigger step up from the page
+private val CardSurfaceAltDark = Color(0xFF29334A) // was #232A3A — hero/featured card, richer and more saturated
 
 // Cards used to sit almost exactly on top of the screen background (both were
 // near-identical warm greys), so nothing ever looked "lifted" — the whole
