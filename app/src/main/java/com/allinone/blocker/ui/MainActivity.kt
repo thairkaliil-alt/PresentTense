@@ -79,7 +79,7 @@ import com.allinone.blocker.ui.theme.ThemePreference
 enum class Screen {
     HOME, PERMISSIONS, BLOCKED_APPS, BLOCKED_WEBSITES, APP_PICKER, APP_RULES,
     LOCKDOWN, WHITELIST, STRICT_MODE, STATS, SETTINGS,
-    STRICT_ALARM_LIST, STRICT_ALARM_EDIT, STRICT_ALARM_QUICK_ADD, SLEEP_CALCULATOR, PROFILE, STREAKS, POMODORO
+    STRICT_ALARM_LIST, STRICT_ALARM_EDIT, STRICT_ALARM_QUICK_ADD, SLEEP_CALCULATOR, PROFILE, STREAKS, POMODORO, PRESETS
 }
 
 data class NavTab(
@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
                     Screen.SLEEP_CALCULATOR -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
                     Screen.STREAKS          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     Screen.POMODORO         -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
+                    Screen.PRESETS          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     Screen.PERMISSIONS      -> { currentScreen.value = Screen.SETTINGS;         backPressedOnce = false }
                     Screen.SETTINGS         -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
                     Screen.PROFILE          -> { currentScreen.value = Screen.HOME;             backPressedOnce = false }
@@ -296,7 +297,7 @@ fun AppRoot(
   val subScreens = setOf(
         Screen.BLOCKED_APPS, Screen.BLOCKED_WEBSITES, Screen.APP_PICKER, Screen.APP_RULES,
         Screen.WHITELIST, Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT, Screen.STRICT_ALARM_QUICK_ADD,
-        Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS, Screen.SETTINGS, Screen.STREAKS, Screen.POMODORO
+        Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS, Screen.SETTINGS, Screen.STREAKS, Screen.POMODORO, Screen.PRESETS
     )
     if (screen in subScreens) {
         com.allinone.blocker.ui.motion.ScreenPush(targetState = screen) { current ->
@@ -377,6 +378,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                 )
                 Screen.STREAKS -> StreaksScreen(onBack = { screen = Screen.HOME })
                 Screen.POMODORO -> PomodoroScreen(onBack = { screen = Screen.HOME })
+                Screen.PRESETS -> PresetsScreen(onBack = { screen = Screen.HOME })
                 else -> { /* root screens render in the scaffold below */ }
             }
         }
@@ -412,6 +414,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     onPermissions         = { goTo(Screen.PERMISSIONS) },
                     onOpenBlockedApps     = { screen = Screen.BLOCKED_APPS },
                     onOpenBlockedWebsites = { screen = Screen.BLOCKED_WEBSITES },
+                    onOpenPresets         = { screen = Screen.PRESETS },
                     onSettings            = { screen = Screen.SETTINGS },
                     onAlarmClick          = { screen = Screen.STRICT_ALARM_LIST },
                     onPomodoroClick       = { screen = Screen.POMODORO },
