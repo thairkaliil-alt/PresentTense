@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -76,15 +77,15 @@ import kotlinx.coroutines.delay
 // duration-chip controls, same lock-while-a-session-is-running friction.
 // ════════════════════════════════════════════════════════════════════════════
 
-private data class DurationPreset(val label: String, val minutes: Int)
+private data class BreakDurationPreset(val label: String, val minutes: Int)
 
 // Quick-pick presets for a single emergency break's length.
 private val BREAK_DURATION_PRESETS = listOf(
-    DurationPreset("5m",  5),
-    DurationPreset("10m", 10),
-    DurationPreset("15m", 15),
-    DurationPreset("20m", 20),
-    DurationPreset("30m", 30)
+    BreakDurationPreset("5m",  5),
+    BreakDurationPreset("10m", 10),
+    BreakDurationPreset("15m", 15),
+    BreakDurationPreset("20m", 20),
+    BreakDurationPreset("30m", 30)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -294,7 +295,7 @@ private fun EmergencyBreaksCard(sessionRunning: Boolean) {
 }
 
 @Composable
-private fun DurationChip(preset: DurationPreset, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+private fun DurationChip(preset: BreakDurationPreset, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
     val bgColor     = if (selected) AccentBlue.copy(alpha = 0.18f) else CardSurface
     val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.18f)
     val textColor   = if (selected) AccentBlue else TextPrimary
