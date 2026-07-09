@@ -346,6 +346,22 @@ private fun PinStep(expectedHash: String, onPassed: () -> Unit) {
                 if (PinHasher.matches(input, expectedHash)) succeed() else fail()
             }
         )
+
+        // BUGFIX: there used to be no way out of this screen at all if you
+        // genuinely forgot your PIN — infinite wrong attempts, no escape.
+        // This starts the same 1-hour delayed reset available everywhere
+        // else; it doesn't skip this challenge, it just means you're not
+        // permanently stuck. See PinRecoveryDialog for why it isn't instant.
+        var showRecovery by remember { mutableStateOf(false) }
+        TextButton(onClick = { showRecovery = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Forgot PIN?", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        if (showRecovery) {
+            PinRecoveryDialog(
+                onDismiss = { showRecovery = false },
+                onNewPinSaved = { showRecovery = false }
+            )
+        }
     }
 }
 
