@@ -192,6 +192,7 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
     var showCustom by remember { mutableStateOf(false) }
     var showPinSetup by remember { mutableStateOf(false) }
     var showPinConfirm by remember { mutableStateOf(false) }
+    var showPinRecovery by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
     var pendingPreset by remember { mutableStateOf<StrictPreset?>(null) }
 
@@ -431,10 +432,24 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                 pendingPreset = null
             },
             onForgotReset = {
-                // Keep pendingPreset set — PinSetupDialog above already
-                // knows how to apply it once a fresh PIN is saved.
+                // Keep pendingPreset set — PinRecoveryDialog below applies
+                // it automatically once a fresh PIN is actually saved,
+                // after the mandatory wait.
                 showPinConfirm = false
-                showPinSetup = true
+                showPinRecovery = true
+            }
+        )
+    }
+
+    // ── PIN recovery (BUGFIX: forgetting your PIN used to be a dead end) ────
+    if (showPinRecovery) {
+        PinRecoveryDialog(
+            onDismiss = { showPinRecovery = false },
+            onNewPinSaved = {
+                val preset = pendingPreset
+                if (preset != null) applyPreset(preset)
+                showPinRecovery = false
+                pendingPreset = null
             }
         )
     }
@@ -698,6 +713,8 @@ private fun CustomFrictionSheet(
 ) {
     val context = LocalContext.current
     var showPinSetup by remember { mutableStateOf(false) }
+    var showPinConfirm by remember { mutableStateOf(false) }
+    var showPinRecovery by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
 
     fun setFriction(type: FrictionType, on: Boolean) {
@@ -887,8 +904,20 @@ private fun CustomFrictionSheet(
                     }
                 ) {
                     val pinChangeLocked = config.pinHash.isNotBlank() && StrictModeGate.isSettingsLockedByPlan(config)
+                    // BUGFIX (bypass): "Change PIN" used to open the setup
+                    // dialog directly, any time, with zero verification —
+                    // so anyone could quietly swap in a new PIN and use
+                    // that to sail past the PIN challenge later, making the
+                    // whole layer pointless while Strict Mode was actively
+                    // relying on it. Now, if the PIN is currently doing its
+                    // job (Strict Mode on and PIN switched on), you have to
+                    // confirm the PIN you already have before setting a new
+                    // one — with the same 1-hour "Forgot it?" recovery as
+                    // everywhere else if you can't.
+                    val pinActivelyProtecting = config.pinHash.isNotBlank() && config.enabled &&
+                        FrictionType.PIN in config.activeFrictions
                     OutlinedButton(
-                        onClick = { showPinSetup = true },
+                        onClick = { if (pinActivelyProtecting) showPinConfirm = true else showPinSetup = true },
                         enabled = !pinChangeLocked,
                         border = androidx.compose.foundation.BorderStroke(1.dp, AccentBlue.copy(alpha = if (pinChangeLocked) 0.2f else 0.5f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentBlue)
@@ -970,6 +999,27 @@ private fun CustomFrictionSheet(
                 )
                 showPinSetup = false
             }
+        )
+    }
+    if (showPinConfirm) {
+        PinConfirmDialog(
+            expectedHash = config.pinHash,
+            onDismiss = { showPinConfirm = false },
+            onConfirmed = {
+                // Identity confirmed — now let them actually pick the new PIN.
+                showPinConfirm = false
+                showPinSetup = true
+            },
+            onForgotReset = {
+                showPinConfirm = false
+                showPinRecovery = true
+            }
+        )
+    }
+    if (showPinRecovery) {
+        PinRecoveryDialog(
+            onDismiss = { showPinRecovery = false },
+            onNewPinSaved = { showPinRecovery = false }
         )
     }
     if (showPledgeEdit) {
