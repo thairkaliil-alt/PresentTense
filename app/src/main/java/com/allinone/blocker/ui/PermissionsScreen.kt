@@ -39,6 +39,7 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     val hasOverlay       = remember(refreshKey) { Permissions.hasOverlay(context) }
     val hasUsage         = remember(refreshKey) { Permissions.hasUsageAccess(context) }
     val hasDeviceAdmin   = remember(refreshKey) { Permissions.hasDeviceAdmin(context) }
+    val hasDefaultHome   = remember(refreshKey) { Permissions.isDefaultHomeApp(context) }
 
     Scaffold(
         topBar = {
@@ -103,6 +104,14 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
                     "session is running.",
                 granted     = hasDeviceAdmin,
                 onGrant     = { Permissions.requestDeviceAdmin(context) }
+            )
+            PermissionRow(
+                title       = "Default Home app",
+                description = "Makes Present Tense open first when you press Home during " +
+                    "lockdown, instead of your normal launcher flashing up before being " +
+                    "corrected. This closes the \"press Home and it rolls away\" gap.",
+                granted     = hasDefaultHome,
+                onGrant     = { Permissions.openHomeAppSettings(context) }
             )
         }
     }
