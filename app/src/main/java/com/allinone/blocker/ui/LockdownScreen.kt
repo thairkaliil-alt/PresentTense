@@ -3,7 +3,6 @@ package com.allinone.blocker.ui
 import android.app.Activity
 import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
@@ -50,6 +49,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
@@ -783,33 +783,39 @@ private fun LockdownHeroSection(
 
         Spacer(Modifier.height(32.dp))
 
+        // The wheel is the one confident primary control; Quick Pick sits
+        // underneath it, visually quieter and closed by default — see the
+        // comments on [PickDurationCard] and [QuickPickSection] for why
+        // these two used to be tabs in one card and no longer are.
         PickDurationCard(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
+        Spacer(Modifier.height(14.dp))
+        QuickPickSection(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
     }
 }
 
 // ════════════════════════════════════ Pick Duration card ════════════════════════════════════
 //
-// Redesigned around a gap the old single radial dial had no way to close:
-// it only reached 1 minute–4 hours, so anyone wanting a half-day, overnight,
-// or multi-day lockdown had no path to it at all. This card now offers two
-// deliberately different ways in — a "Quick" grid of named, intent-based
-// presets (the fast path for the handful of lengths people actually reach
-// for most sessions) and a "Custom" day/hour/minute wheel picker (the
-// precise path for everything else, up to [MAX_ARMED_MINUTES]) — rather
-// than trying to force both use cases onto one control. Both tabs write
-// straight into the same [armedMinutes], so the big live readout at the top
-// and the "Hold the orb…" hint at the bottom stay correct and in sync no
-// matter which tab was used last.
+// This card now does exactly one job: dial in a precise duration on the
+// Days/Hours/Minutes wheel, full range up to [MAX_ARMED_MINUTES]. Named
+// presets used to live in a second tab bolted onto this same card; they
+// now live below it in their own collapsed-by-default [QuickPickSection]
+// instead. Two principles drove that split:
+//   • Hick's Law — decision time grows with the number of visible options,
+//     so the moment someone opens this screen they should see ONE clear
+//     way to set a duration, not two competing controls fighting for the
+//     same 300dp of card.
+//   • Progressive disclosure (a core Nielsen Norman heuristic, and the same
+//     one behind why Headspace/Calm/Opal keep session-length shortcuts a
+//     tap away rather than front-and-center) — secondary paths stay
+//     reachable without competing for attention with the primary one.
+// Both controls still write into the same [armedMinutes], so the live
+// readout here and the "Hold the orb…" hint stay correct regardless of
+// which one was used last.
 @Composable
 private fun PickDurationCard(
     armedMinutes  : Int,
     onSelectPreset: (Int) -> Unit
 ) {
-    // 0 = Quick presets, 1 = Custom wheels. Local/unpersisted on purpose —
-    // this is view state about *how* someone is currently choosing a
-    // duration, not part of what actually gets armed.
-    var selectedTab by remember { mutableStateOf(0) }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(28.dp),
@@ -828,25 +834,17 @@ private fun PickDurationCard(
             Text("Everything except your whitelist will be blocked.", style = MaterialTheme.typography.bodySmall, color = TextMuted, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
 
-            // The live readout is shared by both tabs — always shows exactly
-            // what's armed right now, whether it came from a preset tap or a
-            // wheel scroll, so switching tabs never reads as "losing" a value.
+            // The live readout — always reflects exactly what's armed right
+            // now, whether the wheel or a Quick Pick tap set it last.
             Text(
                 formatDuration(armedMinutes),
                 style      = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
                 color      = TextPrimary
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(22.dp))
 
-            DurationModeTabs(selectedTab = selectedTab, onTabSelected = { selectedTab = it })
-            Spacer(Modifier.height(18.dp))
-
-            if (selectedTab == 0) {
-                PresetGrid(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
-            } else {
-                WheelDurationPicker(totalMinutes = armedMinutes, onTotalMinutesChange = onSelectPreset)
-            }
+            WheelDurationPicker(totalMinutes = armedMinutes, onTotalMinutesChange = onSelectPreset)
 
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
@@ -870,46 +868,78 @@ private fun PickDurationCard(
     }
 }
 
-// ── Quick / Custom segmented switch ──────────────────────────────────────
-// Hand-drawn rather than Material3's default SegmentedButton, so it matches
-// the rest of this screen's frosted-glass, hand-tuned look instead of
-// introducing a visibly different, off-the-shelf component style. A sliding
-// tinted highlight (not just a text color swap) is what makes this read as
-// "one control with two states" instead of two unrelated buttons sitting
-// next to each other — the same affordance iOS's segmented control and
-// Android Settings' toggle rows both lean on.
+// ── Quick Pick — collapsed-by-default shortcut drawer ───────────────────
+// Deliberately built to read as LOWER in the visual hierarchy than the card
+// above it, not just placed after it: a flat tinted surface instead of an
+// elevated Card, a small label instead of a titleMedium headline, and
+// closed on first render. That's on purpose — this is a shortcut for
+// people who already know "Deep Work" means 50 minutes to them, not a
+// second decision meant to compete with the wheel above for attention.
+//
+// The header still surfaces the current pick ("Deep Work · 50m") whenever
+// armedMinutes happens to match a named preset, even while collapsed — so
+// closing this drawer only ever hides the *grid of options*, never the
+// *information* about what's currently armed (Nielsen's "visibility of
+// system status" heuristic). Tapping a preset inside auto-collapses the
+// drawer again, since its job is done the moment a choice is made.
 @Composable
-private fun DurationModeTabs(selectedTab: Int, onTabSelected: (Int) -> Unit) {
-    val labels = listOf("Quick", "Custom")
-    Row(
+private fun QuickPickSection(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = MotionSpecs.standard(),
+        label       = "quick_pick_chevron"
+    )
+    val matchedPreset = remember(armedMinutes) { DURATION_PRESETS.firstOrNull { it.minutes == armedMinutes } }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(40.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(CardSurface)
-            .padding(3.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(CardSurface.copy(alpha = 0.55f))
+            .clickable { expanded = !expanded }
     ) {
-        labels.forEachIndexed { index, label ->
-            val selected = selectedTab == index
-            val bg by animateColorAsState(
-                targetValue = if (selected) AccentBlue.copy(alpha = 0.18f) else Color.Transparent,
-                label       = "duration_tab_bg"
-            )
-            val fg = if (selected) AccentBlue else TextMuted
+        Row(
+            modifier          = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(bg)
-                    .clickable { onTabSelected(index) },
+                modifier         = Modifier.size(28.dp).clip(CircleShape).background(TextMuted.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center
             ) {
+                Icon(Icons.Filled.Timer, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Quick Pick", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = TextSecondary)
                 Text(
-                    text       = label,
-                    style      = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color      = fg
+                    text  = matchedPreset?.let { "${it.label} · ${formatDuration(it.minutes)}" } ?: "Named presets for common sessions",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+            Icon(
+                imageVector        = Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse quick pick" else "Expand quick pick",
+                tint               = TextMuted,
+                modifier           = Modifier.size(20.dp).graphicsLayer { rotationZ = chevronRotation }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter   = expandVertically(animationSpec = MotionSpecs.enter()) + fadeIn(animationSpec = MotionSpecs.enter()),
+            exit    = shrinkVertically(animationSpec = MotionSpecs.exit()) + fadeOut(animationSpec = MotionSpecs.exit())
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .padding(bottom = 18.dp, top = 2.dp)
+            ) {
+                PresetGrid(
+                    armedMinutes   = armedMinutes,
+                    onSelectPreset = { minutes -> onSelectPreset(minutes); expanded = false }
                 )
             }
         }
