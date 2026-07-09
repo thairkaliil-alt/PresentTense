@@ -1,5 +1,6 @@
 package com.allinone.blocker.ui
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -65,8 +66,19 @@ import kotlinx.coroutines.delay
  *
  * Together with [AppBlockerAccessibilityService] this turns the device into a
  * single inescapable screen — the Digital-Detox effect — without needing
- * Device Owner / ADB. The trade-off vs. true Device Owner kiosk mode is that
- * this relies on the accessibility service staying enabled.
+ * Device Owner / ADB.
+ *
+ * SCREEN PINNING: while this screen is on top of a live lockdown, the
+ * activity also pins itself using Android's built-in Screen Pinning
+ * (Activity.startLockTask()). This is the same feature behind "pin this
+ * app" in the Recents screen, and it disables the Home and Recents
+ * buttons at the OS level — not by reacting after the fact, but by making
+ * them inert while pinned. That's what closes the "press Home and the
+ * screen rolls away for a split second" gap: there's nothing left for the
+ * accessibility service to react to, because Home never gets a chance to
+ * switch away in the first place. Pinning is released the instant the
+ * user taps a whitelisted app (see [launchApp]) or the session legitimately
+ * ends (see [exitToApp]), so it never traps the user inside a permitted app.
  *
  * When no lockdown is active this activity is harmless: it immediately hands
  * off to [MainActivity], so it can safely be registered as a HOME launcher.
@@ -106,7 +118,14 @@ class LockdownLauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // If lockdown ended while we were backgrounded, don't trap the user here.
-        if (!isLockdownActive()) exitToApp()
+        if (!isLockdownActive()) {
+            exitToApp()
+            return
+        }
+        // Re-pin every time this screen comes back to the front — including
+        // the very first time, and every time the watchdog/accessibility
+        // service relaunches it after corralling the user back here.
+        armScreenPinning()
     }
 
     private fun isLockdownActive(): Boolean = LockdownEngine.evaluate(
@@ -115,16 +134,44 @@ class LockdownLauncherActivity : ComponentActivity() {
     ).active
 
     private fun launchApp(pkg: String) {
+        // Release the pin before handing off — otherwise the whitelisted app
+        // would inherit a Home/Recents-disabled state it never asked for.
+        disarmScreenPinning()
         val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { startActivity(intent) }
     }
 
     private fun exitToApp() {
+        disarmScreenPinning()
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         runCatching { startActivity(intent) }
         finish()
+    }
+
+    /** True if this screen (or any screen) is currently pinned via Screen Pinning. */
+    private fun isScreenPinningActive(): Boolean {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
+        return am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+    }
+
+    /**
+     * Pins the lockdown screen so Home/Recents stop responding at the OS
+     * level. Safe to call repeatedly — does nothing if already pinned.
+     * Wrapped in runCatching because some OEMs can briefly throw if called
+     * before the window is fully attached; if that happens here, the next
+     * onResume() (e.g. after the watchdog relaunches this screen) tries again.
+     */
+    private fun armScreenPinning() {
+        if (isScreenPinningActive()) return
+        runCatching { startLockTask() }
+    }
+
+    /** Un-pins the screen. Safe to call repeatedly — does nothing if not pinned. */
+    private fun disarmScreenPinning() {
+        if (!isScreenPinningActive()) return
+        runCatching { stopLockTask() }
     }
 
     companion object {
