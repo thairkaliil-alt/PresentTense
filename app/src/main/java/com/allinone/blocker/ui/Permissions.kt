@@ -159,4 +159,36 @@ object Permissions {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
     }
+
+    /**
+     * True once the user has flipped on Android's own "Screen pinning"
+     * toggle (Settings > Security > Advanced > Screen pinning, wording
+     * varies by OEM). This is what LockdownLauncherActivity relies on to
+     * call Activity.startLockTask() — without Device Owner, an app can
+     * only pin itself (disabling Home/Recents at the OS level) if the user
+     * has enabled this system setting first. There's no public API to turn
+     * it on for them; if it's off, startLockTask() silently fails and
+     * Android shows its own "screen pinning isn't turned on" system
+     * message instead. `lock_to_app_enabled` isn't part of the public SDK
+     * as a named constant, but it's the stable, long-standing key Android
+     * itself stores this toggle under.
+     */
+    fun hasScreenPinningEnabled(context: Context): Boolean =
+        runCatching {
+            Settings.System.getInt(context.contentResolver, "lock_to_app_enabled", 0) == 1
+        }.getOrDefault(false)
+
+    /**
+     * Opens Security settings — the closest universal deep link across
+     * OEMs. There's no public Intent action that jumps straight to the
+     * Screen Pinning toggle itself (it lives a couple of taps deeper, under
+     * "Advanced" or "More security settings" depending on the device), so
+     * this gets the user to the right general screen and the in-app prompt
+     * tells them what to tap next.
+     */
+    fun openScreenPinningSettings(context: Context) {
+        val intent = Intent(Settings.ACTION_SECURITY_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
 }
