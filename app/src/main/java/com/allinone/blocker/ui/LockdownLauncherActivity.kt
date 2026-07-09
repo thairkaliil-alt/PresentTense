@@ -26,9 +26,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -176,12 +178,22 @@ class LockdownLauncherActivity : ComponentActivity() {
     /**
      * Pins the lockdown screen so Home/Recents stop responding at the OS
      * level. Safe to call repeatedly — does nothing if already pinned.
-     * Wrapped in runCatching because some OEMs can briefly throw if called
-     * before the window is fully attached; if that happens here, the next
-     * onResume() (e.g. after the watchdog relaunches this screen) tries again.
+     *
+     * BUGFIX: this used to call startLockTask() unconditionally, every
+     * single time this screen resumed (which happens a lot — every time the
+     * accessibility service bounces the user back here). Without Device
+     * Owner, startLockTask() only actually works if the user has turned on
+     * Android's own "Screen pinning" setting first — if they haven't,
+     * every one of those calls silently failed and Android showed its own
+     * confusing system message about it not being supported, over and
+     * over. Now we check first, only attempt it when it can actually
+     * succeed, and surface a clear one-time in-app explanation instead
+     * (see the "Turn on Screen Pinning" card in LockdownLauncherScreen)
+     * rather than letting the OS repeat itself at the user.
      */
     private fun armScreenPinning() {
         if (isScreenPinningActive()) return
+        if (!Permissions.hasScreenPinningEnabled(this)) return
         runCatching { startLockTask() }
     }
 
@@ -218,6 +230,13 @@ private fun LockdownLauncherScreen(
 
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedTicker { now = it }
+
+    // BUGFIX: replaces the repeated, unexplained "screen pinning isn't
+    // supported" system toast with a single clear in-app card. Re-checked
+    // every time this screen ticks so the card disappears on its own the
+    // moment the user actually turns the setting on and comes back.
+    var pinningDismissed by remember { mutableStateOf(false) }
+    val pinningEnabled = remember(now) { Permissions.hasScreenPinningEnabled(context) }
 
     val decision = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
@@ -272,6 +291,14 @@ private fun LockdownLauncherScreen(
 
             Spacer(Modifier.height(56.dp))
 
+            if (!pinningEnabled && !pinningDismissed) {
+                ScreenPinningNudgeCard(
+                    onOpenSettings = { Permissions.openScreenPinningSettings(context) },
+                    onDismiss = { pinningDismissed = true }
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+
             if (apps.isEmpty()) {
                 Text(
                     "No apps whitelisted.\nPhone and Messages still work.",
@@ -310,6 +337,72 @@ private fun LockdownLauncherScreen(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 20.dp, end = 20.dp)
+            )
+        }
+    }
+}
+
+/**
+ * BUGFIX: replaces Android's own repeated, confusing "screen pinning isn't
+ * supported" system toast with a single clear explanation the user can
+ * actually act on. Shown only while the setting is off; disappears on its
+ * own once it's turned on (see the pinningEnabled check in
+ * LockdownLauncherScreen), and can be dismissed for this session if the
+ * user doesn't want the extra hardening.
+ */
+@Composable
+private fun ScreenPinningNudgeCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Lock,
+                contentDescription = null,
+                tint = AccentTeal,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Turn on Screen Pinning",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimary
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "For the tightest lockdown, turn on Android's Screen Pinning once, under " +
+                "Settings > Security. Blocking still works without it — this just closes a " +
+                "brief flash that can happen when leaving the Home screen.",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary
+        )
+        Spacer(Modifier.height(12.dp))
+        Row {
+            Text(
+                "Open Settings",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = AccentBlue,
+                modifier = Modifier.pressable(
+                    pressedScale = MotionTokens.PressScaleSmall,
+                    onClick = onOpenSettings
+                )
+            )
+            Spacer(Modifier.width(20.dp))
+            Text(
+                "Dismiss",
+                style = MaterialTheme.typography.labelMedium,
+                color = TextMuted,
+                modifier = Modifier.pressable(
+                    pressedScale = MotionTokens.PressScaleSmall,
+                    onClick = onDismiss
+                )
             )
         }
     }
