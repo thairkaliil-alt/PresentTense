@@ -1,7 +1,6 @@
 package com.allinone.blocker.ui
 
 import android.app.Activity
-import android.app.TimePickerDialog
 import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -18,7 +17,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,42 +35,30 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -112,12 +98,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.allinone.blocker.R
-import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
@@ -127,7 +111,6 @@ import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
-import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
@@ -142,22 +125,11 @@ import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Calendar
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
-
-private val DAY_LABELS = mapOf(
-    Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
-    Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
-    Calendar.SUNDAY to "Sun"
-)
-private val DAY_ORDER = listOf(
-    Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY,
-    Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
-)
 
 // ════════════════════════════════════ Duration Presets ════════════════════════════════════
 
@@ -174,30 +146,22 @@ private val DURATION_PRESETS = listOf(
     DurationPreset("2h",   120)
 )
 
-// Quick-pick presets for a single emergency break's length. Reuses the same
-// DurationChip look as the lockdown-length picker above so the two "pick a
-// duration" moments in this screen feel like one consistent design language
-// instead of two different controls (chips vs. a slider).
-private val BREAK_DURATION_PRESETS = listOf(
-    DurationPreset("5m",  5),
-    DurationPreset("10m", 10),
-    DurationPreset("15m", 15),
-    DurationPreset("20m", 20),
-    DurationPreset("30m", 30)
-)
-
 // ════════════════════════════════════ Screen root ════════════════════════════════════
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
+fun LockdownScreen(
+    onBack: () -> Unit,
+    onManageWhitelist: () -> Unit = {},
+    onManageSchedules: () -> Unit = {},
+    onManageEmergencyBreaks: () -> Unit = {}
+) {
     val context = LocalContext.current
     val manualUntil by BlockerRepository.manualLockUntil.collectAsState()
     val schedules   by BlockerRepository.schedules.collectAsState()
     val breakUntil  by BlockerRepository.breakUntil.collectAsState()
 
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    var showAddSchedule    by remember { mutableStateOf<LockdownSchedule?>(null) }
 
     val decisionPreview = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
@@ -387,6 +351,17 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
+                    actions = {
+                        IconButton(onClick = onManageSchedules) {
+                            Icon(Icons.Filled.Schedule, contentDescription = "Manage schedules")
+                        }
+                        IconButton(onClick = onManageEmergencyBreaks) {
+                            Icon(Icons.Filled.Bolt, contentDescription = "Manage emergency breaks")
+                        }
+                        IconButton(onClick = onManageWhitelist) {
+                            Icon(Icons.Filled.Shield, contentDescription = "Manage whitelist")
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor         = BgDarkest,
                         scrolledContainerColor = CardSurface
@@ -401,35 +376,14 @@ fun LockdownScreen(onBack: () -> Unit, onManageWhitelist: () -> Unit = {}) {
                 decision            = decision,
                 now                 = now,
                 breaksRemaining     = breaksRemaining,
-                schedules           = schedules,
-                onManageWhitelist   = onManageWhitelist,
                 armedMinutes        = armedMinutes,
                 onSelectPreset      = { mins -> armedMinutes = mins },
                 voidProgress        = voidProgressState,
                 onHoldStart         = { origin, mins -> holdOrigin = origin; holdArmedMinutes = mins; isHolding = true },
                 onHoldEnd           = { isHolding = false },
-                onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
-                onAddSchedule       = { showAddSchedule = LockdownSchedule(id = BlockerRepository.newScheduleId()) },
-                onToggleSchedule    = { s, v ->
-                    if (!v) StrictModeGate.guard { BlockerRepository.updateSchedule(s.copy(enabled = v)) }
-                    else BlockerRepository.updateSchedule(s.copy(enabled = v))
-                },
-                onDeleteSchedule    = { s -> StrictModeGate.guard { BlockerRepository.removeSchedule(s.id) } },
-                onEditSchedule      = { showAddSchedule = it }
+                onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } }
             )
         }
-    }
-
-    showAddSchedule?.let { editing ->
-        ScheduleEditDialog(
-            schedule  = editing,
-            onDismiss = { showAddSchedule = null },
-            onSave    = { saved ->
-                if (schedules.any { it.id == saved.id }) BlockerRepository.updateSchedule(saved)
-                else BlockerRepository.addSchedule(saved)
-                showAddSchedule = null
-            }
-        )
     }
 }
 
@@ -904,153 +858,6 @@ private fun DurationJumpPill(label: String, selected: Boolean, onClick: () -> Un
     }
 }
 
-@Composable
-private fun DurationChip(preset: DurationPreset, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
-    val bgColor     = if (selected) AccentBlue.copy(alpha = 0.18f) else CardSurface
-    val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.18f)
-    val textColor   = if (selected) AccentBlue else TextPrimary
-    val borderWidth = if (selected) 1.5.dp else 1.dp
-    val contentAlpha = if (enabled) 1f else 0.4f
-
-    Box(
-        modifier         = modifier
-            .graphicsLayer { alpha = contentAlpha }
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            drawRoundRect(color = borderColor, cornerRadius = CornerRadius(12.dp.toPx()), style = Stroke(width = borderWidth.toPx()))
-        }
-        Text(
-            text      = preset.label,
-            style     = MaterialTheme.typography.labelLarge,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color     = textColor,
-            modifier  = Modifier.padding(vertical = 12.dp, horizontal = 8.dp),
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-// ════════════════════════════════════ Whitelist summary (entry point) ════════════════════════════════════
-//
-// One merged card replaces what used to be a header + search bar + full scrolling
-// app list all living loose inside the lockdown page. The card always shows the
-// count and a stacked preview of who's allowed; tapping it opens the full
-// searchable manage-whitelist screen. This is the same "summary row → dedicated
-// manager" pattern iOS Focus/Screen Time and apps like Opal use for allow-lists,
-// so people aren't scrolling past hundreds of installed apps just to configure a
-// lockdown duration.
-
-@Composable
-private fun WhitelistSummaryCard(
-    count       : Int,
-    previewApps : List<DeviceApp>,
-    onClick     : () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .pressable(onClick = onClick),
-        shape    = RoundedCornerShape(20.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Row(
-            modifier          = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier         = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(AccentTeal.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Shield, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(22.dp))
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Whitelist", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (count == 0) "No apps allowed yet — tap to choose"
-                    else "$count app${if (count == 1) "" else "s"} allowed during lockdown",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextTertiary
-                )
-            }
-            if (previewApps.isNotEmpty()) {
-                Spacer(Modifier.width(8.dp))
-                WhitelistAvatarStack(apps = previewApps)
-                Spacer(Modifier.width(10.dp))
-            } else {
-                Spacer(Modifier.width(8.dp))
-            }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Manage whitelist", tint = TextMuted)
-        }
-    }
-}
-
-// Overlapping "face pile" of the first few whitelisted apps — gives an instant
-// preview of who's allowed without opening anything, same idea as the member
-// avatar stacks in Slack/Notion.
-@Composable
-private fun WhitelistAvatarStack(apps: List<DeviceApp>) {
-    val shown    = apps.take(3)
-    val overflow = apps.size - shown.size
-
-    Row {
-        shown.forEachIndexed { index, app ->
-            Box(
-                modifier = Modifier
-                    .offset(x = (-8 * index).dp)
-                    .zIndex((shown.size - index).toFloat())
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(CardSurface)
-                    .border(2.dp, CardSurface, CircleShape)
-            ) {
-                MiniAppAvatar(app = app, size = 24)
-            }
-        }
-        if (overflow > 0) {
-            Box(
-                modifier = Modifier
-                    .offset(x = (-8 * shown.size).dp)
-                    .zIndex(0f)
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(CardSurfaceAlt)
-                    .border(2.dp, CardSurface, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("+$overflow", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = TextSecondary)
-            }
-        }
-    }
-}
-
-@Composable
-private fun MiniAppAvatar(app: DeviceApp, size: Int) {
-    val icon = remember(app.packageName) { InstalledApps.iconFor(app.packageName) }
-    Box(
-        modifier         = Modifier.fillMaxSize().clip(CircleShape).background(CardSurfaceAlt),
-        contentAlignment = Alignment.Center
-    ) {
-        if (icon != null) {
-            Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(size.dp).clip(CircleShape))
-        } else {
-            Text(
-                app.label.take(1).uppercase(),
-                style      = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color      = TextPrimary
-            )
-        }
-    }
-}
-
 // ════════════════════════════════════ Active lockdown panel ════════════════════════════════════
 
 @Composable
@@ -1134,300 +941,6 @@ private fun ActiveLockdownPanel(
     }
 }
 
-// ════════════════════════════════════ Emergency breaks (expandable card) ════════════════════════════════════
-//
-// This used to be a section header plus a card that was always fully open —
-// two sliders and their labels sitting on the screen at all times, whether
-// or not anyone needed to touch them. That's now collapsed into a single
-// expandable card, the same "collapsed summary → tap to reveal" pattern
-// used throughout iOS Settings and Android's own Settings app: the header
-// always shows the current configuration at a glance (e.g. "2 breaks · 10
-// min each"), and the actual controls only appear once someone taps it.
-//
-// The two controls themselves were also upgraded:
-//  - "Breaks per session" (a small, precise range of 0–5) is now a stepper
-//    with +/- buttons instead of a slider — per Nielsen Norman Group's
-//    guidance, steppers give users exact, error-free control over small
-//    numeric ranges, where a slider's imprecise drag makes it easy to
-//    overshoot the number you meant to land on.
-//  - "Break duration" is now quick-pick chips (5/10/15/20/30 min), reusing
-//    the exact same DurationChip look as the lockdown-length picker at the
-//    top of this screen, so the two duration choices in this screen feel
-//    like one design instead of two.
-
-@Composable
-private fun EmergencyBreaksCard(sessionRunning: Boolean) {
-    val breakConfig by BlockerRepository.strictMode.collectAsState()
-    var expanded by remember { mutableStateOf(false) }
-
-    // Locked the moment a lockdown session (or a break inside one) is live —
-    // otherwise "2 breaks of 5 minutes" is just a suggestion, since anyone
-    // could open this same card mid-break and dial it up to "10 breaks of
-    // 60 minutes" right before their current break runs out. Change these
-    // BEFORE you start your next lockdown instead. BlockerRepository.setStrictMode
-    // enforces this too (belt-and-suspenders), so this is UI-level only.
-    val locked = sessionRunning
-
-    val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 90f else 0f,
-        label       = "emergencyBreaksChevron"
-    )
-
-    val noBreaks = breakConfig.maxBreaksPerSession == 0
-    val summary = if (noBreaks) {
-        "No breaks allowed"
-    } else {
-        val breakWord = if (breakConfig.maxBreaksPerSession == 1) "break" else "breaks"
-        "${breakConfig.maxBreaksPerSession} $breakWord · ${breakConfig.breakDurationMinutes} min each"
-    }
-
-    Card(
-        modifier  = Modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(20.dp),
-        colors    = CardDefaults.cardColors(containerColor = CardSurface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(Modifier.fillMaxWidth()) {
-
-            // Header — always visible. The whole row is the tap target, and
-            // the subtitle doubles as a live summary so the setting is
-            // scannable even while collapsed.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier         = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(AccentTeal.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(20.dp))
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Emergency breaks", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                    Spacer(Modifier.height(2.dp))
-                    Text(summary, style = MaterialTheme.typography.bodySmall, color = if (noBreaks) AccentRed.copy(alpha = 0.85f) else TextTertiary)
-                }
-                if (locked) {
-                    Icon(
-                        Icons.Filled.Lock,
-                        contentDescription = "Locked while a lockdown session is running",
-                        tint     = TextMuted,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                }
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    tint     = TextMuted,
-                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = chevronRotation }
-                )
-            }
-
-            AnimatedVisibility(
-                visible = expanded,
-                enter   = expandVertically(animationSpec = tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(220)),
-                exit    = shrinkVertically(animationSpec = tween(180, easing = FastOutSlowInEasing)) + fadeOut(tween(140))
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
-                    HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
-
-                    Text(
-                        "When lockdown is active, you can request a short break. Configure how many and how long each one lasts.",
-                        style = MaterialTheme.typography.bodySmall, color = TextTertiary
-                    )
-
-                    if (locked) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(TextMuted.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Lock, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "Locked while this lockdown session is running — including during a break. Change these before your next session starts.",
-                                    style = MaterialTheme.typography.bodySmall, color = TextMuted
-                                )
-                            }
-                        }
-                    }
-
-                    // Breaks per session — stepper
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Breaks per session", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
-                        BreakCountStepper(
-                            value         = breakConfig.maxBreaksPerSession,
-                            range         = 0..5,
-                            locked        = locked,
-                            onValueChange = { BlockerRepository.setStrictMode(breakConfig.copy(maxBreaksPerSession = it)) }
-                        )
-                        if (noBreaks) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AccentRed.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Text("No breaks allowed. Once lockdown starts, it runs until it ends.", style = MaterialTheme.typography.bodySmall, color = AccentRed)
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
-
-                    // Break duration — quick-pick chips
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Break duration", style = MaterialTheme.typography.labelLarge, color = TextMuted, fontWeight = FontWeight.SemiBold)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            BREAK_DURATION_PRESETS.forEach { preset ->
-                                DurationChip(
-                                    preset   = preset,
-                                    selected = breakConfig.breakDurationMinutes == preset.minutes,
-                                    modifier = Modifier.weight(1f),
-                                    enabled  = !locked,
-                                    onClick  = { BlockerRepository.setStrictMode(breakConfig.copy(breakDurationMinutes = preset.minutes)) }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// A small precise range (0–5) reads and adjusts far more reliably as a
-// stepper than as a slider: every tap is exactly ±1, there's no risk of
-// dragging past the number you meant to land on, and "None" is spelled out
-// in words rather than just showing "0", which is easy to misread as "min".
-@Composable
-private fun BreakCountStepper(value: Int, range: IntRange, locked: Boolean = false, onValueChange: (Int) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(TextTertiary.copy(alpha = 0.07f))
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        StepperIconButton(
-            icon    = Icons.Filled.Remove,
-            enabled = !locked && value > range.first,
-            onClick = { onValueChange((value - 1).coerceIn(range)) }
-        )
-
-        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                if (value == 0) "None" else "$value",
-                style      = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color      = if (value == 0) AccentRed else TextPrimary
-            )
-            Text(
-                if (value == 0) "no breaks" else if (value == 1) "break" else "breaks",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
-        }
-
-        StepperIconButton(
-            icon    = Icons.Filled.Add,
-            enabled = !locked && value < range.last,
-            onClick = { onValueChange((value + 1).coerceIn(range)) }
-        )
-    }
-}
-
-// Shared +/- button for the stepper above. Disabled (rather than hidden) at
-// the ends of the range, per standard stepper accessibility guidance, so the
-// control never visually jumps around as the value nears its limits.
-@Composable
-private fun StepperIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, onClick: () -> Unit) {
-    val bg   = if (enabled) AccentTeal.copy(alpha = 0.16f) else TextTertiary.copy(alpha = 0.06f)
-    val tint = if (enabled) AccentTeal else TextMuted.copy(alpha = 0.35f)
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(RoundedCornerShape(50.dp))
-            .background(bg)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-    }
-}
-
-// ════════════════════════════════════ Section header + schedule cards ════════════════════════════════════
-
-@Composable
-private fun SectionHeader(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f))
-        if (action != null && onAction != null) {
-            TextButton(onClick = onAction) { Text(action, color = AccentBlue, fontWeight = FontWeight.SemiBold) }
-        }
-    }
-}
-
-@Composable
-private fun EmptyHintCard(text: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(20.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        border   = BorderStroke(1.dp, TextMuted.copy(alpha = 0.14f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(
-            modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
-                modifier         = Modifier.size(44.dp).clip(CircleShape).background(TextMuted.copy(alpha = 0.10f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Schedule, contentDescription = null, tint = TextMuted, modifier = Modifier.size(20.dp))
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(text, style = MaterialTheme.typography.bodySmall, color = TextTertiary, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-private fun ScheduleCard(schedule: LockdownSchedule, onToggle: (Boolean) -> Unit, onDelete: () -> Unit, onEdit: () -> Unit) {
-    Card(
-        onClick  = onEdit,
-        modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(20.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                if (schedule.label.isNotBlank()) Text(schedule.label, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Text("${BlockEngine.formatMinutes(schedule.startMinutes)} – ${BlockEngine.formatMinutes(schedule.endMinutes)}", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
-                Text(
-                    schedule.daysOfWeek.sortedBy { DAY_ORDER.indexOf(it) }.mapNotNull { DAY_LABELS[it] }.joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall, color = TextMuted
-                )
-            }
-            Switch(
-                checked         = schedule.enabled,
-                onCheckedChange = onToggle,
-                colors          = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentTeal)
-            )
-            Spacer(Modifier.width(4.dp))
-            IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = AccentRed.copy(alpha = 0.7f), modifier = Modifier.size(20.dp)) }
-        }
-    }
-}
-
 // ════════════════════════════════════ Main lazy column ════════════════════════════════════
 
 @Composable
@@ -1437,36 +950,20 @@ private fun EmbeddedLockdownLazyColumn(
     decision         : LockdownDecision,
     now              : Long,
     breaksRemaining  : Int,
-    schedules        : List<LockdownSchedule>,
-    onManageWhitelist: () -> Unit,
     armedMinutes     : Int,
     onSelectPreset   : (Int) -> Unit,
     voidProgress     : State<Float>,
     onHoldStart      : (Offset, Int) -> Unit,
     onHoldEnd        : () -> Unit,
-    onEmergencyBreak : () -> Unit,
-    onAddSchedule    : () -> Unit,
-    onToggleSchedule : (LockdownSchedule, Boolean) -> Unit,
-    onDeleteSchedule : (LockdownSchedule) -> Unit,
-    onEditSchedule   : (LockdownSchedule) -> Unit
+    onEmergencyBreak : () -> Unit
 ) {
-    val context   = LocalContext.current
-    val whitelist by BlockerRepository.whitelist.collectAsState()
-    val all       by InstalledApps.apps.collectAsState()
-
-    LaunchedEffect(Unit) { if (all.isEmpty()) InstalledApps.refresh(context) }
-
-    val whitelistedApps = remember(all, whitelist) {
-        all.filter { it.packageName in whitelist }
-    }
-
     LazyColumn(
         modifier        = modifier.fillMaxSize(),
         contentPadding  = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp)
     ) {
 
-        // ── 1. Hero / Active panel ──────────────────────────────────────────
+        // ── Hero / Active panel ─────────────────────────────────────────────
         item(key = "session_header") {
             if (!sessionRunning) LockdownHeroSection(
                 armedMinutes   = armedMinutes,
@@ -1481,40 +978,6 @@ private fun EmbeddedLockdownLazyColumn(
                 breaksRemaining  = breaksRemaining,
                 onEmergencyBreak = onEmergencyBreak
             )
-        }
-
-        // ── 2. Whitelist — one merged card: count + preview + tap to manage ──
-        item(key = "whitelist_summary_card") {
-            WhitelistSummaryCard(
-                count       = whitelist.size,
-                previewApps = whitelistedApps,
-                onClick     = onManageWhitelist
-            )
-        }
-
-        // ── 3. Emergency breaks (expandable — see EmergencyBreaksCard) ──────
-        item(key = "emergency_breaks_card") {
-            EmergencyBreaksCard(sessionRunning = sessionRunning)
-        }
-
-        // ── 4. Daily schedules ─────────────────────────────────────────────
-        item(key = "schedules_header") {
-            SectionHeader(title = "Daily schedules", action = "+ Add", onAction = onAddSchedule)
-        }
-
-        if (schedules.isEmpty()) {
-            item(key = "schedules_empty") {
-                EmptyHintCard("No schedules yet. Add one for things like \u201CLock every night 11pm\u20137am.\u201D")
-            }
-        } else {
-            items(schedules, key = { "schedule_${it.id}" }) { schedule ->
-                ScheduleCard(
-                    schedule = schedule,
-                    onToggle = { onToggleSchedule(schedule, it) },
-                    onDelete = { onDeleteSchedule(schedule) },
-                    onEdit   = { onEditSchedule(schedule) }
-                )
-            }
         }
 
         item(key = "bottom_spacer") { Spacer(Modifier.height(24.dp)) }
@@ -1617,49 +1080,7 @@ private fun formatDuration(minutes: Int): String {
     return when { h == 0 -> "${m}m"; m == 0 -> "${h}h"; else -> "${h}h ${m}m" }
 }
 
-// ════════════════════════════════════ Schedule edit dialog ════════════════════════════════════
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-private fun ScheduleEditDialog(schedule: LockdownSchedule, onDismiss: () -> Unit, onSave: (LockdownSchedule) -> Unit) {
-    val context = LocalContext.current
-    var label by remember { mutableStateOf(schedule.label) }
-    var start by remember { mutableStateOf(schedule.startMinutes) }
-    var end   by remember { mutableStateOf(schedule.endMinutes) }
-    var days  by remember { mutableStateOf(schedule.daysOfWeek) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title            = { Text("Lockdown schedule") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text("Name (optional)") }, singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { pickTime(context, start) { start = it } }) { Text("From ${BlockEngine.formatMinutes(start)}") }
-                    OutlinedButton(onClick = { pickTime(context, end)   { end   = it } }) { Text("To ${BlockEngine.formatMinutes(end)}") }
-                }
-                Text("Active on:", style = MaterialTheme.typography.bodySmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DAY_ORDER.forEach { day ->
-                        FilterChip(
-                            selected = day in days,
-                            onClick  = { days = if (day in days) days - day else days + day },
-                            label    = { Text(DAY_LABELS[day] ?: "") }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = { onSave(schedule.copy(label = label, startMinutes = start, endMinutes = end, daysOfWeek = days)) }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
 // ════════════════════════════════════ Helpers ════════════════════════════════════
-
-private fun pickTime(context: android.content.Context, currentMinutes: Int, onPicked: (Int) -> Unit) {
-    TimePickerDialog(context, { _, h, m -> onPicked(h * 60 + m) }, currentMinutes / 60, currentMinutes % 60, false).show()
-}
 
 private fun formatCountdown(totalSec: Long): String {
     val h = totalSec / 3600; val m = (totalSec % 3600) / 60; val s = totalSec % 60
