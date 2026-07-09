@@ -3,6 +3,7 @@ package com.allinone.blocker.ui
 import android.app.Activity
 import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
@@ -17,21 +18,22 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,14 +41,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Weekend
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -125,26 +134,45 @@ import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ════════════════════════════════════ Duration Presets ════════════════════════════════════
+//
+// Redesigned around how people actually use a lockdown app: some sessions
+// are short focus sprints (minutes), others are "put the phone away for the
+// weekend" style commitments (days). A flat row of "15m / 25m / 50m" pills
+// simply had no room to express that second category, which is exactly the
+// gap that prompted this rework — see [PickDurationCard] and
+// [WheelDurationPicker] below for the custom-entry side of the same fix.
+// Each preset now carries its own icon + short "why you'd pick this" label,
+// closer to how Headspace/Calm/Opal present session-length choices as
+// distinct *intents* rather than raw numbers.
 
-private data class DurationPreset(val label: String, val minutes: Int)
-
-// No "Custom" entry anymore — the dial in the Pick Duration card can reach
-// any value directly, so these are now pure quick-jump shortcuts rather than
-// the only way to pick a duration.
-private val DURATION_PRESETS = listOf(
-    DurationPreset("15m",   15),
-    DurationPreset("25m",   25),
-    DurationPreset("50m",   50),
-    DurationPreset("90m",   90),
-    DurationPreset("2h",   120)
+private data class DurationPreset(
+    val label  : String,
+    val minutes: Int,
+    val icon   : androidx.compose.ui.graphics.vector.ImageVector
 )
+
+private val DURATION_PRESETS = listOf(
+    DurationPreset("Quick Focus",  15,    Icons.Filled.Timer),
+    DurationPreset("Deep Work",    50,    Icons.Filled.Bolt),
+    DurationPreset("Study Block",  90,    Icons.Filled.Schedule),
+    DurationPreset("Half Day",     4 * 60, Icons.Filled.WbSunny),
+    DurationPreset("Overnight",    8 * 60, Icons.Filled.Bedtime),
+    DurationPreset("Full Day",     24 * 60, Icons.Filled.Lock),
+    DurationPreset("Weekend",      2 * 24 * 60, Icons.Filled.Weekend),
+    DurationPreset("Full Week",    7 * 24 * 60, Icons.Filled.CalendarMonth)
+)
+
+// Hard ceiling for a single armed session — 90 days. Purely a sanity bound
+// (nothing about the underlying storage needs it; startManualLock() takes
+// a plain Int number of minutes), so an accidental wheel-drag or preset
+// tap can never arm something absurd like a 10-year lockdown.
+private const val MAX_ARMED_MINUTES = 90 * 24 * 60
 
 // ════════════════════════════════════ Screen root ════════════════════════════════════
 
@@ -377,7 +405,7 @@ fun LockdownScreen(
                 now                 = now,
                 breaksRemaining     = breaksRemaining,
                 armedMinutes        = armedMinutes,
-                onSelectPreset      = { mins -> armedMinutes = mins },
+                onSelectPreset      = { mins -> armedMinutes = mins.coerceIn(1, MAX_ARMED_MINUTES) },
                 voidProgress        = voidProgressState,
                 onHoldStart         = { origin, mins -> holdOrigin = origin; holdArmedMinutes = mins; isHolding = true },
                 onHoldEnd           = { isHolding = false },
@@ -755,106 +783,208 @@ private fun LockdownHeroSection(
 
         Spacer(Modifier.height(32.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape    = RoundedCornerShape(28.dp),
-            colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt),
-            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        PickDurationCard(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
+    }
+}
+
+// ════════════════════════════════════ Pick Duration card ════════════════════════════════════
+//
+// Redesigned around a gap the old single radial dial had no way to close:
+// it only reached 1 minute–4 hours, so anyone wanting a half-day, overnight,
+// or multi-day lockdown had no path to it at all. This card now offers two
+// deliberately different ways in — a "Quick" grid of named, intent-based
+// presets (the fast path for the handful of lengths people actually reach
+// for most sessions) and a "Custom" day/hour/minute wheel picker (the
+// precise path for everything else, up to [MAX_ARMED_MINUTES]) — rather
+// than trying to force both use cases onto one control. Both tabs write
+// straight into the same [armedMinutes], so the big live readout at the top
+// and the "Hold the orb…" hint at the bottom stay correct and in sync no
+// matter which tab was used last.
+@Composable
+private fun PickDurationCard(
+    armedMinutes  : Int,
+    onSelectPreset: (Int) -> Unit
+) {
+    // 0 = Quick presets, 1 = Custom wheels. Local/unpersisted on purpose —
+    // this is view state about *how* someone is currently choosing a
+    // duration, not part of what actually gets armed.
+    var selectedTab by remember { mutableStateOf(0) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = RoundedCornerShape(28.dp),
+        colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+    ) {
+        Column(
+            modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
-                modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(18.dp))
-                    Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                }
-                Spacer(Modifier.height(4.dp))
-                Text("Everything except your whitelist will be blocked.", style = MaterialTheme.typography.bodySmall, color = TextMuted, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(18.dp))
+                Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("Everything except your whitelist will be blocked.", style = MaterialTheme.typography.bodySmall, color = TextMuted, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(4.dp))
 
-                // The live readout IS the primary feedback for this control —
-                // big enough to read at a glance while dragging, so the dial
-                // never needs a separate "confirm" step to know what's armed.
+            // The live readout is shared by both tabs — always shows exactly
+            // what's armed right now, whether it came from a preset tap or a
+            // wheel scroll, so switching tabs never reads as "losing" a value.
+            Text(
+                formatDuration(armedMinutes),
+                style      = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.Bold,
+                color      = TextPrimary
+            )
+            Spacer(Modifier.height(18.dp))
+
+            DurationModeTabs(selectedTab = selectedTab, onTabSelected = { selectedTab = it })
+            Spacer(Modifier.height(18.dp))
+
+            if (selectedTab == 0) {
+                PresetGrid(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
+            } else {
+                WheelDurationPicker(totalMinutes = armedMinutes, onTotalMinutesChange = onSelectPreset)
+            }
+
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
+            Spacer(Modifier.height(16.dp))
+
+            // No "Start" button here on purpose — this card only arms a
+            // duration. The orb above is the single trigger for actually
+            // starting a lockdown; this is just confirming what's armed
+            // and nudging people back up to it.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
                 Text(
-                    formatDuration(armedMinutes),
-                    style      = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
-                    color      = TextPrimary
+                    "Hold the orb above to start a ${formatDuration(armedMinutes)} lockdown",
+                    style      = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color      = TextPrimary,
+                    textAlign  = TextAlign.Center
                 )
-                Spacer(Modifier.height(12.dp))
-
-                // The dial itself is the primary control — drag anywhere on
-                // the ring to set any minute value directly, rather than
-                // picking from a fixed menu of options. See [RadialDial].
-                RadialDial(minutes = armedMinutes, onMinutesChange = onSelectPreset)
-
-                Spacer(Modifier.height(20.dp))
-
-                // Quick-jump pills — shortcuts onto the dial for the most
-                // common lengths, not the primary way to choose a duration
-                // anymore. Tapping one snaps the dial straight there; you can
-                // still drag from that point to fine-tune.
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    DURATION_PRESETS.forEach { preset ->
-                        DurationJumpPill(
-                            label    = preset.label,
-                            selected = armedMinutes == preset.minutes,
-                            onClick  = { onSelectPreset(preset.minutes) }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
-                Spacer(Modifier.height(16.dp))
-
-                // No "Start" button here on purpose — the dial only arms a
-                // duration. The orb above is the single trigger for actually
-                // starting a lockdown; this is just confirming what's armed
-                // and nudging people back up to it.
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
-                    Text(
-                        "Hold the orb above to start a ${formatDuration(armedMinutes)} lockdown",
-                        style      = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color      = TextPrimary,
-                        textAlign  = TextAlign.Center
-                    )
-                }
             }
         }
     }
 }
 
-// Small pill used only as a quick-jump shortcut under the dial — visually
-// lighter than [DurationChip] on purpose, since it's now a secondary shortcut
-// rather than the primary way to pick a duration.
+// ── Quick / Custom segmented switch ──────────────────────────────────────
+// Hand-drawn rather than Material3's default SegmentedButton, so it matches
+// the rest of this screen's frosted-glass, hand-tuned look instead of
+// introducing a visibly different, off-the-shelf component style. A sliding
+// tinted highlight (not just a text color swap) is what makes this read as
+// "one control with two states" instead of two unrelated buttons sitting
+// next to each other — the same affordance iOS's segmented control and
+// Android Settings' toggle rows both lean on.
 @Composable
-private fun DurationJumpPill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bgColor     = if (selected) AccentBlue.copy(alpha = 0.18f) else CardSurface
-    val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.18f)
-    val textColor   = if (selected) AccentBlue else TextSecondary
-
-    Box(
-        modifier         = Modifier.clip(RoundedCornerShape(999.dp)).background(bgColor).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+private fun DurationModeTabs(selectedTab: Int, onTabSelected: (Int) -> Unit) {
+    val labels = listOf("Quick", "Custom")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(CardSurface)
+            .padding(3.dp)
     ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            drawRoundRect(color = borderColor, cornerRadius = CornerRadius(999.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
+        labels.forEachIndexed { index, label ->
+            val selected = selectedTab == index
+            val bg by animateColorAsState(
+                targetValue = if (selected) AccentBlue.copy(alpha = 0.18f) else Color.Transparent,
+                label       = "duration_tab_bg"
+            )
+            val fg = if (selected) AccentBlue else TextMuted
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(bg)
+                    .clickable { onTabSelected(index) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text       = label,
+                    style      = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color      = fg
+                )
+            }
         }
-        Text(
-            text       = label,
-            style      = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color      = textColor,
-            modifier   = Modifier.padding(vertical = 8.dp, horizontal = 14.dp),
-            textAlign  = TextAlign.Center
-        )
+    }
+}
+
+// ── Quick presets grid ───────────────────────────────────────────────────
+// Two columns of named, intent-based cards rather than a single row of
+// terse "15m / 25m / 50m" pills — closer to how Headspace/Calm/Opal present
+// session lengths as distinct *choices* (Quick Focus vs. Overnight vs.
+// Weekend) rather than raw numbers competing for the same handful of
+// pixels. Icons give each card a recognizable silhouette at a glance, which
+// matters more here than it did for the old pill row now that the range
+// spans minutes through a full week.
+@Composable
+private fun PresetGrid(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        DURATION_PRESETS.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                row.forEach { preset ->
+                    PresetCard(
+                        preset   = preset,
+                        selected = armedMinutes == preset.minutes,
+                        onClick  = { onSelectPreset(preset.minutes) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                // Odd final row: pad with an invisible spacer so the last
+                // card stays the same width as its siblings instead of
+                // stretching to fill the row on its own.
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetCard(
+    preset  : DurationPreset,
+    selected: Boolean,
+    onClick : () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bgColor     = if (selected) AccentBlue.copy(alpha = 0.14f) else CardSurface
+    val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.14f)
+    val iconTint    = if (selected) AccentBlue else TextSecondary
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(bgColor)
+            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier         = Modifier.size(30.dp).clip(CircleShape).background(iconTint.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(preset.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
+        }
+        Column {
+            Text(
+                preset.label,
+                style      = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color      = if (selected) TextPrimary else TextSecondary
+            )
+            Text(
+                formatDuration(preset.minutes),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) AccentBlue else TextMuted
+            )
+        }
     }
 }
 
@@ -984,100 +1114,171 @@ private fun EmbeddedLockdownLazyColumn(
     }
 }
 
-// ════════════════════════════════════ Radial dial ════════════════════════════════════
+// ════════════════════════════════════ Custom duration wheels ════════════════════════════════════
 //
-// This used to only exist inside a separate "Custom Duration" AlertDialog,
-// reachable by tapping a 6th "Custom" chip. It's now the primary control
-// living directly inside the Pick Duration card (see [LockdownHeroSection]) —
-// any value from 1 minute to 4 hours is reachable by dragging, with the small
-// pills below it as shortcuts rather than the only way in. Bumped from 200dp
-// to 240dp now that it's the card's main content instead of a secondary
-// dialog, and a soft haptic tick fires every 5 minutes crossed while
-// dragging — the same tactile-precision cue iOS/Android's native pickers use
-// so a continuous drag reads as deliberately steppable, not a flat slider.
+// Replaces the old single circular dial, which topped out at 4 hours (four
+// laps around one clock face) and had no path to something like "3 days"
+// short of dragging through 4,320 individual minutes. Three independent,
+// snapping Days / Hours / Minutes columns are the same pattern iOS's
+// date-and-time picker (and most alarm-clock apps) settled on for exactly
+// this problem: each column stays legible and fast to scan no matter how
+// large its own range is, instead of one control trying to cover minutes
+// through weeks on a single axis. A shared highlight bar marks the selected
+// row across all three columns at once, and a light haptic tick fires
+// whenever a column settles on a new value while scrolling — the same
+// "felt, not heard" cue the old dial gave per 5-minute crossing.
+
+private val WHEEL_ITEM_HEIGHT = 44.dp
+private const val WHEEL_VISIBLE_ITEMS = 5
+private val WHEEL_MAX_DAYS = MAX_ARMED_MINUTES / (24 * 60)
 
 @Composable
-private fun RadialDial(minutes: Int, onMinutesChange: (Int) -> Unit) {
-    var centerX by remember { mutableStateOf(0f) }
-    var centerY by remember { mutableStateOf(0f) }
-    val tickColor      = TextPrimary
-    val dialTrackColor = CardSurface
-    val haptics        = rememberHaptics()
-    var lastHapticMinute by remember { mutableStateOf(minutes) }
+private fun WheelDurationPicker(
+    totalMinutes         : Int,
+    onTotalMinutesChange : (Int) -> Unit
+) {
+    val days    = totalMinutes / (24 * 60)
+    val hours   = (totalMinutes % (24 * 60)) / 60
+    val minutes = totalMinutes % 60
 
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(240.dp).pointerInput(Unit) {
-            detectDragGestures { change, _ ->
-                change.consume()
-                val dx = change.position.x - centerX
-                val dy = change.position.y - centerY
-                val angleDeg = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble()).coerceIn(-Math.PI, Math.PI)) + 360) % 360
-                val minsFromAngle = (angleDeg / 360.0 * 60.0).roundToInt().coerceIn(0, 60)
-                val fullLaps = (minutes / 60).coerceIn(0, 3)
-                val candidate = fullLaps * 60 + minsFromAngle
-                val adjusted = when {
-                    minutes % 60 > 50 && minsFromAngle < 10 && fullLaps < 3 -> (fullLaps + 1) * 60 + minsFromAngle
-                    minutes % 60 < 10 && minsFromAngle > 50 && fullLaps > 0  -> (fullLaps - 1) * 60 + minsFromAngle
-                    else -> candidate
-                }
-                val clamped = adjusted.coerceIn(1, 240)
-                if (kotlin.math.abs(clamped - lastHapticMinute) >= 5) {
-                    haptics.digitTick()
-                    lastHapticMinute = clamped
-                }
-                onMinutesChange(clamped)
-            }
+    fun emit(d: Int, h: Int, m: Int) {
+        onTotalMinutesChange((d * 24 * 60) + (h * 60) + m)
+    }
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
+        // Shared selection highlight, drawn first (underneath) so the
+        // scrolling numbers pass over it instead of it sitting on top and
+        // hiding them.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(WHEEL_ITEM_HEIGHT)
+                .clip(RoundedCornerShape(14.dp))
+                .background(CardSurface)
+                .border(BorderStroke(1.dp, AccentBlue.copy(alpha = 0.35f)), RoundedCornerShape(14.dp))
+        )
+
+        Row(modifier = Modifier.fillMaxWidth()) {
+            WheelColumn(
+                range          = 0..WHEEL_MAX_DAYS,
+                value          = days,
+                suffix         = "d",
+                onValueSettled = { emit(it, hours, minutes) },
+                modifier       = Modifier.weight(1f)
+            )
+            WheelColumn(
+                range          = 0..23,
+                value          = hours,
+                suffix         = "h",
+                onValueSettled = { emit(days, it, minutes) },
+                modifier       = Modifier.weight(1f)
+            )
+            WheelColumn(
+                range          = 0..59,
+                value          = minutes,
+                suffix         = "m",
+                onValueSettled = { emit(days, hours, it) },
+                modifier       = Modifier.weight(1f)
+            )
         }
+    }
+}
+
+// A single snapping wheel: the item nearest dead-center of [WHEEL_VISIBLE_ITEMS]
+// rows is "selected". Centering is done the same way native wheel pickers do
+// it — top/bottom content padding of half the visible height, so scrolling
+// item N to the very top of the list's content area (offset 0) puts it
+// exactly in the middle of the visible window — rather than a custom
+// snap-position calculation.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WheelColumn(
+    range         : IntRange,
+    value         : Int,
+    suffix        : String,
+    onValueSettled: (Int) -> Unit,
+    modifier      : Modifier = Modifier
+) {
+    val values     = remember(range) { range.toList() }
+    val haptics    = rememberHaptics()
+    val density    = LocalDensity.current
+    val itemHeightPx = with(density) { WHEEL_ITEM_HEIGHT.toPx() }
+
+    val startIndex   = remember(range) { (value - range.first).coerceIn(0, values.lastIndex) }
+    val listState     = rememberLazyListState(startIndex)
+    val flingBehavior = rememberSnapFlingBehavior(listState)
+
+    // Recomputed continuously (not just once scrolling stops) so the
+    // bold/highlighted number always matches what's actually centered,
+    // including mid-drag and mid-fling.
+    val centeredIndex by remember {
+        derivedStateOf {
+            val offsetItems = (listState.firstVisibleItemScrollOffset / itemHeightPx).roundToInt()
+            (listState.firstVisibleItemIndex + offsetItems).coerceIn(0, values.lastIndex)
+        }
+    }
+
+    var lastSettled by remember { mutableStateOf(startIndex) }
+    LaunchedEffect(centeredIndex, listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress && centeredIndex != lastSettled) {
+            lastSettled = centeredIndex
+            haptics.digitTick()
+            onValueSettled(values[centeredIndex])
+        }
+    }
+
+    // If the value changed from OUTSIDE this wheel — a preset tap, or one of
+    // the *other* two wheels changing what this one now needs to show —
+    // scroll to match instead of silently drifting out of sync.
+    LaunchedEffect(value) {
+        val target = (value - range.first).coerceIn(0, values.lastIndex)
+        if (target != centeredIndex) {
+            lastSettled = target
+            listState.animateScrollToItem(target)
+        }
+    }
+
+    LazyColumn(
+        state          = listState,
+        flingBehavior  = flingBehavior,
+        contentPadding = PaddingValues(vertical = WHEEL_ITEM_HEIGHT * (WHEEL_VISIBLE_ITEMS / 2)),
+        modifier       = modifier.height(WHEEL_ITEM_HEIGHT * WHEEL_VISIBLE_ITEMS)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            centerX = size.width / 2f
-            centerY = size.height / 2f
-            val radius = size.minDimension / 2f
-
-            drawCircle(color = dialTrackColor, radius = radius, center = Offset(centerX, centerY))
-
-            val sweepAngle = ((minutes % 60) / 60f) * 360f
-            // Below ~8° a rounded-cap arc's two end-caps are close enough
-            // together to visually merge into a single "blob" sitting right
-            // on top of the duration number above it — that's the glitch
-            // that showed up at low values like 1m. Skipping the arc entirely
-            // below that threshold and relying on just the handle dot (drawn
-            // further down) keeps low values looking clean instead of showing
-            // a stray smudge.
-            if (sweepAngle > 8f) {
-                drawArc(color = AccentBlue, startAngle = -90f, sweepAngle = sweepAngle, useCenter = false, style = Stroke(width = 18.dp.toPx(), cap = StrokeCap.Round))
-            }
-
-            for (i in 0 until 12) {
-                val tickAngle = Math.toRadians((i * 30.0) - 90.0)
-                val isLarge   = i % 3 == 0
-                val innerR    = radius - (if (isLarge) 28.dp.toPx() else 20.dp.toPx())
-                val outerR    = radius - 10.dp.toPx()
-                drawLine(
-                    color       = if (isLarge) tickColor.copy(alpha = 0.55f) else tickColor.copy(alpha = 0.25f),
-                    start       = Offset(centerX + (innerR * cos(tickAngle)).toFloat(), centerY + (innerR * sin(tickAngle)).toFloat()),
-                    end         = Offset(centerX + (outerR * cos(tickAngle)).toFloat(), centerY + (outerR * sin(tickAngle)).toFloat()),
-                    strokeWidth = if (isLarge) 2.5.dp.toPx() else 1.5.dp.toPx()
+        itemsIndexed(values) { index, v ->
+            val distance   = kotlin.math.abs(index - centeredIndex)
+            val isCentered = distance == 0
+            val scale      = when (distance) { 0 -> 1f; 1 -> 0.82f; else -> 0.68f }
+            val textAlpha  = when (distance) { 0 -> 1f; 1 -> 0.45f; 2 -> 0.22f; else -> 0.10f }
+            Box(
+                modifier         = Modifier.fillMaxWidth().height(WHEEL_ITEM_HEIGHT),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text       = "$v$suffix",
+                    style      = MaterialTheme.typography.headlineSmall,
+                    fontWeight = if (isCentered) FontWeight.Bold else FontWeight.Medium,
+                    color      = if (isCentered) TextPrimary else TextMuted,
+                    modifier   = Modifier.graphicsLayer { scaleX = scale; scaleY = scale; alpha = textAlpha }
                 )
-            }
-
-            val handleAngle = Math.toRadians((sweepAngle - 90.0))
-            drawCircle(color = AccentBlue, radius = 10.dp.toPx(), center = Offset(centerX + (radius * cos(handleAngle)).toFloat(), centerY + (radius * sin(handleAngle)).toFloat()))
-
-            val fullLaps  = (minutes / 60).coerceIn(0, 4)
-            val dotSpacing = 16.dp.toPx()
-            val dotStartX  = centerX - ((fullLaps - 1) * dotSpacing) / 2f
-            for (lap in 0 until fullLaps) {
-                drawCircle(color = AccentBlue.copy(alpha = 0.7f), radius = 5.dp.toPx(), center = Offset(dotStartX + lap * dotSpacing, centerY + 28.dp.toPx()))
             }
         }
     }
 }
 
-private fun formatDuration(minutes: Int): String {
-    val h = minutes / 60; val m = minutes % 60
-    return when { h == 0 -> "${m}m"; m == 0 -> "${h}h"; else -> "${h}h ${m}m" }
+private fun formatDuration(totalMinutes: Int): String {
+    val d = totalMinutes / (24 * 60)
+    val h = (totalMinutes % (24 * 60)) / 60
+    val m = totalMinutes % 60
+    val parts = buildList {
+        if (d > 0) add("${d}d")
+        if (h > 0) add("${h}h")
+        // Minutes are shown whenever there's no larger unit to anchor the
+        // reading, or when they're the only nonzero part at all — so "3d"
+        // stays clean but "0m" never gets dropped for a 30-second-rounding
+        // edge case where every part would otherwise read as empty.
+        if (m > 0 || isEmpty()) add("${m}m")
+    }
+    return parts.joinToString(" ")
 }
 
 // ════════════════════════════════════ Helpers ════════════════════════════════════
