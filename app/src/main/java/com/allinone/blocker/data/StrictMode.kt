@@ -59,7 +59,11 @@ data class StrictModeConfig(
     val breakDurationMinutes: Int = 5,
     val locationZones: List<LocationZone> = emptyList(),
     // true while the device is inside at least one geofence zone
-    val insideZone: Boolean = false
+    val insideZone: Boolean = false,
+    // 0 = no PIN reset pending. Otherwise the epoch-millis timestamp of when
+    // "Forgot PIN?" was tapped — a new PIN can be set once PIN_RESET_DELAY_MS
+    // has passed since then. See StrictModeGate for the delay logic.
+    val pinResetRequestedAt: Long = 0L
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("enabled", enabled)
@@ -71,6 +75,7 @@ data class StrictModeConfig(
         put("breakDurationMinutes", breakDurationMinutes)
         put("locationZones", JSONArray(locationZones.map { it.toJson() }))
         put("insideZone", insideZone)
+        put("pinResetRequestedAt", pinResetRequestedAt)
     }
 
     companion object {
@@ -99,7 +104,8 @@ data class StrictModeConfig(
                 maxBreaksPerSession = o.optInt("maxBreaksPerSession", 2),
                 breakDurationMinutes = o.optInt("breakDurationMinutes", 5),
                 locationZones = zones,
-                insideZone = o.optBoolean("insideZone", false)
+                insideZone = o.optBoolean("insideZone", false),
+                pinResetRequestedAt = o.optLong("pinResetRequestedAt", 0L)
             )
         }
     }
@@ -199,4 +205,47 @@ object StrictModeGate {
      */
     fun isSettingsLockedByPlan(config: StrictModeConfig = BlockerRepository.strictMode.value): Boolean =
         FrictionType.PLAN_LOCK in config.activeFrictions && BlockerRepository.hasActiveTimedBlock()
+
+    // ── Forgot-PIN recovery ─────────────────────────────────────────────────
+    //
+    // A PIN that could be reset instantly wouldn't actually protect
+    // anything — you'd just tap "forgot it" the moment Strict Mode was in
+    // your way. But a PIN with literally NO recovery path is worse: a
+    // genuine memory slip permanently locks you out of your own phone. The
+    // fix used by every serious commitment-device app is the same: recovery
+    // stays possible, it just can't be instant. Here that means a mandatory
+    // 1-hour wait between requesting a reset and being allowed to set a new
+    // PIN — long enough that it's useless as an impulsive escape hatch,
+    // short enough that a genuine slip isn't a disaster.
+
+    /** How long you have to wait after requesting a PIN reset. */
+    const val PIN_RESET_DELAY_MS = 60L * 60L * 1000L // 1 hour
+
+    /** Starts the wait. Does nothing to the current PIN — it keeps working
+     *  normally right up until a new one is actually saved. Safe to call
+     *  more than once; it won't restart an already-running wait. */
+    fun requestPinReset() {
+        val config = BlockerRepository.strictMode.value
+        if (config.pinResetRequestedAt <= 0L) {
+            BlockerRepository.setStrictMode(config.copy(pinResetRequestedAt = System.currentTimeMillis()))
+        }
+    }
+
+    /** Cancels a pending reset request — e.g. the PIN came back to you. */
+    fun cancelPinReset() {
+        val config = BlockerRepository.strictMode.value
+        BlockerRepository.setStrictMode(config.copy(pinResetRequestedAt = 0L))
+    }
+
+    /** Milliseconds left before a requested reset unlocks, or 0 if none is
+     *  pending or the wait is already over. */
+    fun pinResetRemainingMs(config: StrictModeConfig = BlockerRepository.strictMode.value): Long {
+        if (config.pinResetRequestedAt <= 0L) return 0L
+        val readyAt = config.pinResetRequestedAt + PIN_RESET_DELAY_MS
+        return (readyAt - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
+    /** True once a requested reset has cleared its 1-hour wait. */
+    fun isPinResetReady(config: StrictModeConfig = BlockerRepository.strictMode.value): Boolean =
+        config.pinResetRequestedAt > 0L && pinResetRemainingMs(config) <= 0L
 }
