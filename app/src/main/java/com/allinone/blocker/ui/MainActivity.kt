@@ -115,6 +115,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         BlockerRepository.init(this)
+        com.allinone.blocker.data.ProfileRepository.init(this)
         // BlockerForegroundService (and its persistent notification) is no
         // longer started here. Blocking runs entirely off the accessibility
         // service, which needs no notification — see
@@ -436,7 +437,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     onManageSchedules       = { screen = Screen.LOCKDOWN_SCHEDULES },
                     onManageEmergencyBreaks = { screen = Screen.EMERGENCY_BREAKS }
                 )
-                Screen.PROFILE     -> ProfilePlaceholderScreen()
+                Screen.PROFILE     -> ProfileScreen(onOpenSettings = { screen = Screen.SETTINGS })
                 else -> { /* sub-screens handled above */ }
             }
             }
@@ -453,39 +454,6 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
             // overlay — not the Scaffold/tab content above it.
             val progress = LockdownVoidOverlayState.progressState?.value ?: 0f
             VoidExpansion(origin = origin, progress = progress)
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PROFILE PLACEHOLDER SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun ProfilePlaceholderScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Filled.Person,
-                contentDescription = null,
-                tint = AccentBlue,
-                modifier = Modifier.size(64.dp)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Profile",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Coming soon",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-            )
         }
     }
 }
