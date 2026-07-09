@@ -131,4 +131,32 @@ object Permissions {
         }
         context.startActivity(intent)
     }
+
+    /**
+     * True once Present Tense is the device's ACTIVE default Home app —
+     * the thing that actually opens when Home is pressed. The app manifest
+     * registers LockdownLauncherActivity as *a* HOME option automatically,
+     * but that's not the same as being the chosen one: until the user picks
+     * it in Settings, pressing Home still opens their normal launcher
+     * (Pixel Launcher, One UI Home, etc.) first, and Present Tense only
+     * gets a chance to react a beat later via the accessibility service.
+     * Setting it as default Home removes that gap at the source, for the
+     * case where Home is pressed from inside an already-open whitelisted
+     * app (screen pinning, see LockdownLauncherActivity, handles the case
+     * where Home is pressed from the lockdown screen itself).
+     */
+    fun isDefaultHomeApp(context: Context): Boolean {
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val resolved = context.packageManager.resolveActivity(
+            homeIntent, PackageManager.MATCH_DEFAULT_ONLY
+        )
+        return resolved?.activityInfo?.packageName == context.packageName
+    }
+
+    /** Opens Android's "Home app" picker so the user can choose Present Tense. */
+    fun openHomeAppSettings(context: Context) {
+        val intent = Intent(Settings.ACTION_HOME_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
 }
