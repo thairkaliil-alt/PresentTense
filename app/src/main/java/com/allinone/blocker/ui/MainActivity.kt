@@ -78,7 +78,7 @@ import com.allinone.blocker.ui.theme.ThemePreference
 
 enum class Screen {
     HOME, PERMISSIONS, BLOCKED_APPS, BLOCKED_WEBSITES, APP_PICKER, APP_RULES,
-    LOCKDOWN, WHITELIST, STRICT_MODE, STATS, SETTINGS,
+    LOCKDOWN, WHITELIST, LOCKDOWN_SCHEDULES, EMERGENCY_BREAKS, STRICT_MODE, STATS, SETTINGS,
     STRICT_ALARM_LIST, STRICT_ALARM_EDIT, STRICT_ALARM_QUICK_ADD, SLEEP_CALCULATOR, PROFILE, STREAKS, POMODORO, PRESETS
 }
 
@@ -147,6 +147,8 @@ class MainActivity : ComponentActivity() {
                     Screen.APP_PICKER       -> { currentScreen.value = Screen.BLOCKED_APPS;     backPressedOnce = false }
                     Screen.APP_RULES        -> { currentScreen.value = Screen.BLOCKED_APPS;     backPressedOnce = false }
                     Screen.WHITELIST        -> { currentScreen.value = Screen.LOCKDOWN;         backPressedOnce = false }
+                    Screen.LOCKDOWN_SCHEDULES -> { currentScreen.value = Screen.LOCKDOWN;       backPressedOnce = false }
+                    Screen.EMERGENCY_BREAKS -> { currentScreen.value = Screen.LOCKDOWN;         backPressedOnce = false }
                     Screen.STRICT_ALARM_LIST -> { currentScreen.value = Screen.HOME;            backPressedOnce = false }
                     Screen.STRICT_ALARM_EDIT -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
                     Screen.SLEEP_CALCULATOR -> { currentScreen.value = Screen.STRICT_ALARM_LIST; backPressedOnce = false }
@@ -296,7 +298,8 @@ fun AppRoot(
     // navigation actually reads as movement, instead of a hard cut.
   val subScreens = setOf(
         Screen.BLOCKED_APPS, Screen.BLOCKED_WEBSITES, Screen.APP_PICKER, Screen.APP_RULES,
-        Screen.WHITELIST, Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT, Screen.STRICT_ALARM_QUICK_ADD,
+        Screen.WHITELIST, Screen.LOCKDOWN_SCHEDULES, Screen.EMERGENCY_BREAKS,
+        Screen.STRICT_ALARM_LIST, Screen.STRICT_ALARM_EDIT, Screen.STRICT_ALARM_QUICK_ADD,
         Screen.SLEEP_CALCULATOR, Screen.PERMISSIONS, Screen.SETTINGS, Screen.STREAKS, Screen.POMODORO, Screen.PRESETS
     )
     if (screen in subScreens) {
@@ -319,6 +322,8 @@ fun AppRoot(
                     onOpenStrictMode = { screen = Screen.STRICT_MODE }
                 )
                 Screen.WHITELIST -> WhitelistScreen(onBack = { screen = Screen.LOCKDOWN })
+                Screen.LOCKDOWN_SCHEDULES -> LockdownSchedulesScreen(onBack = { screen = Screen.LOCKDOWN })
+                Screen.EMERGENCY_BREAKS   -> EmergencyBreaksScreen(onBack = { screen = Screen.LOCKDOWN })
         Screen.STRICT_ALARM_LIST -> StrictAlarmListScreen(
     onBack = { screen = Screen.HOME },
     onAddAlarm = {
@@ -426,8 +431,10 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                 Screen.STRICT_MODE -> StrictModeSettingsScreen(onBack = { screen = Screen.HOME })
                 Screen.STATS       -> StatsScreen(onBack = { screen = Screen.HOME }, onOpenStreaks = { screen = Screen.STREAKS })
                 Screen.LOCKDOWN    -> LockdownScreen(
-                    onBack            = { screen = Screen.HOME },
-                    onManageWhitelist = { screen = Screen.WHITELIST }
+                    onBack                  = { screen = Screen.HOME },
+                    onManageWhitelist       = { screen = Screen.WHITELIST },
+                    onManageSchedules       = { screen = Screen.LOCKDOWN_SCHEDULES },
+                    onManageEmergencyBreaks = { screen = Screen.EMERGENCY_BREAKS }
                 )
                 Screen.PROFILE     -> ProfilePlaceholderScreen()
                 else -> { /* sub-screens handled above */ }
