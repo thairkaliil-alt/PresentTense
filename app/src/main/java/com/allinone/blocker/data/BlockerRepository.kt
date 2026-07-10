@@ -250,17 +250,29 @@ object BlockerRepository {
     fun newScheduleId(): String = UUID.randomUUID().toString()
 
     fun startManualLock(minutes: Int) {
-        val until = System.currentTimeMillis() + minutes * 60_000L
+        val now = System.currentTimeMillis()
+        val until = now + minutes * 60_000L
         _manualLockUntil.value = until
         prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, until).apply()
         resetBreaksForNewSession()
+        // Records the start of this session so LockdownCompletionRepository
+        // can build a real completion record + celebration once it's
+        // observed to have ended — see that file's header comment.
+        LockdownCompletionRepository.markManualSessionStarted(now, minutes, indefinite = false)
         LockdownGuard.ensureRunning(appContext)
     }
 
     fun startManualLockIndefinite() {
+        val now = System.currentTimeMillis()
         _manualLockUntil.value = Long.MAX_VALUE
         prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, Long.MAX_VALUE).apply()
         resetBreaksForNewSession()
+        // Indefinite sessions never end on their own (no endManualLock()),
+        // so LockdownCompletionRepository is told about this one purely so
+        // it can correctly close out whatever PREVIOUS session was still
+        // being tracked — it will never generate a completion record for
+        // this one itself. See markManualSessionStarted's kdoc.
+        LockdownCompletionRepository.markManualSessionStarted(now, -1, indefinite = true)
         LockdownGuard.ensureRunning(appContext)
     }
 
