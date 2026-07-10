@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.view.accessibility.AccessibilityEvent
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.ScreenTimeTracker
@@ -50,6 +51,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
+        if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
         overlay = OverlayManager(this)
         // All real-time blocking (app blocks, lockdown, strict mode, reels
         // kill switch) happens right here in this accessibility service,
@@ -91,6 +93,11 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             schedules = BlockerRepository.schedules.value
         )
         if (!decision.active && !decision.onBreak) {
+            // Fastest of the several independent detection points (this
+            // loop ticks every 3s while a session is live) — see
+            // LockdownCompletionRepository's header comment for why it's
+            // always safe to call this from more than one place.
+            LockdownCompletionRepository.recordCompletionIfNeeded()
             LockdownGuard.ensureStopped(applicationContext)
             return false
         }
