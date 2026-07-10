@@ -13,9 +13,11 @@ import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.UrlExtractor
 import com.allinone.blocker.ui.InstalledApps
 import com.allinone.blocker.ui.LockdownLauncherActivity
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -25,7 +27,33 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     private var currentForeground: String? = null
     private var sessionStart: Long = 0L
-    private val ioScope = CoroutineScope(Dispatchers.IO)
+
+    // BUGFIX ("whitelisted app keeps getting closed every ~45s during
+    // lockdown"): this scope used to be `CoroutineScope(Dispatchers.IO)`,
+    // which — with no Job of its own — creates a single plain Job shared by
+    // every coroutine launched on it. Under a plain Job, if ANY one of them
+    // throws (e.g. ScreenTimeTracker hitting a transient database hiccup
+    // while logging usage, which is unrelated to lockdown entirely), that
+    // exception cancels the WHOLE scope — silently killing every other
+    // coroutine sharing it, including lockdownGuardJob below, which is what
+    // writes the "I'm still alive and enforcing" heartbeat every ~3s. Once
+    // that heartbeat stops, LockdownWatchdogReceiver correctly (by its own
+    // logic) concludes the enforcer looks dead ~45s later and drags the
+    // user back to the lockdown screen — and since the underlying failure
+    // keeps recurring, this repeats every ~45s, which is exactly the bug.
+    // An uncaught exception here can also crash the whole app process.
+    //
+    // SupervisorJob() fixes the "one failure takes down everything else"
+    // part: a failing child no longer cancels its siblings. The
+    // CoroutineExceptionHandler fixes the "crashes the app" part: it logs
+    // the failure instead of letting it propagate to Android's default
+    // (process-crashing) handler. Together, a hiccup in something as minor
+    // as screen-time logging can never again take the lockdown heartbeat
+    // (or the whole app) down with it.
+    private val ioExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        android.util.Log.e("AppBlockerAccessibility", "Background task failed (isolated, not fatal)", throwable)
+    }
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + ioExceptionHandler)
 
     private val labelCache = HashMap<String, String>()
     private var lastOverlayShouldShow: Boolean? = null
