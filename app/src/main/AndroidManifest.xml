@@ -24,6 +24,14 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Lets us show Android's own direct "ignore battery optimizations?"
+         dialog (Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS) from
+         the Permissions screen, instead of sending the user hunting through
+         Settings manually. Purely a resilience measure: makes the rare
+         "phone kills the whole app in the background" case rarer, which is
+         the one case LockdownWatchdogReceiver's heartbeat check exists to
+         recover from. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".BlockerApp"
