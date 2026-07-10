@@ -50,6 +50,11 @@ object LockdownEngine {
             if (startsToday) {
                 val endMillis = startOfDay(nowMillis) + s.endMinutes * 60_000L + if (overnight) DAY_MS else 0L
                 BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
+                // This window started TODAY at s.startMinutes (whether or not
+                // it also runs past midnight) — see the sibling branch below
+                // for the window that started YESTERDAY and is still running.
+                val startedAtMillis = startOfDay(nowMillis) + s.startMinutes * 60_000L
+                LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label)
                 if (breakUntilMillis > nowMillis) {
                     return LockdownDecision(
                         active = false,
@@ -66,6 +71,11 @@ object LockdownEngine {
             if (overnight && yesterday in s.daysOfWeek && nowMinutes < s.endMinutes) {
                 val endMillis = startOfDay(nowMillis) + s.endMinutes * 60_000L
                 BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
+                // This window started YESTERDAY at s.startMinutes and is
+                // still running into today — a distinct occurrence from the
+                // "starts today" branch above, keyed by its own end time.
+                val startedAtMillis = startOfDay(nowMillis) - DAY_MS + s.startMinutes * 60_000L
+                LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label)
                 if (breakUntilMillis > nowMillis) {
                     return LockdownDecision(
                         active = false,
