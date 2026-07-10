@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.ui.motion.MotionTokens
@@ -107,6 +108,7 @@ class LockdownLauncherActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
+        if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
 
         // Edge-to-edge, immersive: hide the status & nav bars so the lockdown
         // screen reads as one uninterrupted surface. Swiping reveals them only
@@ -137,7 +139,17 @@ class LockdownLauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // If lockdown ended while we were backgrounded, don't trap the user here.
-        if (!isLockdownActive()) {
+        val decision = currentLockdownDecision()
+        if (!decision.active) {
+            if (!decision.onBreak) {
+                // Truly over, not just paused for an emergency break — make
+                // sure a completion record/celebration exists before handing
+                // off. The watchdog or accessibility loop may well have
+                // already recorded this (this call is then a safe no-op),
+                // but if the app was foregrounded the whole time this can be
+                // the very first place that notices.
+                LockdownCompletionRepository.recordCompletionIfNeeded()
+            }
             exitToApp()
             return
         }
@@ -147,10 +159,10 @@ class LockdownLauncherActivity : ComponentActivity() {
         armScreenPinning()
     }
 
-    private fun isLockdownActive(): Boolean = LockdownEngine.evaluate(
+    private fun currentLockdownDecision(): LockdownDecision = LockdownEngine.evaluate(
         manualLockUntil = BlockerRepository.manualLockUntil.value,
         schedules = BlockerRepository.schedules.value
-    ).active
+    )
 
     private fun launchApp(pkg: String) {
         // Release the pin before handing off — otherwise the whitelisted app
