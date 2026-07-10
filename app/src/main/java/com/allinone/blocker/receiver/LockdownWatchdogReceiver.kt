@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGuard
 
@@ -24,13 +25,21 @@ class LockdownWatchdogReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val appContext = context.applicationContext
         if (!BlockerRepository.isInitialized) BlockerRepository.init(appContext)
+        if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(appContext)
 
         val decision = LockdownEngine.evaluate(
             manualLockUntil = BlockerRepository.manualLockUntil.value,
             schedules = BlockerRepository.schedules.value
         )
         val sessionLive = decision.active || decision.onBreak
-        if (!sessionLive) return // nothing to protect right now — let the chain stop here
+        if (!sessionLive) {
+            // The session is genuinely over (not merely paused for a
+            // break) — this is one of several independent places that can
+            // notice that; see LockdownCompletionRepository's header
+            // comment for why this call is always safe to make here.
+            LockdownCompletionRepository.recordCompletionIfNeeded()
+            return // nothing to protect right now — let the chain stop here
+        }
 
         if (decision.active) {
             // Enforced right now (not on an emergency break) — pull the
