@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import com.allinone.blocker.BlockerApp
 import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.ScreenTimeTracker
@@ -83,10 +84,17 @@ class BlockerForegroundService : Service() {
                 delay(20_000L)
                 val stillLive = runCatching {
                     if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
+                    if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
                     val decision = LockdownEngine.evaluate(
                         manualLockUntil = BlockerRepository.manualLockUntil.value,
                         schedules = BlockerRepository.schedules.value
                     )
+                    if (!decision.active && !decision.onBreak) {
+                        // One of several independent places that can notice
+                        // this transition first — see
+                        // LockdownCompletionRepository's header comment.
+                        LockdownCompletionRepository.recordCompletionIfNeeded()
+                    }
                     decision.active || decision.onBreak
                 }.getOrDefault(true) // if the check itself fails, fail safe and keep the notification up
                 if (!stillLive) {
