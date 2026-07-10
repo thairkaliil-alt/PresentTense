@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -115,7 +116,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         BlockerRepository.init(this)
-        com.allinone.blocker.data.ProfileRepository.init(this)
+        LockdownCompletionRepository.init(this)
         // BlockerForegroundService (and its persistent notification) is no
         // longer started here. Blocking runs entirely off the accessibility
         // service, which needs no notification — see
@@ -294,6 +295,21 @@ fun AppRoot(
         return
     }
 
+    // A completed lockdown session takes over the screen exactly the same
+    // way — a real, earned moment (see LockdownCompletionRepository.kt)
+    // deserves the same full-takeover treatment as the unlock challenge
+    // above, not a small toast buried under whatever screen happens to be
+    // showing. Checked before routing so it intercepts regardless of which
+    // screen/sub-screen was about to be shown.
+    val pendingCelebration by LockdownCompletionRepository.pendingCelebration.collectAsState()
+    pendingCelebration?.let { session ->
+        LockdownCompletionScreen(
+            session = session,
+            onDismiss = { LockdownCompletionRepository.consumePendingCelebration() }
+        )
+        return
+    }
+
     // Sub-screens are full-screen "pushed" destinations (no bottom nav). Routing
     // them through one ScreenPush gives every push/pop a directional slide so the
     // navigation actually reads as movement, instead of a hard cut.
@@ -437,7 +453,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     onManageSchedules       = { screen = Screen.LOCKDOWN_SCHEDULES },
                     onManageEmergencyBreaks = { screen = Screen.EMERGENCY_BREAKS }
                 )
-                Screen.PROFILE     -> ProfileScreen(onOpenSettings = { screen = Screen.SETTINGS })
+                Screen.PROFILE     -> ProfilePlaceholderScreen()
                 else -> { /* sub-screens handled above */ }
             }
             }
@@ -454,6 +470,39 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
             // overlay — not the Scaffold/tab content above it.
             val progress = LockdownVoidOverlayState.progressState?.value ?: 0f
             VoidExpansion(origin = origin, progress = progress)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILE PLACEHOLDER SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun ProfilePlaceholderScreen() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Filled.Person,
+                contentDescription = null,
+                tint = AccentBlue,
+                modifier = Modifier.size(64.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Profile",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Coming soon",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+            )
         }
     }
 }
