@@ -130,7 +130,8 @@ class LockdownLauncherActivity : ComponentActivity() {
             BlockerTheme(darkTheme = true) {
                 LockdownLauncherScreen(
                     onLaunchApp = ::launchApp,
-                    onExitToApp = ::exitToApp
+                    onExitToApp = ::exitToApp,
+                    onSessionComplete = ::handleSessionComplete
                 )
             }
         }
@@ -141,22 +142,31 @@ class LockdownLauncherActivity : ComponentActivity() {
         // If lockdown ended while we were backgrounded, don't trap the user here.
         val decision = currentLockdownDecision()
         if (!decision.active) {
-            if (!decision.onBreak) {
-                // Truly over, not just paused for an emergency break — make
-                // sure a completion record/celebration exists before handing
-                // off. The watchdog or accessibility loop may well have
-                // already recorded this (this call is then a safe no-op),
-                // but if the app was foregrounded the whole time this can be
-                // the very first place that notices.
-                LockdownCompletionRepository.recordCompletionIfNeeded()
-            }
-            exitToApp()
+            if (decision.onBreak) exitToApp() else handleSessionComplete()
             return
         }
         // Re-pin every time this screen comes back to the front — including
         // the very first time, and every time the watchdog/accessibility
         // service relaunches it after corralling the user back here.
         armScreenPinning()
+    }
+
+    /**
+     * The session is truly over (not just paused for a break) — record the
+     * completion (a safe no-op if the watchdog/accessibility loop already
+     * beat us to it) and hand off. Called from two places: [onResume], for
+     * the case where this screen was backgrounded when the session ended,
+     * and the [LaunchedEffect] inside [LockdownLauncherScreen], for the far
+     * more common case where the user was sitting on this exact screen —
+     * unable to leave by design — when the countdown reached zero. Without
+     * that second path this screen has no way to notice its own timer
+     * running out while it's the one thing on screen: `onResume()` only
+     * fires again if the Activity was paused and resumed, which never
+     * happens if the user just waits it out.
+     */
+    private fun handleSessionComplete() {
+        LockdownCompletionRepository.recordCompletionIfNeeded()
+        exitToApp()
     }
 
     private fun currentLockdownDecision(): LockdownDecision = LockdownEngine.evaluate(
@@ -232,7 +242,8 @@ private data class LauncherApp(val packageName: String, val label: String)
 @Composable
 private fun LockdownLauncherScreen(
     onLaunchApp: (String) -> Unit,
-    onExitToApp: () -> Unit
+    onExitToApp: () -> Unit,
+    onSessionComplete: () -> Unit
 ) {
     val context = LocalContext.current
     val whitelist by BlockerRepository.whitelist.collectAsState()
@@ -252,6 +263,20 @@ private fun LockdownLauncherScreen(
 
     val decision = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
+    }
+
+    // THE fix for "nothing happens when the countdown hits zero": this
+    // screen is, by design, the only thing the user can see for the entire
+    // duration of a session — they never leave it, so the Activity is never
+    // paused-and-resumed, so onResume() (where this used to be the ONLY
+    // place session-end was detected in the foreground) never runs again on
+    // its own. The 1-second ticker above already recomputes `decision`
+    // every tick; this is what actually acts on it the moment it flips from
+    // live to over, instead of the countdown just sitting at 0:00 forever.
+    LaunchedEffect(decision.active, decision.onBreak) {
+        if (!decision.active) {
+            if (decision.onBreak) onExitToApp() else onSessionComplete()
+        }
     }
 
     // Build the visible app list: phone + messages (always exempt) followed by
