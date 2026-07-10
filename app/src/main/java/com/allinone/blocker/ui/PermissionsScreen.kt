@@ -40,6 +40,7 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     val hasUsage         = remember(refreshKey) { Permissions.hasUsageAccess(context) }
     val hasDeviceAdmin   = remember(refreshKey) { Permissions.hasDeviceAdmin(context) }
     val hasDefaultHome   = remember(refreshKey) { Permissions.isDefaultHomeApp(context) }
+    val hasBatteryExempt = remember(refreshKey) { Permissions.hasBatteryOptimizationExemption(context) }
 
     Scaffold(
         topBar = {
@@ -113,6 +114,64 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
                 granted     = hasDefaultHome,
                 onGrant     = { Permissions.openHomeAppSettings(context) }
             )
+            PermissionRow(
+                title       = "Background battery use",
+                description = "Tells Android's battery manager not to restrict Present Tense " +
+                    "in the background. Without this, the phone can occasionally kill the " +
+                    "app's process, which delays lockdown protection kicking back in until " +
+                    "the next backstop check.",
+                granted     = hasBatteryExempt,
+                onGrant     = { Permissions.requestBatteryOptimizationExemption(context) }
+            )
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Manufacturer battery settings",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            AutostartRow(
+                onOpen = { Permissions.openBackgroundAutostartSettings(context) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AutostartRow(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape    = MaterialTheme.shapes.large   // 16dp — M3 token
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+                Text(
+                    "  Autostart / \"allow background activity\"",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Some phone brands (Xiaomi, Huawei, OPPO, Vivo, OnePlus, Samsung) have their " +
+                    "own separate battery manager on top of Android's, with its own toggle for " +
+                    "this. Android doesn't let apps check whether it's on, so there's no " +
+                    "\"granted\" status here — just tap through and allow Present Tense to run " +
+                    "in the background if your phone shows a screen like this.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(10.dp))
+            FilledTonalButton(
+                onClick = onOpen,
+                shape   = MaterialTheme.shapes.large  // 16dp — M3 token
+            ) {
+                Text("Open settings", style = MaterialTheme.typography.labelLarge)
+            }
         }
     }
 }
