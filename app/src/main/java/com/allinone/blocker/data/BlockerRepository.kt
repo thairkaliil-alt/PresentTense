@@ -28,6 +28,7 @@ object BlockerRepository {
     private const val KEY_BREAK_USES = "lockdown_break_uses_this_session"
     private const val KEY_BREAK_SESSION_ANCHOR = "lockdown_break_session_anchor"
     private const val KEY_DAILY_GOAL_MINUTES = "daily_goal_minutes"
+    private const val KEY_LOCKDOWN_HEARTBEAT_AT = "lockdown_heartbeat_at"
 
     private lateinit var prefs: SharedPreferences
     // Kept only so context-requiring checks (like the Active Plan auto-lock
@@ -221,6 +222,23 @@ object BlockerRepository {
     }
 
     fun isWhitelisted(pkg: String): Boolean = _whitelist.value.contains(pkg)
+
+    /**
+     * A cheap "still alive and enforcing" timestamp, written every ~3s by
+     * AppBlockerAccessibilityService's live-lockdown loop (tickLockdownGuard)
+     * for as long as a lockdown session is running. LockdownWatchdogReceiver
+     * reads this instead of independently re-deriving what's on screen: if
+     * this timestamp is recent, the real enforcer is alive and already doing
+     * its job correctly (including exempting whitelisted apps), so the
+     * watchdog has nothing to do. Only when this goes stale — meaning the
+     * whole process was killed — does the watchdog need to step in. A plain
+     * Long write/read; no StateFlow needed since nothing observes this live.
+     */
+    fun recordLockdownHeartbeat(atMillis: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LOCKDOWN_HEARTBEAT_AT, atMillis).apply()
+    }
+
+    fun lastLockdownHeartbeatAt(): Long = prefs.getLong(KEY_LOCKDOWN_HEARTBEAT_AT, 0L)
 
     private fun persistWhitelist() {
         prefs.edit().putString(KEY_WHITELIST, JSONArray(_whitelist.value.toList()).toString()).apply()
