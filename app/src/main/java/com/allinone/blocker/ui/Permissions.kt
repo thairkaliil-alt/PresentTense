@@ -3,10 +3,12 @@ package com.allinone.blocker.ui
 import android.Manifest
 import android.app.AppOpsManager
 import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.text.TextUtils
@@ -190,5 +192,110 @@ object Permissions {
         val intent = Intent(Settings.ACTION_SECURITY_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
+    }
+
+    /**
+     * True once Android's OWN battery optimizer ("Doze") has been told to
+     * leave Present Tense unrestricted. This doesn't fix any specific bug —
+     * it's a general resilience measure that makes the rare "phone kills
+     * the whole app process in the background" scenario rarer, which is
+     * exactly the case LockdownWatchdogReceiver's heartbeat check exists to
+     * recover from (see its header comment).
+     */
+    fun hasBatteryOptimizationExemption(context: Context): Boolean {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    /**
+     * Opens Android's own direct "Allow Present Tense to ignore battery
+     * optimizations?" dialog — one tap for the user, no hunting through
+     * Settings menus. Requires the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+     * manifest permission (declared in AndroidManifest.xml) to be allowed
+     * to show this dialog at all.
+     */
+    fun requestBatteryOptimizationExemption(context: Context) {
+        val intent = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:${context.packageName}")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+
+    /**
+     * Several phone brands (Xiaomi, Huawei, OPPO, Vivo, OnePlus, Samsung)
+     * ship their OWN battery/process manager on top of stock Android's,
+     * with a separate "autostart" / "allow background activity" toggle that
+     * [requestBatteryOptimizationExemption] above does NOT reach — and
+     * Android has no public API to check or flip these, so unlike every
+     * other permission in this file there's no "granted" state to detect,
+     * only a best-effort deep link into the right screen. This tries each
+     * known manufacturer screen in turn — skipping any that don't exist on
+     * this device — and falls back to this app's own system details page
+     * (which always exists) if none of them do.
+     */
+    fun openBackgroundAutostartSettings(context: Context) {
+        val candidates = listOf(
+            // Xiaomi / MIUI / HyperOS
+            ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity"
+            ),
+            // Huawei / EMUI / HarmonyOS
+            ComponentName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+            ),
+            ComponentName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.optimize.process.ProtectActivity"
+            ),
+            // OPPO / ColorOS (two package names used across OS versions)
+            ComponentName(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+            ),
+            ComponentName(
+                "com.oppo.safe",
+                "com.oppo.safe.permission.startup.StartupAppListActivity"
+            ),
+            // Vivo / Funtouch OS / OriginOS
+            ComponentName(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
+            ),
+            // OnePlus / OxygenOS / ColorOS (post-merger OnePlus devices)
+            ComponentName(
+                "com.oneplus.security",
+                "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"
+            ),
+            // Samsung / One UI — Device Care's own battery screen
+            ComponentName(
+                "com.samsung.android.lool",
+                "com.samsung.android.sm.battery.ui.BatteryActivity"
+            )
+        )
+
+        val pm = context.packageManager
+        val opened = candidates
+            .map { Intent().setComponent(it).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            .filter { it.resolveActivity(pm) != null }
+            .any { intent -> runCatching { context.startActivity(intent) }.isSuccess }
+
+        if (!opened) {
+            // No known manufacturer screen exists on this device (or all
+            // failed to launch) — fall back to this app's own system
+            // details page. On phones without a separate autostart manager
+            // (stock Android, Pixel, most non-Chinese-OEM devices) this is
+            // also where any equivalent background-activity toggle lives.
+            runCatching {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
     }
 }
