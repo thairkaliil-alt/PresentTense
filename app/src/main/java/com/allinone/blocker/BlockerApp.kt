@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.InstalledApps
@@ -14,6 +15,13 @@ class BlockerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         BlockerRepository.init(this)
+
+        // Lockdown completion tracking (the session-end celebration) — no
+        // dependency on the other repositories, but initialised right after
+        // BlockerRepository since LockdownEngine.evaluate() can call into it
+        // as a side effect (marking a scheduled session's start) from
+        // essentially anywhere in the app.
+        LockdownCompletionRepository.init(this)
 
         // Initialise the streak system. This must come AFTER BlockerRepository
         // because StreakRepository reads the daily goal from it, and AFTER
