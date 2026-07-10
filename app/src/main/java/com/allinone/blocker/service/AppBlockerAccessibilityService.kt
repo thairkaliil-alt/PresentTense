@@ -103,6 +103,11 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         }
 
         LockdownGuard.ensureRunning(applicationContext)
+        // Proof of life for LockdownWatchdogReceiver: as long as this loop is
+        // ticking (every 3s while a session is live), the real enforcer is
+        // up and already handling whitelisted apps correctly, so the
+        // watchdog's 45s backstop should stand down instead of relaunching.
+        BlockerRepository.recordLockdownHeartbeat()
         if (!decision.active) return true // on an emergency break — don't corral right now
 
         val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
