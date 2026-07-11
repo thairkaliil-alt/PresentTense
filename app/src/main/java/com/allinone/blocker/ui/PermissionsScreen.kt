@@ -1,5 +1,9 @@
 package com.allinone.blocker.ui
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +45,30 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     val hasDeviceAdmin   = remember(refreshKey) { Permissions.hasDeviceAdmin(context) }
     val hasDefaultHome   = remember(refreshKey) { Permissions.isDefaultHomeApp(context) }
     val hasBatteryExempt = remember(refreshKey) { Permissions.hasBatteryOptimizationExemption(context) }
+
+    // A local, throwaway counter used only to force a re-read of
+    // Permissions.hasNotifications() right after the system dialog below
+    // closes — [refreshKey] only changes when the whole screen is revisited
+    // (e.g. coming back from Settings), which wouldn't otherwise happen for
+    // an in-app dialog like this one.
+    var notificationsRefresh by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val hasNotifications = remember(refreshKey, notificationsRefresh) {
+        Permissions.hasNotifications(context)
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { notificationsRefresh++ }
+
+    // On Android 13+ there's a real system dialog to show (POST_NOTIFICATIONS).
+    // Below that, Android has no runtime dialog for notifications at all — the
+    // only way to change it is the app's own notification settings page.
+    fun requestNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            Permissions.openNotificationSettings(context)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -97,6 +125,14 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
                 "Not required for basic blocking, but closes the easiest way around a block: " +
                     "just uninstalling the app.",
                 style = MaterialTheme.typography.bodyMedium
+            )
+            PermissionRow(
+                title       = "Notifications",
+                description = "Lets Present Tense show you block reminders, your daily " +
+                    "summary, and the \"blocking active\" status notification. Blocking " +
+                    "itself still works without this — you just won't see those.",
+                granted     = hasNotifications,
+                onGrant     = { requestNotifications() }
             )
             PermissionRow(
                 title       = "Uninstall protection",
