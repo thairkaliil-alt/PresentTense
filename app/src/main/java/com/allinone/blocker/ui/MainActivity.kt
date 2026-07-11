@@ -496,39 +496,6 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROFILE PLACEHOLDER SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun ProfilePlaceholderScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Filled.Person,
-                contentDescription = null,
-                tint = AccentBlue,
-                modifier = Modifier.size(64.dp)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Profile",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Coming soon",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-            )
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // BOTTOM NAVIGATION BAR
 // ─────────────────────────────────────────────────────────────────────────────
 
