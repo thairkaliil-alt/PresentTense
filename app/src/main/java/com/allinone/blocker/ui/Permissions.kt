@@ -8,10 +8,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.text.TextUtils
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.allinone.blocker.admin.BlockerDeviceAdminReceiver
 import com.allinone.blocker.service.AppBlockerAccessibilityService
@@ -91,11 +93,65 @@ object Permissions {
         )
     }
 
+    /**
+     * Opens Android's Accessibility settings so the user can turn Present
+     * Tense's service on.
+     *
+     * On Android 11+ (API 30+), Android added a direct "details" screen for
+     * a single accessibility service — ACTION_ACCESSIBILITY_DETAILS_SETTINGS
+     * — that skips straight past the long list of every accessibility
+     * service on the phone (TalkBack, Switch Access, any other apps that
+     * use it) and lands right on Present Tense's own toggle. That's the
+     * "take me straight to the app, don't make me hunt for it" behaviour.
+     * Before API 30 there's no such screen, so older phones fall back to
+     * the general list — same as before this change.
+     */
     fun openAccessibilitySettings(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val detailsIntent = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                putExtra(
+                    Settings.EXTRA_COMPONENT_NAME,
+                    ComponentName(context, AppBlockerAccessibilityService::class.java)
+                        .flattenToString()
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            // Some OEM Settings apps don't implement this newer screen even
+            // though the OS version supports it — runCatching + isSuccess
+            // means we quietly fall through to the guaranteed-to-work
+            // general list below instead of crashing or showing nothing.
+            val opened = runCatching { context.startActivity(detailsIntent) }.isSuccess
+            if (opened) return
+        }
         context.startActivity(
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+    }
+
+    /**
+     * True if Present Tense is currently allowed to show notifications —
+     * covers both the Android 13+ runtime permission (POST_NOTIFICATIONS)
+     * and the older "notifications off for this app" toggle that has
+     * existed since Android 4.1. Either one being off means the user won't
+     * see the persistent "blocking active" notification or block reminders.
+     */
+    fun hasNotifications(context: Context): Boolean =
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+    /**
+     * Opens Android's own "App notifications" screen for Present Tense
+     * specifically — not a general settings list, straight to this app's
+     * toggle. Used as the fallback for phones below Android 13 (which have
+     * no runtime permission dialog to show at all) and for the case where
+     * the runtime dialog was already denied once, since Android then
+     * refuses to show it again and the user has to flip it on manually.
+     */
+    fun openNotificationSettings(context: Context) {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
     }
 
     /**
