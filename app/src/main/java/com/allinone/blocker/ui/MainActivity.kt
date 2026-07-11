@@ -111,6 +111,12 @@ class MainActivity : ComponentActivity() {
     private val currentScreen = mutableStateOf(Screen.HOME)
     private val refresh = mutableStateOf(0)
     private lateinit var isDarkTheme: androidx.compose.runtime.MutableState<Boolean>
+    // Whether the first-run permission walkthrough (OnboardingScreen.kt) has
+    // already been completed. Read synchronously here — same pattern as
+    // isDarkTheme just below — so the very first frame Compose draws already
+    // knows whether to show onboarding or the normal Home screen, instead of
+    // flashing one and then swapping to the other.
+    private lateinit var onboardingComplete: androidx.compose.runtime.MutableState<Boolean>
     private var backPressedOnce = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -123,6 +129,7 @@ class MainActivity : ComponentActivity() {
         // AppBlockerAccessibilityService.onServiceConnected() for details.
 
         isDarkTheme = mutableStateOf(ThemePreference.isDarkMode(this))
+        onboardingComplete = mutableStateOf(OnboardingPreference.isComplete(this))
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -174,7 +181,8 @@ class MainActivity : ComponentActivity() {
                     onThemeToggle = { newValue ->
                         isDarkTheme.value = newValue
                         ThemePreference.setDarkMode(this, newValue)
-                    }
+                    },
+                    onboardingCompleteState = onboardingComplete
                 )
             }
         }
@@ -215,7 +223,8 @@ fun AppRoot(
     screenState: androidx.compose.runtime.MutableState<Screen>,
     refreshKey: Int,
     isDarkTheme: Boolean,
-    onThemeToggle: (Boolean) -> Unit
+    onThemeToggle: (Boolean) -> Unit,
+    onboardingCompleteState: androidx.compose.runtime.MutableState<Boolean>
 ) {
     var screen by screenState
     var selectedPackage by remember { mutableStateOf<String?>(null) }
@@ -225,6 +234,18 @@ fun AppRoot(
     var justAddedAlarms by remember { mutableStateOf<List<com.allinone.blocker.data.StrictAlarmEntry>?>(null) }
     var justSavedAlarm  by remember { mutableStateOf<com.allinone.blocker.data.StrictAlarmEntry?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // ── FIRST-RUN ONBOARDING ─────────────────────────────────────────────
+    // Takes over the whole screen before anything else — including the
+    // unlock-challenge and lockdown-completion takeovers below — since a
+    // brand-new install can't be mid-lockdown or mid-unlock-challenge yet.
+    // Checked first every recomposition, so the moment OnboardingScreen
+    // calls onFinish() and flips this to true, the very next frame shows
+    // the normal app instead.
+    if (!onboardingCompleteState.value) {
+        OnboardingScreen(onFinish = { onboardingCompleteState.value = true })
+        return
+    }
 
     // ── LOCKDOWN GATE for Permissions ────────────────────────────────────
     // The Permissions screen is where Accessibility / Overlay / Usage
