@@ -474,7 +474,7 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
                     onManageSchedules       = { screen = Screen.LOCKDOWN_SCHEDULES },
                     onManageEmergencyBreaks = { screen = Screen.EMERGENCY_BREAKS }
                 )
-                Screen.PROFILE     -> ProfilePlaceholderScreen()
+                Screen.PROFILE     -> ProfileScreen(onOpenSettings = { screen = Screen.SETTINGS })
                 else -> { /* sub-screens handled above */ }
             }
             }
