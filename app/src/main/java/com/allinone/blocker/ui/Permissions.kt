@@ -97,32 +97,13 @@ object Permissions {
      * Opens Android's Accessibility settings so the user can turn Present
      * Tense's service on.
      *
-     * On Android 11+ (API 30+), Android added a direct "details" screen for
-     * a single accessibility service — ACTION_ACCESSIBILITY_DETAILS_SETTINGS
-     * — that skips straight past the long list of every accessibility
-     * service on the phone (TalkBack, Switch Access, any other apps that
-     * use it) and lands right on Present Tense's own toggle. That's the
-     * "take me straight to the app, don't make me hunt for it" behaviour.
-     * Before API 30 there's no such screen, so older phones fall back to
-     * the general list — same as before this change.
+     * Android does not expose a public API for jumping straight to a single
+     * accessibility service's own toggle — that "details" screen is
+     * reserved for the system Settings app itself. So this opens the
+     * general Accessibility settings list, where the user finds and taps
+     * "Present Tense" like any other accessibility service.
      */
     fun openAccessibilitySettings(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val detailsIntent = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
-                putExtra(
-                    Settings.EXTRA_COMPONENT_NAME,
-                    ComponentName(context, AppBlockerAccessibilityService::class.java)
-                        .flattenToString()
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            // Some OEM Settings apps don't implement this newer screen even
-            // though the OS version supports it — runCatching + isSuccess
-            // means we quietly fall through to the guaranteed-to-work
-            // general list below instead of crashing or showing nothing.
-            val opened = runCatching { context.startActivity(detailsIntent) }.isSuccess
-            if (opened) return
-        }
         context.startActivity(
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
