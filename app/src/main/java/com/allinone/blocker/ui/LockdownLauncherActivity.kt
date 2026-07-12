@@ -14,6 +14,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -81,7 +82,9 @@ import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGracePeriod
 import com.allinone.blocker.ui.motion.AnimatedAppearance
+import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.pressable
@@ -297,6 +300,36 @@ private fun LockdownLauncherScreen(
     // below, the progress ring's elapsed/total math both key off this.
     val sessionStartedAtMillis = remember(now) { LockdownCompletionRepository.currentSessionStartedAtMillis() }
 
+    // ENTRY RITUAL: should this composition play the "locking in" moment?
+    // Deliberately a plain, unkeyed `remember` — it evaluates exactly ONCE,
+    // the first time this composable enters composition, and then holds
+    // that answer for as long as this screen's Activity instance lives.
+    //
+    // Why that's the right signal: LockdownLauncherActivity is
+    // launchMode="singleTask", so when the accessibility service bounces
+    // the user back mid-session it reuses this same instance (onResume
+    // only) — it does NOT call onCreate again, so this composable is never
+    // re-entered and this `remember` never re-evaluates. A genuinely new
+    // session (this screen finished and relaunched fresh, or the process
+    // was recreated) DOES re-run this composable from scratch.
+    //
+    // That second case — process recreation — is exactly why this isn't
+    // just "true on first composition": Android can and does kill a
+    // long-backgrounded process (this Activity is stateNotNeeded=true,
+    // i.e. the app already expects this), and a multi-hour "Sleep" session
+    // being recreated eight hours in must NOT replay the ritual as if it
+    // just began. So the actual check is proximity: does the session's
+    // OWN recorded start time (not the wall clock) sit within the last
+    // minute? That's generous enough to absorb real delivery paths (the
+    // accessibility service's ~3s live tick, or the watchdog alarm's ~45s
+    // worst case after a process kill) while still clearly excluding
+    // "this session has been running for a while and we're just being
+    // recreated mid-way through it".
+    val isGenuineSessionStart = remember {
+        val startedAt = sessionStartedAtMillis
+        startedAt != null && (now - startedAt) in 0..ENTRY_RITUAL_FRESHNESS_WINDOW_MS
+    }
+
     // The screen's one line of "why", not just "how long" — quiet, rotates
     // slowly, keyed off the session's own start time (not the wall clock) so
     // the rotation cadence is clean from wherever the session began. See
@@ -498,6 +531,12 @@ private fun LockdownLauncherScreen(
                     .padding(top = 20.dp, end = 20.dp)
             )
         }
+
+        // The "locking in" moment — see the isGenuineSessionStart comment
+        // above for exactly when this does and doesn't play. Rendered last
+        // so it's on top of everything else, fading away to reveal a screen
+        // that's already fully in place underneath it.
+        LockdownEntryRitual(play = isGenuineSessionStart)
     }
 }
 
@@ -596,9 +635,63 @@ private fun LauncherAppIcon(app: LauncherApp, onClick: () -> Unit) {
     }
 }
 
+/** How long the entry ritual's black scrim takes to fully dissolve. Deliberately
+ *  longer than every other duration in [MotionDurations] — those are tuned to
+ *  the Doherty threshold for everyday UI feedback, but this is a one-time,
+ *  intentionally weighty moment, not a state change the user is waiting on. */
+private const val ENTRY_RITUAL_DURATION_MS = 1400
+
+/** How fresh [LockdownCompletionRepository.currentSessionStartedAtMillis] must
+ *  be for this to count as a genuine session start rather than a process
+ *  recreation mid-session — see the isGenuineSessionStart comment in
+ *  [LockdownLauncherScreen] for the full reasoning. */
+private const val ENTRY_RITUAL_FRESHNESS_WINDOW_MS = 60_000L
+
 /**
- * A slow, soft wash of color behind the focus ring — the screen's answer to
- * the "flat background, no depth" note in the visual-depth backlog item.
+ * The "locking in" moment — a brief, calm fade-from-black the very first
+ * time this screen appears for a new session, giving that moment some
+ * weight instead of the lockdown just snapping into view. Same
+ * psychological function as Brick's physical tap-to-lock ritual, achieved
+ * with a software transition instead of hardware (see the backlog item
+ * this implements).
+ *
+ * Everything underneath (the ring, the countdown, the grid) is already
+ * fully rendered and correctly positioned the instant this composes — this
+ * is purely a scrim on top that dissolves, not a choreographed entrance for
+ * the content itself. That keeps this additive and low-risk: nothing about
+ * how the rest of the screen renders has to change for this to work.
+ *
+ * Respects [LocalReducedMotion]: if the user has the OS "remove animations"
+ * setting on, this renders nothing at all rather than holding a black frame
+ * — same convention [AnimatedAppearance] already follows.
+ */
+@Composable
+private fun LockdownEntryRitual(play: Boolean) {
+    if (!play) return
+    if (LocalReducedMotion.current) return
+
+    val haptics = rememberHaptics()
+    val scrimAlpha = remember { Animatable(1f) }
+
+    LaunchedEffect(Unit) {
+        haptics.lockIn()
+        scrimAlpha.animateTo(
+            targetValue = 0f,
+            animationSpec = tween(
+                durationMillis = ENTRY_RITUAL_DURATION_MS,
+                easing = MotionEasing.Decelerate
+            )
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgDarkest.copy(alpha = scrimAlpha.value))
+    )
+}
+
+
  *
  * Deliberately restrained on every axis that could make it read as flashy
  * rather than ambient:
@@ -654,10 +747,7 @@ private fun AmbientGlow(color: Color) {
     }
 }
 
-/**
- * The breathing/progress ring drawn around the countdown during an active
- * lockdown session.
- *
+
  * TWO MODES, chosen by [progress]:
  *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
  *     session, or the brief window before the session tracker has recorded a
