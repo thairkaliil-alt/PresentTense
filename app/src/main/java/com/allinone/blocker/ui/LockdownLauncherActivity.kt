@@ -13,6 +13,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -63,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -84,6 +86,7 @@ import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
+import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -306,6 +309,20 @@ private fun LockdownLauncherScreen(
         )
     }
 
+    // The screen's color mood — tied to the SAME keyword match that picks
+    // the reflective line above (LockdownReflections.moodFor), so the copy
+    // and the ambient glow's color can never say different things about
+    // what this session is for. See AmbientGlow's header comment for why
+    // these particular accent tokens.
+    val moodColor = remember(decision.reason) {
+        when (LockdownReflections.moodFor(decision.reason)) {
+            LockdownMood.SLEEP -> AccentBlue
+            LockdownMood.FAMILY -> AccentAmber
+            LockdownMood.FOCUS -> AccentTeal
+            LockdownMood.GENERIC -> AccentBlue
+        }
+    }
+
     // A real, honest progress fraction — ONLY when both ends of the session
     // are genuinely known (a fixed end time AND a recorded start time). This
     // is deliberately separate from LockdownFocusRing's breathing pulse: an
@@ -349,6 +366,11 @@ private fun LockdownLauncherScreen(
             .fillMaxSize()
             .background(BgDarkest)
     ) {
+        // Depth layer: a slow, subtle wash of color behind the focus ring —
+        // drawn first so everything else sits on top of it. See AmbientGlow's
+        // header comment for the design intent.
+        AmbientGlow(color = moodColor)
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -575,8 +597,64 @@ private fun LauncherAppIcon(app: LauncherApp, onClick: () -> Unit) {
 }
 
 /**
- * The calm visual anchor of the whole screen — a ring around the lock glyph.
+ * A slow, soft wash of color behind the focus ring — the screen's answer to
+ * the "flat background, no depth" note in the visual-depth backlog item.
  *
+ * Deliberately restrained on every axis that could make it read as flashy
+ * rather than ambient:
+ *   - Low peak alpha (never above ~0.2) — a hint of color, not a spotlight.
+ *   - Slow breathing (9s) and an even slower horizontal drift (14s), both
+ *     using the same small-displacement philosophy as the rest of the app's
+ *     motion (see Motion.kt's header) — felt more than seen.
+ *   - The color itself cross-fades over ~1.2s when it changes (e.g. one
+ *     scheduled session ends and a differently-labeled one begins) instead
+ *     of cutting, so a mood change is never a jolt.
+ *
+ * [color] comes from [LockdownReflections.moodFor] via the same accent
+ * tokens the rest of the app already uses semantically — AccentBlue for a
+ * cooler/calmer mood (sleep, and the generic fallback), AccentAmber for the
+ * warm family mood, AccentTeal for focus/work — never a new raw hex color.
+ */
+@Composable
+private fun AmbientGlow(color: Color) {
+    val infinite = rememberInfiniteTransition(label = "ambientGlow")
+    val glowAlpha by infinite.animateFloat(
+        initialValue = 0.08f,
+        targetValue = 0.20f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(9_000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowAlpha"
+    )
+    val driftX by infinite.animateFloat(
+        initialValue = -1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(14_000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowDriftX"
+    )
+    val animatedColor by animateColorAsState(
+        targetValue = color,
+        animationSpec = tween(1_200),
+        label = "glowColor"
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val driftPx = driftX * 24.dp.toPx()
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(animatedColor.copy(alpha = glowAlpha), Color.Transparent),
+                center = Offset(size.width / 2f + driftPx, size.height * 0.22f),
+                radius = size.minDimension * 0.9f
+            )
+        )
+    }
+}
+
+
  * TWO MODES, chosen by [progress]:
  *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
  *     session, or the brief window before the session tracker has recorded a
