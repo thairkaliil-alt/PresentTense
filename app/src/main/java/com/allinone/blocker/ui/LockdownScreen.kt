@@ -824,7 +824,7 @@ private fun LockdownHeroSection(
             "Present Tense",
             style        = MaterialTheme.typography.titleMedium,
             fontWeight   = FontWeight.Medium,
-            color        = TextMuted,
+            color        = TextTertiary,
             letterSpacing = 2.sp
         )
 
@@ -863,7 +863,7 @@ private fun StreakIndicator(streak: Int) {
             if (streak > 0) "$streak-day streak" else "Start your streak today",
             style      = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            color      = if (streak > 0) TextSecondary else TextMuted
+            color      = if (streak > 0) TextSecondary else TextTertiary
         )
     }
 }
@@ -913,7 +913,11 @@ private fun PickDurationCard(
                 Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             }
             Spacer(Modifier.height(4.dp))
-            Text("Everything except your whitelist will be blocked.", style = MaterialTheme.typography.bodySmall, color = TextMuted, textAlign = TextAlign.Center)
+            // Small copywriting pass — same meaning as before ("everything
+            // except your whitelist gets blocked"), just phrased to match
+            // the app's own calm/quiet voice (the orb, the void, "Present
+            // Tense") instead of reading like a permissions dialog.
+            Text("Everything goes quiet except your whitelist.", style = MaterialTheme.typography.bodySmall, color = TextTertiary, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
 
             // The live readout — always reflects exactly what's armed right
@@ -946,7 +950,7 @@ private fun PickDurationCard(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
                 Text(
-                    "Hold the orb above to start a ${formatDuration(armedMinutes)} lockdown",
+                    "Ready when you are \u2014 hold the orb above to start your ${formatDuration(armedMinutes)} lockdown",
                     style      = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color      = TextPrimary,
@@ -1029,7 +1033,7 @@ private fun PresetChip(
             Text(
                 formatDuration(preset.minutes),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (selected) tierAccent else TextMuted
+                color = if (selected) tierAccent else TextTertiary
             )
         }
     }
@@ -1131,7 +1135,7 @@ private fun ActiveLockdownPanel(
                     else              -> "remaining"
                 },
                 style = MaterialTheme.typography.labelMedium,
-                color = TextMuted
+                color = TextSecondary
             )
 
             Spacer(Modifier.height(24.dp))
@@ -1141,7 +1145,7 @@ private fun ActiveLockdownPanel(
                     onClick          = onEmergencyBreak,
                     modifier         = Modifier.fillMaxWidth(),
                     shape            = MaterialTheme.shapes.large,
-                    border           = BorderStroke(1.dp, AccentTeal.copy(alpha = 0.6f)),
+                    border           = BorderStroke(1.dp, AccentTeal),
                     colors           = ButtonDefaults.outlinedButtonColors(contentColor = AccentTeal),
                     contentPadding   = PaddingValues(vertical = 12.dp)
                 ) {
@@ -1163,7 +1167,7 @@ private fun ActiveLockdownPanel(
                     onClick          = onCancelGrace,
                     modifier         = Modifier.fillMaxWidth(),
                     shape            = MaterialTheme.shapes.large,
-                    border           = BorderStroke(1.dp, TextMuted.copy(alpha = 0.35f)),
+                    border           = BorderStroke(1.dp, TextSecondary.copy(alpha = 0.65f)),
                     colors           = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
                     contentPadding   = PaddingValues(vertical = 12.dp)
                 ) {
