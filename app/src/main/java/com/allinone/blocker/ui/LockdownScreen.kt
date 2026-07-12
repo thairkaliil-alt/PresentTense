@@ -127,7 +127,6 @@ import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.CardSurface
-import com.allinone.blocker.ui.theme.CardSurfaceAlt
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
@@ -830,8 +829,15 @@ private fun PickDurationCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(28.dp),
-        colors   = CardDefaults.cardColors(containerColor = CardSurfaceAlt),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        // Quieter than before on purpose: this card used to use
+        // CardSurfaceAlt, which Theme.kt documents as "the one hero/featured
+        // card per screen" — the same visual weight class as the orb above
+        // it. The orb is the intended hero, so this card now sits on the
+        // plain CardSurface token instead, with lighter elevation to match
+        // (1.dp instead of 6.dp) so it reads as a secondary, supporting
+        // control rather than a second focal point competing for attention.
+        colors   = CardDefaults.cardColors(containerColor = CardSurface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
             modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
@@ -847,10 +853,13 @@ private fun PickDurationCard(
 
             // The live readout — always reflects exactly what's armed right
             // now, whether the wheel or a Quick Pick tap set it last.
+            // Sized down from displaySmall/Bold to headlineMedium/SemiBold —
+            // still the most prominent text in this card, but no longer
+            // competing with the orb's own visual weight above it.
             Text(
                 formatDuration(armedMinutes),
-                style      = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Bold,
+                style      = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
                 color      = TextPrimary
             )
             Spacer(Modifier.height(22.dp))
