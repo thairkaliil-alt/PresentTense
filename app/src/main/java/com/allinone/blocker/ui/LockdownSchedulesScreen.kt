@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownSchedule
 import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -89,11 +90,39 @@ private val DAY_ORDER = listOf(
     Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
 )
 
+/**
+ * A save (new or edited) or a toggle-on that, per [LockdownEngine.wouldBeActiveNow],
+ * would start a lockdown the instant it commits — held here so the confirmation
+ * dialog below knows exactly what to do if the person taps "Start lockdown now".
+ * See the big comment on [LockdownSchedulesScreen] for why this check exists.
+ */
+private sealed class PendingImmediateStart {
+    data class Save(val schedule: LockdownSchedule) : PendingImmediateStart()
+    data class Toggle(val schedule: LockdownSchedule) : PendingImmediateStart()
+}
+
+// BUGFIX: ScheduleEditDialog's Save button, and ScheduleCard's off→on toggle,
+// used to call addSchedule()/updateSchedule() immediately with zero
+// confirmation. Because LockdownEngine.evaluate() treats "is the current
+// moment inside this schedule's window" as "lockdown is active right now",
+// saving or enabling a schedule that happens to cover this exact moment
+// instantly started a live lockdown session — no warning, no easy way out.
+// Both call sites below now check LockdownEngine.wouldBeActiveNow() FIRST
+// and, only if it would, route through the confirmation dialog at the
+// bottom of this composable instead of committing straight away. A schedule
+// that doesn't cover the current moment still saves/toggles exactly as
+// before — no new friction for the common case.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LockdownSchedulesScreen(onBack: () -> Unit) {
     val schedules by BlockerRepository.schedules.collectAsState()
     var showAddSchedule by remember { mutableStateOf<LockdownSchedule?>(null) }
+    var pendingImmediateStart by remember { mutableStateOf<PendingImmediateStart?>(null) }
+
+    fun commitScheduleSave(saved: LockdownSchedule) {
+        if (schedules.any { it.id == saved.id }) BlockerRepository.updateSchedule(saved)
+        else BlockerRepository.addSchedule(saved)
+    }
 
     Scaffold(
         containerColor = BgDarkest,
@@ -128,8 +157,12 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                     ScheduleCard(
                         schedule = schedule,
                         onToggle = { checked ->
-                            if (!checked) StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
-                            else BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
+                            when {
+                                !checked -> StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
+                                LockdownEngine.wouldBeActiveNow(schedule.copy(enabled = true)) ->
+                                    pendingImmediateStart = PendingImmediateStart.Toggle(schedule)
+                                else -> BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
+                            }
                         },
                         onDelete = { StrictModeGate.guard { BlockerRepository.removeSchedule(schedule.id) } },
                         onEdit   = { showAddSchedule = schedule }
@@ -146,9 +179,60 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
             schedule  = editing,
             onDismiss = { showAddSchedule = null },
             onSave    = { saved ->
-                if (schedules.any { it.id == saved.id }) BlockerRepository.updateSchedule(saved)
-                else BlockerRepository.addSchedule(saved)
-                showAddSchedule = null
+                // Checked "as if enabled = true" regardless of the schedule's
+                // actual saved enabled state — see the kdoc on
+                // LockdownEngine.wouldBeActiveNow() for why.
+                if (LockdownEngine.wouldBeActiveNow(saved.copy(enabled = true))) {
+                    pendingImmediateStart = PendingImmediateStart.Save(saved)
+                } else {
+                    commitScheduleSave(saved)
+                    showAddSchedule = null
+                }
+            }
+        )
+    }
+
+    // The confirmation dialog itself. Cancel leaves everything untouched —
+    // for a Save, that means the ScheduleEditDialog above (still open,
+    // since we never called showAddSchedule = null for this path) simply
+    // reappears with nothing changed; for a Toggle, the switch just stays
+    // off since updateSchedule() was never called.
+    pendingImmediateStart?.let { pending ->
+        val schedule = when (pending) {
+            is PendingImmediateStart.Save   -> pending.schedule
+            is PendingImmediateStart.Toggle -> pending.schedule
+        }
+        AlertDialog(
+            onDismissRequest = { pendingImmediateStart = null },
+            title = { Text("Starts lockdown now") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("This schedule covers right now — saving it will start a lockdown immediately.")
+                    if (schedule.label.isNotBlank()) {
+                        Text(
+                            "\u201C${schedule.label}\u201D \u00B7 ${BlockEngine.formatMinutes(schedule.startMinutes)} \u2013 ${BlockEngine.formatMinutes(schedule.endMinutes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextTertiary
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (pending) {
+                        is PendingImmediateStart.Save -> {
+                            commitScheduleSave(pending.schedule)
+                            showAddSchedule = null
+                        }
+                        is PendingImmediateStart.Toggle -> {
+                            BlockerRepository.updateSchedule(pending.schedule.copy(enabled = true))
+                        }
+                    }
+                    pendingImmediateStart = null
+                }) { Text("Start lockdown now") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImmediateStart = null }) { Text("Cancel") }
             }
         )
     }
