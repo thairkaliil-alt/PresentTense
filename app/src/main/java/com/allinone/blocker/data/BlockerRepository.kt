@@ -265,6 +265,12 @@ object BlockerRepository {
         persistSchedules()
     }
 
+    /** Saves a new ordering of the schedule list (from drag-to-reorder). */
+    fun reorderSchedules(reordered: List<LockdownSchedule>) {
+        _schedules.value = reordered
+        persistSchedules()
+    }
+
     private fun persistSchedules() {
         val arr = JSONArray()
         _schedules.value.forEach { arr.put(it.toJson()) }
