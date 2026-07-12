@@ -654,7 +654,10 @@ private fun AmbientGlow(color: Color) {
     }
 }
 
-
+/**
+ * The breathing/progress ring drawn around the countdown during an active
+ * lockdown session.
+ *
  * TWO MODES, chosen by [progress]:
  *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
  *     session, or the brief window before the session tracker has recorded a
