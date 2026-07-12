@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -58,7 +59,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -107,6 +107,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGracePeriod
@@ -1005,6 +1006,21 @@ private fun ActiveLockdownPanel(
     graceRemainingMs: Long = 0L,
     onCancelGrace   : () -> Unit = {}
 ) {
+    val reducedMotion = LocalReducedMotion.current
+
+    // The moment THIS session actually began. LockdownCompletionRepository
+    // already tracks this — for both manual and scheduled sessions — purely
+    // to build the post-session celebration screen, so reading it here adds
+    // no new state to the app. Read once per panel instance (remember with
+    // no keys): a session's start time never changes for the life of this
+    // composable, since a NEW ActiveLockdownPanel instance is what appears
+    // whenever a genuinely new session starts (see EmbeddedLockdownLazyColumn,
+    // which swaps this in/out based on sessionRunning). Used only to turn a
+    // raw countdown into a real "how far through this session am I" ring —
+    // if it's ever unavailable, the ring below falls back to an honest
+    // indeterminate state instead of guessing.
+    val sessionStartedAtMillis = remember { LockdownCompletionRepository.currentSessionStartedAtMillis() }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = MaterialTheme.shapes.extraLarge,
@@ -1016,18 +1032,7 @@ private fun ActiveLockdownPanel(
     ) {
         Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             val badgeTint = if (decision.onBreak) AccentTeal else AccentRed
-            Box(
-                modifier         = Modifier.size(56.dp).clip(CircleShape).background(badgeTint.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    if (decision.onBreak) Icons.Filled.Bolt else Icons.Filled.Lock,
-                    contentDescription = null,
-                    tint               = badgeTint,
-                    modifier           = Modifier.size(26.dp)
-                )
-            }
-            Spacer(Modifier.height(14.dp))
+
             Text(
                 if (decision.onBreak) "Emergency Break active" else "Lockdown is active",
                 style      = MaterialTheme.typography.titleMedium,
@@ -1036,28 +1041,58 @@ private fun ActiveLockdownPanel(
             )
             Spacer(Modifier.height(4.dp))
             Text(decision.reason, style = MaterialTheme.typography.bodySmall, color = TextTertiary)
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(22.dp))
 
             val targetMillis = if (decision.onBreak) decision.breakEndsAtMillis else decision.endsAtMillis
-            if (targetMillis in 1 until Long.MAX_VALUE) {
-                val remainingSec = ((targetMillis - now) / 1000L).coerceAtLeast(0)
-                Text(formatCountdown(remainingSec), style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
-                Spacer(Modifier.height(2.dp))
-                Text(if (decision.onBreak) "until lockdown resumes" else "remaining", style = MaterialTheme.typography.labelMedium, color = TextMuted)
-                if (decision.onBreak) {
-                    Spacer(Modifier.height(14.dp))
-                    LinearProgressIndicator(
-                        progress      = { (remainingSec / BlockerRepository.breakDurationSeconds().toFloat()).coerceIn(0f, 1f) },
-                        modifier      = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                        color         = AccentTeal,
-                        trackColor    = AccentTeal.copy(alpha = 0.2f)
-                    )
+            val isFinite     = targetMillis in 1 until Long.MAX_VALUE
+            val remainingSec = if (isFinite) ((targetMillis - now) / 1000L).coerceAtLeast(0) else 0L
+
+            // Real elapsed/total progress wherever both ends of the session
+            // are actually known; null otherwise, which the ring below
+            // renders as an honest "ongoing, no fixed length" pulse rather
+            // than a fabricated percentage.
+            //   • Emergency Break always has a known total (breakDurationSeconds()
+            //     — the same value the old linear bar already used).
+            //   • A normal lockdown needs sessionStartedAtMillis too, since
+            //     LockdownDecision only ever exposes the END time.
+            val progressFraction: Float? = when {
+                !isFinite -> null
+                decision.onBreak -> {
+                    val totalSec = BlockerRepository.breakDurationSeconds().coerceAtLeast(1)
+                    (1f - remainingSec / totalSec.toFloat()).coerceIn(0f, 1f)
                 }
-            } else {
-                Text("∞", style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
-                Spacer(Modifier.height(2.dp))
-                Text("indefinite lockdown", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+                sessionStartedAtMillis != null && targetMillis > sessionStartedAtMillis -> {
+                    val totalMs   = (targetMillis - sessionStartedAtMillis).toFloat()
+                    val elapsedMs = (now - sessionStartedAtMillis).toFloat()
+                    (elapsedMs / totalMs).coerceIn(0f, 1f)
+                }
+                else -> null
             }
+
+            SessionProgressRing(
+                badgeTint        = badgeTint,
+                icon             = if (decision.onBreak) Icons.Filled.Bolt else Icons.Filled.Lock,
+                progressFraction = progressFraction,
+                reducedMotion    = reducedMotion
+            ) {
+                Text(
+                    if (isFinite) formatCountdown(remainingSec) else "∞",
+                    style      = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color      = TextPrimary
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                when {
+                    !isFinite         -> "indefinite lockdown"
+                    decision.onBreak  -> "until lockdown resumes"
+                    else              -> "remaining"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = TextMuted
+            )
 
             Spacer(Modifier.height(24.dp))
 
@@ -1094,6 +1129,94 @@ private fun ActiveLockdownPanel(
                 ) {
                     Text("Cancel lockdown \u00B7 ${(graceRemainingMs / 1000L)}s left", fontWeight = FontWeight.SemiBold)
                 }
+            }
+        }
+    }
+}
+
+// A circular time-remaining ring: a faint full track, plus either a solid
+// arc swept to the session's real elapsed/total fraction, or — when that
+// fraction isn't knowable (an indefinite lockdown) — a full ring that
+// gently pulses in brightness instead, so "no fixed end" never gets
+// dishonestly represented as some fraction of progress. The arc's sweep
+// animates between ticks via MotionSpecs.standard() (this file's normal
+// "everyday value change" tween) rather than jumping once a second, and
+// collapses to an instant snap under LocalReducedMotion, same as every
+// other animated value in this screen.
+@Composable
+private fun SessionProgressRing(
+    badgeTint       : Color,
+    icon            : androidx.compose.ui.graphics.vector.ImageVector,
+    progressFraction: Float?,
+    reducedMotion   : Boolean,
+    content         : @Composable () -> Unit
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue   = progressFraction ?: 0f,
+        animationSpec = if (reducedMotion) tween(durationMillis = 0) else MotionSpecs.standard(),
+        label         = "session_progress_ring"
+    )
+
+    val infiniteTransition = rememberInfiniteTransition(label = "ring_pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue  = 0.45f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(
+            animation  = tween(durationMillis = if (reducedMotion) 1 else 1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ring_pulse_alpha"
+    )
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(176.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokeWidth = 10.dp.toPx()
+            val diameter    = size.minDimension - strokeWidth
+            val topLeft     = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
+            val arcSize     = androidx.compose.ui.geometry.Size(diameter, diameter)
+
+            // Background track — always visible, faint, the full circle.
+            drawArc(
+                color      = badgeTint.copy(alpha = 0.14f),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter  = false,
+                topLeft    = topLeft,
+                size       = arcSize,
+                style      = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+            )
+
+            if (progressFraction != null) {
+                drawArc(
+                    color      = badgeTint,
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter  = false,
+                    topLeft    = topLeft,
+                    size       = arcSize,
+                    style      = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            } else {
+                drawArc(
+                    color      = badgeTint.copy(alpha = pulseAlpha),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter  = false,
+                    topLeft    = topLeft,
+                    size       = arcSize,
+                    style      = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            }
+        }
+
+        Box(
+            modifier         = Modifier.size(128.dp).clip(CircleShape).background(badgeTint.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(icon, contentDescription = null, tint = badgeTint, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.height(4.dp))
+                content()
             }
         }
     }
