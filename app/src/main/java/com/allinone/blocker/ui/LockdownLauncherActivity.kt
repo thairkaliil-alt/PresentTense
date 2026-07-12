@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -66,6 +67,9 @@ import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGracePeriod
+import com.allinone.blocker.ui.motion.AnimatedAppearance
+import com.allinone.blocker.ui.motion.MotionDurations
+import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
@@ -274,6 +278,18 @@ private fun LockdownLauncherScreen(
     val graceRemainingMs = remember(now) { LockdownGracePeriod.remainingMs(now) }
     val showGraceCancel = graceRemainingMs > 0L && !decision.onBreak
 
+    // The screen's one line of "why", not just "how long" — quiet, rotates
+    // slowly, keyed off the session's own start time (not the wall clock) so
+    // the rotation cadence is clean from wherever the session began. See
+    // LockdownReflections' header comment for the design intent.
+    val reflectionLine = remember(now, decision.reason) {
+        LockdownReflections.currentLine(
+            reason = decision.reason,
+            sessionStartedAtMillis = LockdownCompletionRepository.currentSessionStartedAtMillis(),
+            nowMillis = now
+        )
+    }
+
     // THE fix for "nothing happens when the countdown hits zero": this
     // screen is, by design, the only thing the user can see for the entire
     // duration of a session — they never leave it, so the Activity is never
@@ -333,6 +349,23 @@ private fun LockdownLauncherScreen(
                     fontWeight = FontWeight.Light,
                     color = TextPrimary
                 )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            AnimatedAppearance(delayMs = 260) {
+                Crossfade(
+                    targetState = reflectionLine,
+                    animationSpec = MotionSpecs.standard(MotionDurations.Slow),
+                    label = "reflectionLine"
+                ) { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                }
             }
 
             if (showGraceCancel) {
