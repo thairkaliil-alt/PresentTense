@@ -114,6 +114,7 @@ import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
+import com.allinone.blocker.data.LockdownGracePeriod
 import com.allinone.blocker.data.LockdownSchedule
 import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.ui.motion.LocalReducedMotion
@@ -206,6 +207,14 @@ fun LockdownScreen(
     }
     val breaksRemaining = BlockerRepository.breaksRemaining()
     val sessionRunning  = manualUntil > now || decision.active || decision.onBreak
+
+    // Option C: same short, no-friction cancel window as the full-screen
+    // lockdown launcher (see LockdownGracePeriod's header comment) — shown
+    // here too for the case where a session starts (or a scheduled window
+    // begins) while this tab happens to already be on screen.
+    val graceRemainingMs = remember(now, sessionRunning) {
+        if (sessionRunning) LockdownGracePeriod.remainingMs(now) else 0L
+    }
 
     val goHome: () -> Unit = { LockdownLauncherActivity.launch(context) }
     val reducedMotion = LocalReducedMotion.current
@@ -409,7 +418,9 @@ fun LockdownScreen(
                 voidProgress        = voidProgressState,
                 onHoldStart         = { origin, mins -> holdOrigin = origin; holdArmedMinutes = mins; isHolding = true },
                 onHoldEnd           = { isHolding = false },
-                onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } }
+                onEmergencyBreak    = { StrictModeGate.guard { BlockerRepository.startEmergencyBreak() } },
+                graceRemainingMs    = graceRemainingMs,
+                onCancelGrace       = { LockdownGracePeriod.cancelCurrentSession(now) }
             )
         }
     }
@@ -1025,7 +1036,9 @@ private fun ActiveLockdownPanel(
     decision        : LockdownDecision,
     now             : Long,
     breaksRemaining : Int,
-    onEmergencyBreak: () -> Unit
+    onEmergencyBreak: () -> Unit,
+    graceRemainingMs: Long = 0L,
+    onCancelGrace   : () -> Unit = {}
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1097,6 +1110,26 @@ private fun ActiveLockdownPanel(
                     Text("Emergency Break ($breaksRemaining left)", fontWeight = FontWeight.SemiBold)
                 }
             }
+
+            // Option C: a short, no-friction window right at the start of a
+            // session to undo a mistake before it's had any real effect —
+            // deliberately plain (no hold-to-confirm, unlike Emergency
+            // Break above) since it's not the "only if you really need it"
+            // valve, it's a takeback. Disappears on its own once the window
+            // closes — see LockdownGracePeriod's header comment.
+            if (!decision.onBreak && graceRemainingMs > 0L) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick          = onCancelGrace,
+                    modifier         = Modifier.fillMaxWidth(),
+                    shape            = MaterialTheme.shapes.large,
+                    border           = BorderStroke(1.dp, TextMuted.copy(alpha = 0.35f)),
+                    colors           = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    contentPadding   = PaddingValues(vertical = 12.dp)
+                ) {
+                    Text("Cancel lockdown \u00B7 ${(graceRemainingMs / 1000L)}s left", fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
@@ -1115,7 +1148,9 @@ private fun EmbeddedLockdownLazyColumn(
     voidProgress     : State<Float>,
     onHoldStart      : (Offset, Int) -> Unit,
     onHoldEnd        : () -> Unit,
-    onEmergencyBreak : () -> Unit
+    onEmergencyBreak : () -> Unit,
+    graceRemainingMs : Long = 0L,
+    onCancelGrace    : () -> Unit = {}
 ) {
     LazyColumn(
         modifier        = modifier.fillMaxSize(),
@@ -1136,7 +1171,9 @@ private fun EmbeddedLockdownLazyColumn(
                 decision         = decision,
                 now              = now,
                 breaksRemaining  = breaksRemaining,
-                onEmergencyBreak = onEmergencyBreak
+                onEmergencyBreak = onEmergencyBreak,
+                graceRemainingMs = graceRemainingMs,
+                onCancelGrace    = onCancelGrace
             )
         }
 
