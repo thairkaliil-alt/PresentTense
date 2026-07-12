@@ -80,6 +80,14 @@ class Haptics internal constructor(
     fun tap() = pulse(durationMs = 12L, amplitude = 90)
 
     /**
+     * A single, barely-there pulse for the "locking in" moment at the very
+     * start of a lockdown session (see LockdownLauncherActivity's entry
+     * ritual). Same barely-there feel as [digitTick], given its own name
+     * since it marks a different, one-time moment rather than a repeated one.
+     */
+    fun lockIn() = pulse(durationMs = 10L, amplitude = 60)
+
+    /**
      * Stronger "you did it" pulse — a quick two-beat pattern instead of a
      * single buzz, so it reads as a distinct, bigger moment than the light
      * ticks above. Used for finishing a Strict Mode challenge and for
