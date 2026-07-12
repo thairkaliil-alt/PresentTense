@@ -9,14 +9,23 @@ import android.telecom.TelecomManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -52,6 +61,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -278,6 +289,11 @@ private fun LockdownLauncherScreen(
     val graceRemainingMs = remember(now) { LockdownGracePeriod.remainingMs(now) }
     val showGraceCancel = graceRemainingMs > 0L && !decision.onBreak
 
+    // Anchor for anything that needs to know when THIS session actually
+    // began (not just when it ends) — the reflective line's rotation and,
+    // below, the progress ring's elapsed/total math both key off this.
+    val sessionStartedAtMillis = remember(now) { LockdownCompletionRepository.currentSessionStartedAtMillis() }
+
     // The screen's one line of "why", not just "how long" — quiet, rotates
     // slowly, keyed off the session's own start time (not the wall clock) so
     // the rotation cadence is clean from wherever the session began. See
@@ -285,9 +301,28 @@ private fun LockdownLauncherScreen(
     val reflectionLine = remember(now, decision.reason) {
         LockdownReflections.currentLine(
             reason = decision.reason,
-            sessionStartedAtMillis = LockdownCompletionRepository.currentSessionStartedAtMillis(),
+            sessionStartedAtMillis = sessionStartedAtMillis,
             nowMillis = now
         )
+    }
+
+    // A real, honest progress fraction — ONLY when both ends of the session
+    // are genuinely known (a fixed end time AND a recorded start time). This
+    // is deliberately separate from LockdownFocusRing's breathing pulse: an
+    // indefinite manual lock ("until turned off") has no total duration to
+    // measure against, so faking a progress arc for it would be exactly the
+    // misleading indicator Calm Technology practice says to avoid — see
+    // LockdownFocusRing's header comment. Null here means "unknown", not
+    // "zero" — LockdownFocusRing falls back to the breathing pulse whenever
+    // this is null, whatever the reason.
+    val target = decision.endsAtMillis
+    val sessionProgress = remember(target, sessionStartedAtMillis, now) {
+        val startedAt = sessionStartedAtMillis
+        if (target in 1 until Long.MAX_VALUE && startedAt != null && target > startedAt) {
+            ((now - startedAt).toFloat() / (target - startedAt).toFloat()).coerceIn(0f, 1f)
+        } else {
+            null
+        }
     }
 
     // THE fix for "nothing happens when the countdown hits zero": this
@@ -322,19 +357,32 @@ private fun LockdownLauncherScreen(
         ) {
             Spacer(Modifier.height(72.dp))
 
-            LockdownFocusRing()
+            LockdownFocusRing(progress = sessionProgress)
             Spacer(Modifier.height(24.dp))
 
-            // Countdown / status — light weight, generous size, minimal chrome
-            val target = decision.endsAtMillis
+            // Countdown / status — generous size, minimal chrome. The digits
+            // themselves now carry more weight (displayLarge, Medium instead
+            // of Light) and roll from one value to the next via AnimatedContent
+            // instead of snapping — the same pattern StreaksScreen.kt already
+            // uses for its counting number, reused here for consistency.
             if (target in 1 until Long.MAX_VALUE) {
                 val remainingSec = ((target - now) / 1000L).coerceAtLeast(0)
-                Text(
-                    formatLockCountdown(remainingSec),
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Light,
-                    color = TextPrimary
-                )
+                AnimatedContent(
+                    targetState = formatLockCountdown(remainingSec),
+                    transitionSpec = {
+                        (slideInVertically { h -> h / 4 } + fadeIn(tween(160)))
+                            .togetherWith(slideOutVertically { h -> -h / 4 } + fadeOut(tween(160)))
+                            .using(SizeTransform(clip = false))
+                    },
+                    label = "lockdownCountdown"
+                ) { text ->
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.displayLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimary
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Text(
                     "REMAINING",
@@ -527,15 +575,27 @@ private fun LauncherAppIcon(app: LauncherApp, onClick: () -> Unit) {
 }
 
 /**
- * A quiet, breathing ring around the lock glyph — the calm visual anchor of
- * the whole screen. Deliberately not a literal countdown progress ring (the
- * app doesn't reliably know a session's total duration, only when it ends),
- * so instead of a fake/misleading progress arc this uses a slow, subtle
- * pulse — the same "still alive, still holding" cue premium focus apps use
- * (Opal's orb, Endel's breathing visuals) instead of a hard mechanical timer.
+ * The calm visual anchor of the whole screen — a ring around the lock glyph.
+ *
+ * TWO MODES, chosen by [progress]:
+ *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
+ *     session, or the brief window before the session tracker has recorded a
+ *     start time): a slow, subtle breathing pulse — the same "still alive,
+ *     still holding" cue premium focus apps use (Opal's orb, Endel's
+ *     breathing visuals) instead of a hard mechanical timer. Deliberately
+ *     NOT a literal progress ring here, because the app genuinely doesn't
+ *     know a total duration to measure against — faking one would be
+ *     exactly the misleading indicator Calm Technology practice warns
+ *     against.
+ *   - [progress] in 0f..1f (any session with a known start AND a known end —
+ *     a fixed-length schedule, or a manual lock with a set duration): a
+ *     real, honest elapsed/total arc. This is intentionally a DIFFERENT
+ *     visual — a filling arc, not a pulse — so it's never confused with the
+ *     ambient "alive" cue above; it's making an actual claim about how much
+ *     of the session is left, so it only ever appears when that claim is true.
  */
 @Composable
-private fun LockdownFocusRing() {
+private fun LockdownFocusRing(progress: Float? = null) {
     val infinite = rememberInfiniteTransition(label = "focusBreath")
     val breath by infinite.animateFloat(
         initialValue = 0.4f,
@@ -547,6 +607,14 @@ private fun LockdownFocusRing() {
         label = "breathAlpha"
     )
 
+    // Smooths the once-a-second jump from the caller's tick into a gentle
+    // glide, rather than the arc visibly snapping forward every second.
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress ?: 0f,
+        animationSpec = tween(durationMillis = 900, easing = LinearEasing),
+        label = "lockdownProgress"
+    )
+
     Box(modifier = Modifier.size(88.dp), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             // static outer ring — faint, structural
@@ -555,12 +623,28 @@ private fun LockdownFocusRing() {
                 radius = size.minDimension / 2f,
                 style = Stroke(width = 1.dp.toPx())
             )
-            // breathing inner ring — the "alive" cue
-            drawCircle(
-                color = AccentBlue.copy(alpha = 0.4f * breath),
-                radius = size.minDimension / 2f - 10.dp.toPx(),
-                style = Stroke(width = 1.2.dp.toPx())
-            )
+
+            if (progress != null) {
+                // Real, honest progress arc — elapsed/total, nothing guessed.
+                val strokeWidthPx = 3.dp.toPx()
+                val inset = strokeWidthPx / 2f
+                drawArc(
+                    color = AccentBlue.copy(alpha = 0.9f),
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = Size(size.width - strokeWidthPx, size.height - strokeWidthPx),
+                    style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
+                )
+            } else {
+                // breathing inner ring — the "alive" cue, for indefinite locks
+                drawCircle(
+                    color = AccentBlue.copy(alpha = 0.4f * breath),
+                    radius = size.minDimension / 2f - 10.dp.toPx(),
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+            }
         }
         Icon(
             Icons.Filled.Lock,
