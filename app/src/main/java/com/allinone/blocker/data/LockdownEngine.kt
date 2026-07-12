@@ -45,51 +45,96 @@ object LockdownEngine {
             if (!s.enabled) continue
             val overnight = s.startMinutes > s.endMinutes
 
-            val startsToday = today in s.daysOfWeek &&
-                if (overnight) nowMinutes >= s.startMinutes else nowMinutes in s.startMinutes until s.endMinutes
+            val startsToday = startsTodayNow(s, today, nowMinutes, overnight)
             if (startsToday) {
                 val endMillis = startOfDay(nowMillis) + s.endMinutes * 60_000L + if (overnight) DAY_MS else 0L
-                BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
                 // This window started TODAY at s.startMinutes (whether or not
                 // it also runs past midnight) — see the sibling branch below
                 // for the window that started YESTERDAY and is still running.
                 val startedAtMillis = startOfDay(nowMillis) + s.startMinutes * 60_000L
-                LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label)
-                if (breakUntilMillis > nowMillis) {
-                    return LockdownDecision(
-                        active = false,
-                        reason = s.label.ifBlank { "Scheduled lockdown" },
-                        endsAtMillis = endMillis,
-                        onBreak = true,
-                        breakEndsAtMillis = breakUntilMillis
-                    )
+                // A grace-period cancel (see LockdownGracePeriod) only ever
+                // suppresses THIS ONE occurrence — keyed by the schedule's id
+                // and this exact start time — never the schedule itself, so
+                // it still fires normally at its next scheduled occurrence.
+                // Checked before any of the session-start side effects below
+                // so a cancelled occurrence never re-arms the ongoing-session
+                // marker or resets breaks.
+                if (!BlockerRepository.isScheduleOccurrenceCancelled(s.id, startedAtMillis)) {
+                    BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
+                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id)
+                    if (breakUntilMillis > nowMillis) {
+                        return LockdownDecision(
+                            active = false,
+                            reason = s.label.ifBlank { "Scheduled lockdown" },
+                            endsAtMillis = endMillis,
+                            onBreak = true,
+                            breakEndsAtMillis = breakUntilMillis
+                        )
+                    }
+                    return LockdownDecision(true, s.label.ifBlank { "Scheduled lockdown" }, endMillis)
                 }
-                return LockdownDecision(true, s.label.ifBlank { "Scheduled lockdown" }, endMillis)
             }
 
             // Overnight window that started yesterday and is still running into today.
-            if (overnight && yesterday in s.daysOfWeek && nowMinutes < s.endMinutes) {
+            if (overnightContinuesNow(s, yesterday, nowMinutes, overnight)) {
                 val endMillis = startOfDay(nowMillis) + s.endMinutes * 60_000L
-                BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
                 // This window started YESTERDAY at s.startMinutes and is
                 // still running into today — a distinct occurrence from the
                 // "starts today" branch above, keyed by its own end time.
                 val startedAtMillis = startOfDay(nowMillis) - DAY_MS + s.startMinutes * 60_000L
-                LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label)
-                if (breakUntilMillis > nowMillis) {
-                    return LockdownDecision(
-                        active = false,
-                        reason = s.label.ifBlank { "Scheduled lockdown" },
-                        endsAtMillis = endMillis,
-                        onBreak = true,
-                        breakEndsAtMillis = breakUntilMillis
-                    )
+                // Same cancelled-occurrence check as the branch above.
+                if (!BlockerRepository.isScheduleOccurrenceCancelled(s.id, startedAtMillis)) {
+                    BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
+                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id)
+                    if (breakUntilMillis > nowMillis) {
+                        return LockdownDecision(
+                            active = false,
+                            reason = s.label.ifBlank { "Scheduled lockdown" },
+                            endsAtMillis = endMillis,
+                            onBreak = true,
+                            breakEndsAtMillis = breakUntilMillis
+                        )
+                    }
+                    return LockdownDecision(true, s.label.ifBlank { "Scheduled lockdown" }, endMillis)
                 }
-                return LockdownDecision(true, s.label.ifBlank { "Scheduled lockdown" }, endMillis)
             }
         }
 
         return LockdownDecision(false)
+    }
+
+    /** True if [s]'s window starts TODAY and covers [nowMinutes] — factored out of [evaluate] so [wouldBeActiveNow] can share the exact same matching logic instead of risking drift. */
+    private fun startsTodayNow(s: LockdownSchedule, today: Int, nowMinutes: Int, overnight: Boolean): Boolean =
+        today in s.daysOfWeek &&
+            if (overnight) nowMinutes >= s.startMinutes else nowMinutes in s.startMinutes until s.endMinutes
+
+    /** True if [s]'s overnight window started YESTERDAY and is still running into today — see [startsTodayNow]. */
+    private fun overnightContinuesNow(s: LockdownSchedule, yesterday: Int, nowMinutes: Int, overnight: Boolean): Boolean =
+        overnight && yesterday in s.daysOfWeek && nowMinutes < s.endMinutes
+
+    /**
+     * True if [schedule] — evaluated entirely on its own, with its persisted
+     * [LockdownSchedule.enabled] flag ignored (i.e. "if this were saved/
+     * switched on exactly as-is, right now") — has a day/time window that
+     * covers [nowMillis]. Reuses the exact same day/window matching
+     * [evaluate] uses for a genuinely live schedule (via [startsTodayNow] /
+     * [overnightContinuesNow]) so a UI warning "saving this starts a
+     * lockdown immediately" (see ScheduleEditDialog / ScheduleCard in
+     * LockdownSchedulesScreen.kt) can never drift out of sync with what
+     * [evaluate] actually decides once the schedule is really live.
+     *
+     * Deliberately does NOT touch manual lock, breaks, or any of the
+     * session-start side effects [evaluate] has — this is a pure,
+     * side-effect-free preview check.
+     */
+    fun wouldBeActiveNow(schedule: LockdownSchedule, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val cal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+        val today = cal.get(Calendar.DAY_OF_WEEK)
+        val yesterday = if (today == Calendar.SUNDAY) Calendar.SATURDAY else today - 1
+        val nowMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val overnight = schedule.startMinutes > schedule.endMinutes
+        return startsTodayNow(schedule, today, nowMinutes, overnight) ||
+            overnightContinuesNow(schedule, yesterday, nowMinutes, overnight)
     }
 
     private fun startOfDay(millis: Long): Long {
