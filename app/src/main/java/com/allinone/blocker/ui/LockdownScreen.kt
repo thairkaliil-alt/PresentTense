@@ -15,7 +15,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -82,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -98,6 +99,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -988,7 +990,7 @@ private fun QuickPickSection(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
             contentPadding        = PaddingValues(horizontal = 4.dp),
             modifier               = Modifier.fillMaxWidth()
         ) {
-            items(DURATION_PRESETS) { preset ->
+            items(DURATION_PRESETS, key = { it.minutes }) { preset ->
                 PresetChip(
                     preset   = preset,
                     selected = armedMinutes == preset.minutes,
@@ -1019,7 +1021,7 @@ private fun PresetChip(
             .clip(RoundedCornerShape(16.dp))
             .background(bgColor)
             .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .selectable(selected = selected, onClick = onClick, role = Role.RadioButton)
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Icon(preset.icon, contentDescription = null, tint = tierAccent, modifier = Modifier.size(16.dp))
@@ -1052,19 +1054,6 @@ private fun ActiveLockdownPanel(
 ) {
     val reducedMotion = LocalReducedMotion.current
 
-    // The moment THIS session actually began. LockdownCompletionRepository
-    // already tracks this — for both manual and scheduled sessions — purely
-    // to build the post-session celebration screen, so reading it here adds
-    // no new state to the app. Read once per panel instance (remember with
-    // no keys): a session's start time never changes for the life of this
-    // composable, since a NEW ActiveLockdownPanel instance is what appears
-    // whenever a genuinely new session starts (see EmbeddedLockdownLazyColumn,
-    // which swaps this in/out based on sessionRunning). Used only to turn a
-    // raw countdown into a real "how far through this session am I" ring —
-    // if it's ever unavailable, the ring below falls back to an honest
-    // indeterminate state instead of guessing.
-    val sessionStartedAtMillis = remember { LockdownCompletionRepository.currentSessionStartedAtMillis() }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = MaterialTheme.shapes.extraLarge,
@@ -1090,6 +1079,26 @@ private fun ActiveLockdownPanel(
             val targetMillis = if (decision.onBreak) decision.breakEndsAtMillis else decision.endsAtMillis
             val isFinite     = targetMillis in 1 until Long.MAX_VALUE
             val remainingSec = if (isFinite) ((targetMillis - now) / 1000L).coerceAtLeast(0) else 0L
+
+            // The moment THIS session actually began. LockdownCompletionRepository
+            // already tracks this — for both manual and scheduled sessions —
+            // purely to build the post-session celebration screen, so reading
+            // it here adds no new state to the app. Keyed on (endsAtMillis,
+            // onBreak) rather than remembered unconditionally: a bare
+            // remember{} would only be safe if a brand-new ActiveLockdownPanel
+            // instance always appeared for every new session, which is true
+            // when sessionRunning toggles off/on but NOT true for two
+            // back-to-back scheduled windows with no gap between them — there
+            // the same panel instance keeps living while the underlying
+            // session (and its real start time) changes underneath it. Keying
+            // on the target time re-reads the repository exactly when that
+            // happens. Used only to turn a raw countdown into a real "how far
+            // through this session am I" ring — if it's ever unavailable, the
+            // ring falls back to an honest indeterminate state instead of
+            // guessing.
+            val sessionStartedAtMillis = remember(targetMillis, decision.onBreak) {
+                LockdownCompletionRepository.currentSessionStartedAtMillis()
+            }
 
             // Real elapsed/total progress wherever both ends of the session
             // are actually known; null otherwise, which the ring below
@@ -1201,23 +1210,37 @@ private fun SessionProgressRing(
         label         = "session_progress_ring"
     )
 
-    val infiniteTransition = rememberInfiniteTransition(label = "ring_pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue  = 0.45f,
-        targetValue   = 1f,
-        animationSpec = infiniteRepeatable(
-            animation  = tween(durationMillis = if (reducedMotion) 1 else 1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "ring_pulse_alpha"
-    )
+    // Only spin up the infinite "ongoing" pulse when it's actually going to
+    // be drawn (progressFraction == null, i.e. an indefinite lockdown).
+    // Previously this ran unconditionally on every composition regardless
+    // of which branch below used it — meaning a perpetual, every-frame
+    // animation loop kept ticking for the entire duration of every ordinary
+    // *finite* session too, even though pulseAlpha was never once read in
+    // that case. Gating it behind the same condition that consumes it below
+    // means the common case (a finite lockdown) does zero continuous
+    // animation work here.
+    val pulseAlpha: Float = if (progressFraction == null) {
+        val infiniteTransition = rememberInfiniteTransition(label = "ring_pulse")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue  = 0.45f,
+            targetValue   = 1f,
+            animationSpec = infiniteRepeatable(
+                animation  = tween(durationMillis = if (reducedMotion) 1 else 1800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "ring_pulse_alpha"
+        )
+        alpha
+    } else {
+        1f // unused — progressFraction != null takes the other drawArc branch below
+    }
 
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(176.dp)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val strokeWidth = 10.dp.toPx()
             val diameter    = size.minDimension - strokeWidth
             val topLeft     = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
-            val arcSize     = androidx.compose.ui.geometry.Size(diameter, diameter)
+            val arcSize     = Size(diameter, diameter)
 
             // Background track — always visible, faint, the full circle.
             drawArc(
