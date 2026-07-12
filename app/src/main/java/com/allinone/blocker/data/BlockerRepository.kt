@@ -29,6 +29,12 @@ object BlockerRepository {
     private const val KEY_BREAK_SESSION_ANCHOR = "lockdown_break_session_anchor"
     private const val KEY_DAILY_GOAL_MINUTES = "daily_goal_minutes"
     private const val KEY_LOCKDOWN_HEARTBEAT_AT = "lockdown_heartbeat_at"
+    // See markScheduleOccurrenceCancelled/isScheduleOccurrenceCancelled — a
+    // set of "scheduleId<sep>startedAtMillis" strings for grace-period-cancelled
+    // scheduled occurrences (Option C). Deliberately separate from KEY_SCHEDULES:
+    // this never touches the LockdownSchedule list itself.
+    private const val KEY_CANCELLED_OCCURRENCES = "grace_cancelled_schedule_occurrences"
+    private const val OCCURRENCE_KEY_SEPARATOR = "::"
 
     private lateinit var prefs: SharedPreferences
     // Kept only so context-requiring checks (like the Active Plan auto-lock
@@ -299,6 +305,65 @@ object BlockerRepository {
     // deliberately limited (see breaksRemaining()/maxBreaksPerSession) — a
     // free, unlimited "end early" button would make Lockdown Mode no
     // stronger than just... not turning it on.
+    //
+    // clearManualLockForGraceCancel() below looks like it breaks that rule,
+    // but it doesn't: it's a narrow, time-boxed exception, only ever called
+    // by LockdownGracePeriod, and only while still inside the short grace
+    // window right after a session begins (see LockdownGracePeriod.GRACE_PERIOD_MS).
+    // The point of that window is undoing a mistake made BEFORE the session
+    // had any real effect — not an ongoing escape hatch — so once it closes
+    // this function is never reached again for that session, and every
+    // session that makes it past the grace window still always runs its
+    // course exactly as documented above.
+
+    /**
+     * The ONE place a manual session ever gets set back to 0 before it would
+     * naturally end. See the comment directly above for why this doesn't
+     * weaken the "no endManualLock()" rule — this is deliberately NOT a
+     * general-purpose end-early function, and nothing outside
+     * [LockdownGracePeriod] should ever call it.
+     */
+    fun clearManualLockForGraceCancel() {
+        _manualLockUntil.value = 0L
+        prefs.edit().putLong(KEY_MANUAL_LOCK_UNTIL, 0L).apply()
+    }
+
+    /**
+     * True if the schedule occurrence identified by [scheduleId] + the exact
+     * moment it started ([startedAtMillis]) was cancelled during its grace
+     * period (see [LockdownGracePeriod] / [markScheduleOccurrenceCancelled]).
+     * [LockdownEngine.evaluate] checks this before treating a matching
+     * window as active, so a cancelled occurrence is skipped — but only that
+     * ONE occurrence; the schedule itself is untouched and still fires
+     * normally at its next scheduled time (e.g. the following day).
+     */
+    fun isScheduleOccurrenceCancelled(scheduleId: String, startedAtMillis: Long): Boolean {
+        if (!::prefs.isInitialized) return false
+        return prefs.getStringSet(KEY_CANCELLED_OCCURRENCES, emptySet())
+            ?.contains(occurrenceKey(scheduleId, startedAtMillis)) == true
+    }
+
+    /**
+     * Marks one specific occurrence of a recurring schedule as cancelled —
+     * see [isScheduleOccurrenceCancelled]. Only ever called from
+     * [LockdownGracePeriod]'s cancel path, during that occurrence's short
+     * grace window. Prunes entries old enough that [LockdownEngine.evaluate]
+     * could never match them again anyway, so this set doesn't grow forever.
+     */
+    fun markScheduleOccurrenceCancelled(scheduleId: String, startedAtMillis: Long) {
+        if (!::prefs.isInitialized) return
+        val current = (prefs.getStringSet(KEY_CANCELLED_OCCURRENCES, emptySet()) ?: emptySet()).toMutableSet()
+        current.add(occurrenceKey(scheduleId, startedAtMillis))
+        val cutoffMillis = startedAtMillis - 2 * 24 * 60 * 60_000L
+        val pruned = current.filter { entry ->
+            val ts = entry.substringAfterLast(OCCURRENCE_KEY_SEPARATOR).toLongOrNull()
+            ts == null || ts >= cutoffMillis
+        }.toSet()
+        prefs.edit().putStringSet(KEY_CANCELLED_OCCURRENCES, pruned).apply()
+    }
+
+    private fun occurrenceKey(scheduleId: String, startedAtMillis: Long) =
+        "$scheduleId$OCCURRENCE_KEY_SEPARATOR$startedAtMillis"
 
     // Break settings are now read from StrictModeConfig so the user can
     // configure them from the Strict Mode settings screen.
