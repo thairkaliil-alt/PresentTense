@@ -122,7 +122,9 @@ import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.rememberHaptics
+import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentPurple
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -151,11 +153,38 @@ import kotlin.math.sin
 // closer to how Headspace/Calm/Opal present session-length choices as
 // distinct *intents* rather than raw numbers.
 
+// Three duration "tiers" — short focus sessions, day-length sessions, and
+// multi-day commitments — each with its own accent color pulled from the
+// app's existing Accent* tokens rather than a new palette:
+//   • AccentPurple is already documented in Theme.kt as "calm, deep work,
+//     focus" — a direct match for short focus sessions.
+//   • AccentAmber is already documented as "streaks, screen-time warnings" —
+//     fits the "this is a bigger commitment" feel of multi-day lockdowns.
+//   • AccentBlue (the app's general "primary interactive" color) covers the
+//     middle, day-length tier.
+// tierForMinutes() is the single source of truth for the boundaries, used
+// both by each preset (via DurationPreset.tier below) and by the live wheel
+// readout in [PickDurationCard], so a custom wheel value always gets the
+// same color a preset in that same range would.
+private enum class DurationTier(val accent: Color) {
+    FOCUS(AccentPurple),
+    EXTENDED(AccentBlue),
+    MULTI_DAY(AccentAmber)
+}
+
+private fun tierForMinutes(minutes: Int): DurationTier = when {
+    minutes <= 100        -> DurationTier.FOCUS     // covers Quick Focus, Deep Work, Study Block
+    minutes <= 24 * 60     -> DurationTier.EXTENDED   // covers Half Day, Overnight, Full Day
+    else                    -> DurationTier.MULTI_DAY  // Weekend, Full Week, and beyond
+}
+
 private data class DurationPreset(
     val label  : String,
     val minutes: Int,
     val icon   : androidx.compose.ui.graphics.vector.ImageVector
-)
+) {
+    val tier: DurationTier get() = tierForMinutes(minutes)
+}
 
 private val DURATION_PRESETS = listOf(
     DurationPreset("Quick Focus",  15,    Icons.Filled.Timer),
@@ -855,12 +884,16 @@ private fun PickDurationCard(
             // now, whether the wheel or a Quick Pick tap set it last.
             // Sized down from displaySmall/Bold to headlineMedium/SemiBold —
             // still the most prominent text in this card, but no longer
-            // competing with the orb's own visual weight above it.
+            // competing with the orb's own visual weight above it. Its color
+            // now reflects armedMinutes' duration tier (same Focus/Extended/
+            // Multi-day coloring as the preset cards below), using the same
+            // tierForMinutes() so a hand-dialed wheel value gets exactly the
+            // color a preset in that same range would.
             Text(
                 formatDuration(armedMinutes),
                 style      = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
-                color      = TextPrimary
+                color      = tierForMinutes(armedMinutes).accent
             )
             Spacer(Modifier.height(22.dp))
 
@@ -1003,9 +1036,18 @@ private fun PresetCard(
     onClick : () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bgColor     = if (selected) AccentBlue.copy(alpha = 0.14f) else CardSurface
-    val borderColor = if (selected) AccentBlue else TextMuted.copy(alpha = 0.14f)
-    val iconTint    = if (selected) AccentBlue else TextSecondary
+    // The tier accent — not just AccentBlue anymore — is what actually gives
+    // each of the 8 presets a distinct look at a glance, per the design
+    // review's "no color differentiation" note. It's used for the icon and
+    // icon-chip whether or not the card is selected, so someone scanning the
+    // grid can tell "short focus" cards from "multi-day" cards immediately.
+    // Selection is still communicated the same way as before — a filled
+    // background and a solid (rather than faint) border — just using that
+    // preset's own tier color instead of one fixed blue for every card.
+    val tierAccent  = preset.tier.accent
+    val bgColor     = if (selected) tierAccent.copy(alpha = 0.14f) else CardSurface
+    val borderColor = if (selected) tierAccent else tierAccent.copy(alpha = 0.30f)
+    val iconTint    = tierAccent
 
     Column(
         modifier = modifier
@@ -1032,7 +1074,7 @@ private fun PresetCard(
             Text(
                 formatDuration(preset.minutes),
                 style = MaterialTheme.typography.labelMedium,
-                color = if (selected) AccentBlue else TextMuted
+                color = if (selected) tierAccent else TextMuted
             )
         }
     }
