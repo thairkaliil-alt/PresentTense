@@ -30,6 +30,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -375,6 +376,37 @@ private fun LockdownLauncherScreen(
         }
     }
 
+    // Peak-End Rule: the final stretch of a KNOWN-duration session gets a
+    // warmer visual treatment, so the ending is memorable in a good way
+    // rather than just... stopping. Only possible when there's a total
+    // duration to measure "final stretch" against in the first place — same
+    // "known start AND known end" requirement as sessionProgress above, so
+    // an indefinite manual lock never has an ending to make warm (there's
+    // nothing to be "almost done" with).
+    //
+    // The window itself is 5% of the session's total length, clamped to
+    // 15s–2min: short enough that a 10-minute session doesn't spend a third
+    // of itself "almost done", long enough that even a 5-minute session
+    // gets a few visible seconds of it.
+    val isAlmostDone = remember(target, sessionStartedAtMillis, now) {
+        val startedAt = sessionStartedAtMillis
+        if (target in 1 until Long.MAX_VALUE && startedAt != null && target > startedAt) {
+            val totalMs = target - startedAt
+            val windowMs = (totalMs / 20).coerceIn(15_000L, 120_000L)
+            (target - now) in 0..windowMs
+        } else {
+            false
+        }
+    }
+
+    // Both the ring and the ambient glow read from this one value, so the
+    // "warming up" cue is consistent across the whole screen rather than
+    // just one element changing. AccentAmber rather than a new color —
+    // same "reuse the existing tokens" rule as everywhere else on this
+    // screen. Each composable below already smooths color changes with its
+    // own animateColorAsState, so this doesn't need its own cross-fade here.
+    val displayMoodColor = if (isAlmostDone) AccentAmber else moodColor
+
     // THE fix for "nothing happens when the countdown hits zero": this
     // screen is, by design, the only thing the user can see for the entire
     // duration of a session — they never leave it, so the Activity is never
@@ -402,7 +434,7 @@ private fun LockdownLauncherScreen(
         // Depth layer: a slow, subtle wash of color behind the focus ring —
         // drawn first so everything else sits on top of it. See AmbientGlow's
         // header comment for the design intent.
-        AmbientGlow(color = moodColor)
+        AmbientGlow(color = displayMoodColor)
 
         Column(
             modifier = Modifier
@@ -412,7 +444,7 @@ private fun LockdownLauncherScreen(
         ) {
             Spacer(Modifier.height(72.dp))
 
-            LockdownFocusRing(progress = sessionProgress)
+            LockdownFocusRing(progress = sessionProgress, color = displayMoodColor)
             Spacer(Modifier.height(24.dp))
 
             // Countdown / status — generous size, minimal chrome. The digits
@@ -508,7 +540,7 @@ private fun LockdownLauncherScreen(
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
                     items(apps, key = { it.packageName }) { app ->
-                        LauncherAppIcon(app = app, onClick = { onLaunchApp(app.packageName) })
+                        LauncherAppIcon(app = app, moodColor = moodColor, onClick = { onLaunchApp(app.packageName) })
                     }
                 }
             }
@@ -547,24 +579,37 @@ private fun LockdownLauncherScreen(
  * own once it's turned on (see the pinningEnabled check in
  * LockdownLauncherScreen), and can be dismissed for this session if the
  * user doesn't want the extra hardening.
+ *
+ * Styled with a tinted icon chip + matching border instead of a flat
+ * white-alpha box, so it reads as part of this screen's considered look
+ * rather than a bolted-on system dialog.
  */
 @Composable
 private fun ScreenPinningNudgeCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.05f))
+            .clip(RoundedCornerShape(18.dp))
+            .background(AccentTeal.copy(alpha = 0.07f))
+            .border(1.dp, AccentTeal.copy(alpha = 0.16f), RoundedCornerShape(18.dp))
             .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Filled.Lock,
-                contentDescription = null,
-                tint = AccentTeal,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(AccentTeal.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = null,
+                    tint = AccentTeal,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(Modifier.width(10.dp))
             Text(
                 "Turn on Screen Pinning",
                 style = MaterialTheme.typography.labelLarge,
@@ -606,8 +651,16 @@ private fun ScreenPinningNudgeCard(onOpenSettings: () -> Unit, onDismiss: () -> 
     }
 }
 
+/**
+ * One tile in the whitelist grid. This is the one "permission-giving"
+ * positive moment on the whole screen — everything else here is either
+ * neutral status or a restriction — so it gets a soft tint of the screen's
+ * mood color (same [moodColor] the ambient glow and ring use) instead of a
+ * flat, anonymous translucent square, tying it visually to "this is allowed,
+ * on purpose" rather than looking like every other locked-out surface.
+ */
 @Composable
-private fun LauncherAppIcon(app: LauncherApp, onClick: () -> Unit) {
+private fun LauncherAppIcon(app: LauncherApp, moodColor: Color, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .pressable(pressedScale = MotionTokens.PressScaleSmall, onClick = onClick)
@@ -618,7 +671,12 @@ private fun LauncherAppIcon(app: LauncherApp, onClick: () -> Unit) {
             modifier = Modifier
                 .size(56.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .background(Color.White.copy(alpha = 0.04f)),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(moodColor.copy(alpha = 0.14f), moodColor.copy(alpha = 0.05f))
+                    )
+                )
+                .border(1.dp, moodColor.copy(alpha = 0.18f), RoundedCornerShape(18.dp)),
             contentAlignment = Alignment.Center
         ) {
             AppIconOrLetter(packageName = app.packageName, label = app.label)
@@ -761,16 +819,25 @@ private fun AmbientGlow(color: Color) {
  *     NOT a literal progress ring here, because the app genuinely doesn't
  *     know a total duration to measure against — faking one would be
  *     exactly the misleading indicator Calm Technology practice warns
- *     against.
+ *     against. Paired with a single barely-there haptic pulse once per
+ *     breath cycle — reinforcing the same "still alive, still holding"
+ *     idea through touch, not just sight. Only for this mode: a session
+ *     with a real progress arc already has an unambiguous, purely visual
+ *     "still going" signal, so doubling it with a repeating haptic there
+ *     would just be noise.
  *   - [progress] in 0f..1f (any session with a known start AND a known end —
  *     a fixed-length schedule, or a manual lock with a set duration): a
  *     real, honest elapsed/total arc. This is intentionally a DIFFERENT
  *     visual — a filling arc, not a pulse — so it's never confused with the
  *     ambient "alive" cue above; it's making an actual claim about how much
  *     of the session is left, so it only ever appears when that claim is true.
+ *
+ * [color] is the same mood color driving [AmbientGlow] (see that composable's
+ * header comment) — cross-fades over ~1.2s on change, same as the glow, so
+ * the ring and the ambient wash always agree with each other.
  */
 @Composable
-private fun LockdownFocusRing(progress: Float? = null) {
+private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue) {
     val infinite = rememberInfiniteTransition(label = "focusBreath")
     val breath by infinite.animateFloat(
         initialValue = 0.4f,
@@ -782,6 +849,12 @@ private fun LockdownFocusRing(progress: Float? = null) {
         label = "breathAlpha"
     )
 
+    val animatedColor by animateColorAsState(
+        targetValue = color,
+        animationSpec = tween(1_200),
+        label = "ringColor"
+    )
+
     // Smooths the once-a-second jump from the caller's tick into a gentle
     // glide, rather than the arc visibly snapping forward every second.
     val animatedProgress by animateFloatAsState(
@@ -789,6 +862,21 @@ private fun LockdownFocusRing(progress: Float? = null) {
         animationSpec = tween(durationMillis = 900, easing = LinearEasing),
         label = "lockdownProgress"
     )
+
+    // The breathing haptic — see the header comment above for why this is
+    // scoped to indefinite locks only. Fires once per full breath cycle
+    // (the ring's tween is 3.2s out, 3.2s back — a 6.4s round trip), timed
+    // to the moment the ring is fullest, matching what's on screen.
+    if (progress == null) {
+        val haptics = rememberHaptics()
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(3_200L)
+                haptics.breathPulse()
+                delay(3_200L)
+            }
+        }
+    }
 
     Box(modifier = Modifier.size(88.dp), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -804,7 +892,7 @@ private fun LockdownFocusRing(progress: Float? = null) {
                 val strokeWidthPx = 3.dp.toPx()
                 val inset = strokeWidthPx / 2f
                 drawArc(
-                    color = AccentBlue.copy(alpha = 0.9f),
+                    color = animatedColor.copy(alpha = 0.9f),
                     startAngle = -90f,
                     sweepAngle = 360f * animatedProgress,
                     useCenter = false,
@@ -815,7 +903,7 @@ private fun LockdownFocusRing(progress: Float? = null) {
             } else {
                 // breathing inner ring — the "alive" cue, for indefinite locks
                 drawCircle(
-                    color = AccentBlue.copy(alpha = 0.4f * breath),
+                    color = animatedColor.copy(alpha = 0.4f * breath),
                     radius = size.minDimension / 2f - 10.dp.toPx(),
                     style = Stroke(width = 1.2.dp.toPx())
                 )
