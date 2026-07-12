@@ -124,7 +124,9 @@ object LockdownCompletionRepository {
         val plannedEndAtMillis: Long,
         val plannedMinutes: Int,
         val sessionKind: SessionKind,
-        val reasonLabel: String
+        val reasonLabel: String,
+        /** The [LockdownSchedule.id] this occurrence came from, or null for a MANUAL session. Lets the grace-period cancel (see [LockdownGracePeriod]) know exactly which schedule's occurrence to suppress, without recomputing which schedule "must have" produced this marker. */
+        val scheduleId: String? = null
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("startedAtMillis", startedAtMillis)
@@ -132,6 +134,7 @@ object LockdownCompletionRepository {
             put("plannedMinutes", plannedMinutes)
             put("sessionKind", sessionKind.name)
             put("reasonLabel", reasonLabel)
+            put("scheduleId", scheduleId ?: JSONObject.NULL)
         }
 
         companion object {
@@ -141,10 +144,37 @@ object LockdownCompletionRepository {
                 plannedMinutes = o.optInt("plannedMinutes", 0),
                 sessionKind = runCatching { SessionKind.valueOf(o.getString("sessionKind")) }
                     .getOrDefault(SessionKind.MANUAL),
-                reasonLabel = o.optString("reasonLabel", "Lockdown")
+                reasonLabel = o.optString("reasonLabel", "Lockdown"),
+                scheduleId = if (o.isNull("scheduleId")) null else o.optString("scheduleId", null)
             )
         }
     }
+
+    /**
+     * Read-only snapshot of whatever [OngoingSessionMarker] is currently
+     * persisted — the one intentional crack in [loadOngoingMarker]'s privacy,
+     * added for [LockdownGracePeriod]'s cancel UI so it can read exactly
+     * when the live session started (and, for a scheduled one, which
+     * schedule it came from) without duplicating this persisted state
+     * anywhere else. Every other consumer should keep going through
+     * [markManualSessionStarted] / [maybeMarkScheduledSessionStarted] /
+     * [recordCompletionIfNeeded] instead of reaching in here.
+     */
+    data class OngoingSessionSnapshot(
+        val startedAtMillis: Long,
+        val sessionKind: SessionKind,
+        val scheduleId: String?
+    )
+
+    /** See [OngoingSessionSnapshot]. Null if no session is currently being tracked. */
+    fun currentOngoingSession(): OngoingSessionSnapshot? {
+        if (!initialized) return null
+        val m = loadOngoingMarker() ?: return null
+        return OngoingSessionSnapshot(m.startedAtMillis, m.sessionKind, m.scheduleId)
+    }
+
+    /** Convenience accessor for just the start time of whatever session is currently being tracked — see [currentOngoingSession]. */
+    fun currentSessionStartedAtMillis(): Long? = currentOngoingSession()?.startedAtMillis
 
     private lateinit var prefs: SharedPreferences
     @Volatile private var initialized = false
@@ -212,7 +242,7 @@ object LockdownCompletionRepository {
      * schedule count each day's occurrence as its own completed session instead of one
      * continuous blob.
      */
-    fun maybeMarkScheduledSessionStarted(startedAtMillis: Long, plannedEndAtMillis: Long, label: String) {
+    fun maybeMarkScheduledSessionStarted(startedAtMillis: Long, plannedEndAtMillis: Long, label: String, scheduleId: String) {
         if (!initialized) return
         val current = loadOngoingMarker()
         if (current != null && current.sessionKind == SessionKind.SCHEDULED && current.plannedEndAtMillis == plannedEndAtMillis) {
@@ -226,7 +256,8 @@ object LockdownCompletionRepository {
                 plannedEndAtMillis = plannedEndAtMillis,
                 plannedMinutes = plannedMinutes,
                 sessionKind = SessionKind.SCHEDULED,
-                reasonLabel = label.ifBlank { "Scheduled lockdown" }
+                reasonLabel = label.ifBlank { "Scheduled lockdown" },
+                scheduleId = scheduleId
             )
         )
     }
@@ -287,6 +318,24 @@ object LockdownCompletionRepository {
         }
 
         closeOutMarker(marker, endedAtMillis = nowMillis)
+    }
+
+    /**
+     * Clears the ongoing-session marker WITHOUT ever recording a completion —
+     * used only by [LockdownGracePeriod]'s cancel path, for a session being
+     * treated as if it never meaningfully started at all (see that file's
+     * header comment): no [CompletedSession] record, no lifetime-stat bump,
+     * no celebration. [startedAtMillis] must match the marker currently
+     * tracked — the same keyed-by-start-time guard [recordCompletionIfNeeded]
+     * and [closeOutStaleMarkerIfReplaced] already use — so a slow or delayed
+     * call can never wipe out a DIFFERENT, already-real session that has
+     * since taken its place.
+     */
+    fun discardOngoingSession(startedAtMillis: Long) {
+        if (!initialized) return
+        val marker = loadOngoingMarker() ?: return
+        if (marker.startedAtMillis != startedAtMillis) return
+        clearOngoingMarker()
     }
 
     private fun closeOutMarker(marker: OngoingSessionMarker, endedAtMillis: Long) {
