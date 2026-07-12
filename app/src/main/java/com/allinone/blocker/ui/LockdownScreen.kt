@@ -113,6 +113,7 @@ import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGracePeriod
 import com.allinone.blocker.data.LockdownSchedule
 import com.allinone.blocker.data.StrictModeGate
+import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
@@ -795,7 +796,18 @@ private fun LockdownHeroSection(
         modifier              = Modifier.fillMaxWidth(),
         horizontalAlignment   = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+        // Read-only momentum cue — the idle screen used to be 100% "configure
+        // the next session" with nothing showing where the person already
+        // stands. StreakRepository.streak already exists and is exactly this
+        // (it's what StreaksScreen's own flame reads), so this just surfaces
+        // it here too rather than tracking anything new. Deliberately small
+        // and quiet — a chip above the orb, not a card — so it reads as
+        // context, not a second thing competing with the orb for attention.
+        val streak by StreakRepository.streak.collectAsState()
+        StreakIndicator(streak = streak)
+        Spacer(Modifier.height(18.dp))
+
         LiquidGlassOrb(
             // The orb only ever fires from a hold gesture — see
             // [LiquidGlassOrb] below. Dragging the dial or tapping a
@@ -825,6 +837,34 @@ private fun LockdownHeroSection(
         PickDurationCard(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
         Spacer(Modifier.height(14.dp))
         QuickPickSection(armedMinutes = armedMinutes, onSelectPreset = onSelectPreset)
+    }
+}
+
+// ── Streak indicator — small, read-only momentum chip ───────────────────
+// Deliberately just a chip, not a card: this is context for the screen
+// below it, not a competing focal point. Reuses AppFlame (the same custom
+// flame used on the dedicated Streaks screen) instead of a generic system
+// icon, so the streak reads as the same concept wherever it shows up in the
+// app. streak == 0 shows a soft "start today" nudge rather than "0-day
+// streak", which would read as a small failure notice on a screen whose
+// whole point is to help someone start a session.
+@Composable
+private fun StreakIndicator(streak: Int) {
+    Row(
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(CardSurface.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        AppFlame(modifier = Modifier.size(16.dp), desaturated = streak == 0)
+        Text(
+            if (streak > 0) "$streak-day streak" else "Start your streak today",
+            style      = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color      = if (streak > 0) TextSecondary else TextMuted
+        )
     }
 }
 
