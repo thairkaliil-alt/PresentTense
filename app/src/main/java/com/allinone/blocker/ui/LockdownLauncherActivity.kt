@@ -65,6 +65,7 @@ import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
+import com.allinone.blocker.data.LockdownGracePeriod
 import com.allinone.blocker.ui.motion.MotionTokens
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
@@ -265,6 +266,14 @@ private fun LockdownLauncherScreen(
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
     }
 
+    // Option C: a short, no-friction window right at the start of a session
+    // to undo a mistake before it's had any real effect — see
+    // LockdownGracePeriod's header comment. Recomputed on the same 1-second
+    // ticker as everything else on this screen so the countdown moves and
+    // the banner disappears on its own the instant the window closes.
+    val graceRemainingMs = remember(now) { LockdownGracePeriod.remainingMs(now) }
+    val showGraceCancel = graceRemainingMs > 0L && !decision.onBreak
+
     // THE fix for "nothing happens when the countdown hits zero": this
     // screen is, by design, the only thing the user can see for the entire
     // duration of a session — they never leave it, so the Activity is never
@@ -323,6 +332,16 @@ private fun LockdownLauncherScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Light,
                     color = TextPrimary
+                )
+            }
+
+            if (showGraceCancel) {
+                Spacer(Modifier.height(20.dp))
+                GraceCancelBanner(
+                    remainingMs = graceRemainingMs,
+                    onCancel = {
+                        if (LockdownGracePeriod.cancelCurrentSession(now)) onExitToApp()
+                    }
                 )
             }
 
@@ -515,6 +534,43 @@ private fun LockdownFocusRing() {
             contentDescription = null,
             tint = TextPrimary.copy(alpha = 0.85f),
             modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+/**
+ * Option C's cancel affordance: a plain, clearly visible "Cancel lockdown"
+ * pill shown only for the first [LockdownGracePeriod.GRACE_PERIOD_MS] of a
+ * session, with a small live countdown so it's obvious this option is
+ * temporary. Deliberately the opposite of [EmergencyBreakControl] below —
+ * no reveal-then-hold friction — because a grace-period cancel isn't the
+ * "only if you really need it" escape valve, it's undoing a mistake made
+ * before the session had any real effect. Calm and matter-of-fact, not
+ * gamified, per the tone the rest of this app's completion/celebration
+ * surfaces already keep (see the header comment on LockdownCompletionRepository.kt).
+ */
+@Composable
+private fun GraceCancelBanner(remainingMs: Long, onCancel: () -> Unit) {
+    val remainingSec = (remainingMs / 1000L).coerceAtLeast(0L)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .pressable(pressedScale = MotionTokens.PressScaleSmall, onClick = onCancel)
+            .padding(horizontal = 18.dp, vertical = 10.dp)
+    ) {
+        Text(
+            "Cancel lockdown",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = TextPrimary.copy(alpha = 0.85f)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "${remainingSec}s left",
+            style = MaterialTheme.typography.labelMedium,
+            color = TextMuted
         )
     }
 }
