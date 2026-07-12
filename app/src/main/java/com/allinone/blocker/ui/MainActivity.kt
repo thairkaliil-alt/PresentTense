@@ -445,7 +445,16 @@ Screen.STRICT_ALARM_EDIT -> StrictAlarmEditScreen(
             }
         ) { innerPadding ->
             // Cross-fade between root tabs so switching tabs feels designed, not cut.
-            com.allinone.blocker.ui.motion.ScreenSwitch(targetState = screen) { current ->
+            // innerPadding reserves space for the bottom tab bar below — without
+            // applying it here, every root screen (Lockdown included) draws its
+            // full height underneath the tab bar, which is what was making the
+            // bottom of the Lockdown screen (and the Quick Pick drawer inside it)
+            // visually covered and unreachable by scrolling no matter how much
+            // padding that screen adds internally.
+            com.allinone.blocker.ui.motion.ScreenSwitch(
+                targetState = screen,
+                modifier    = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
+            ) { current ->
             when (current) {
                 Screen.HOME -> HomeScreen(
                     refreshKey            = refreshKey,
