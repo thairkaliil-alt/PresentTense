@@ -100,11 +100,24 @@ internal object LockdownReflections {
         return lines[index]
     }
 
-    /** Cheap 64-bit integer hash (splitmix64) — just needs to scatter, not to be cryptographic. */
+    /**
+     * Cheap 64-bit integer hash (splitmix64) — just needs to scatter, not to
+     * be cryptographic.
+     *
+     * These three numbers are the standard splitmix64 constants
+     * (0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9, 0x94D049BB133111EB),
+     * written as decimal Long literals of their two's-complement bit
+     * pattern rather than as hex. Two of the three have their top bit set,
+     * so their UNSIGNED magnitude exceeds Long.MAX_VALUE — Kotlin (unlike
+     * Java) rejects a hex literal like 0xBF58476D1CE4E5B9L outright for
+     * that reason, before any leading minus sign even gets applied. Writing
+     * the already-negative decimal value directly sidesteps that entirely
+     * and is exactly the bit pattern the algorithm calls for.
+     */
     private fun mix(input: Long): Long {
-        var z = input + -0x61c8864680b583ebL
-        z = (z xor (z ushr 30)) * -0xbf58476d1ce4e5b9L
-        z = (z xor (z ushr 27)) * -0x94d049bb133111ebL
+        var z = input + -7046029254386353131L  // 0x9E3779B97F4A7C15's negation, i.e. + the golden-ratio constant under wraparound
+        z = (z xor (z ushr 30)) * -4658895280553007687L  // 0xBF58476D1CE4E5B9
+        z = (z xor (z ushr 27)) * -7723592293110705685L  // 0x94D049BB133111EB
         return z xor (z ushr 31)
     }
 }
