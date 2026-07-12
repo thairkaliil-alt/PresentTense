@@ -88,6 +88,14 @@ class Haptics internal constructor(
     fun lockIn() = pulse(durationMs = 10L, amplitude = 60)
 
     /**
+     * Same barely-there feel again, this time repeated once per cycle of
+     * the lockdown screen's breathing focus ring (indefinite locks only —
+     * see LockdownFocusRing's header comment) — a touch echo of the visual
+     * "still alive, still holding" pulse, not a distinct alert of its own.
+     */
+    fun breathPulse() = pulse(durationMs = 8L, amplitude = 35)
+
+    /**
      * Stronger "you did it" pulse — a quick two-beat pattern instead of a
      * single buzz, so it reads as a distinct, bigger moment than the light
      * ticks above. Used for finishing a Strict Mode challenge and for
