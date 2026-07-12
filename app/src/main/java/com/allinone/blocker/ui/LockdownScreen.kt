@@ -2,19 +2,13 @@ package com.allinone.blocker.ui
 
 import android.app.Activity
 import android.content.ContextWrapper
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -40,6 +34,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -49,7 +45,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
@@ -921,159 +916,78 @@ private fun PickDurationCard(
     }
 }
 
-// ── Quick Pick — collapsed-by-default shortcut drawer ───────────────────
-// Deliberately built to read as LOWER in the visual hierarchy than the card
-// above it, not just placed after it: a flat tinted surface instead of an
-// elevated Card, a small label instead of a titleMedium headline, and
-// closed on first render. That's on purpose — this is a shortcut for
-// people who already know "Deep Work" means 50 minutes to them, not a
-// second decision meant to compete with the wheel above for attention.
-//
-// The header still surfaces the current pick ("Deep Work · 50m") whenever
-// armedMinutes happens to match a named preset, even while collapsed — so
-// closing this drawer only ever hides the *grid of options*, never the
-// *information* about what's currently armed (Nielsen's "visibility of
-// system status" heuristic). Tapping a preset inside auto-collapses the
-// drawer again, since its job is done the moment a choice is made.
+// ── Quick Pick — one-tap horizontal scroll row ───────────────────────────
+// Used to be a collapsed drawer you had to tap open before it revealed a
+// 2-column, 8-item grid — which meant "Quick Pick" actually took two taps
+// and a scan-and-compare step to use, undermining its own name (per the
+// design review). All 8 presets are now visible immediately, laid out in a
+// single horizontally-scrolling row instead of a tall grid, so there's
+// nothing to expand and nothing to compare against a hidden set of options
+// — you just scroll sideways and tap. Whichever preset currently matches
+// armedMinutes is highlighted directly on its chip (via PresetChip's
+// `selected` styling), which is a more direct way of satisfying the old
+// "show what's currently picked" requirement than a separate summary label
+// ever was — the selected chip IS the summary now.
 @Composable
 private fun QuickPickSection(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = MotionSpecs.standard(),
-        label       = "quick_pick_chevron"
-    )
-    val matchedPreset = remember(armedMinutes) { DURATION_PRESETS.firstOrNull { it.minutes == armedMinutes } }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(CardSurface.copy(alpha = 0.55f))
-            .clickable { expanded = !expanded }
-    ) {
-        Row(
-            modifier          = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Quick Pick",
+            style      = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color      = TextSecondary,
+            modifier   = Modifier.padding(start = 4.dp, bottom = 10.dp)
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding        = PaddingValues(horizontal = 4.dp),
+            modifier               = Modifier.fillMaxWidth()
         ) {
-            Box(
-                modifier         = Modifier.size(28.dp).clip(CircleShape).background(TextMuted.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Timer, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Quick Pick", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = TextSecondary)
-                Text(
-                    text  = matchedPreset?.let { "${it.label} · ${formatDuration(it.minutes)}" } ?: "Named presets for common sessions",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted
-                )
-            }
-            Icon(
-                imageVector        = Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) "Collapse quick pick" else "Expand quick pick",
-                tint               = TextMuted,
-                modifier           = Modifier.size(20.dp).graphicsLayer { rotationZ = chevronRotation }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = expanded,
-            enter   = expandVertically(animationSpec = MotionSpecs.enter()) + fadeIn(animationSpec = MotionSpecs.enter()),
-            exit    = shrinkVertically(animationSpec = MotionSpecs.exit()) + fadeOut(animationSpec = MotionSpecs.exit())
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
-                    .padding(bottom = 18.dp, top = 2.dp)
-            ) {
-                PresetGrid(
-                    armedMinutes   = armedMinutes,
-                    onSelectPreset = { minutes -> onSelectPreset(minutes); expanded = false }
+            items(DURATION_PRESETS) { preset ->
+                PresetChip(
+                    preset   = preset,
+                    selected = armedMinutes == preset.minutes,
+                    onClick  = { onSelectPreset(preset.minutes) }
                 )
             }
         }
     }
 }
 
-// ── Quick presets grid ───────────────────────────────────────────────────
-// Two columns of named, intent-based cards rather than a single row of
-// terse "15m / 25m / 50m" pills — closer to how Headspace/Calm/Opal present
-// session lengths as distinct *choices* (Quick Focus vs. Overnight vs.
-// Weekend) rather than raw numbers competing for the same handful of
-// pixels. Icons give each card a recognizable silhouette at a glance, which
-// matters more here than it did for the old pill row now that the range
-// spans minutes through a full week.
+// A single scrollable-row chip — icon + label + duration, colored by the
+// preset's tier (see [DurationTier]) so the "which kind of session is this"
+// read survives the move out of the old bigger 2-column cards.
 @Composable
-private fun PresetGrid(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        DURATION_PRESETS.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                row.forEach { preset ->
-                    PresetCard(
-                        preset   = preset,
-                        selected = armedMinutes == preset.minutes,
-                        onClick  = { onSelectPreset(preset.minutes) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                // Odd final row: pad with an invisible spacer so the last
-                // card stays the same width as its siblings instead of
-                // stretching to fill the row on its own.
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun PresetCard(
+private fun PresetChip(
     preset  : DurationPreset,
     selected: Boolean,
-    onClick : () -> Unit,
-    modifier: Modifier = Modifier
+    onClick : () -> Unit
 ) {
-    // The tier accent — not just AccentBlue anymore — is what actually gives
-    // each of the 8 presets a distinct look at a glance, per the design
-    // review's "no color differentiation" note. It's used for the icon and
-    // icon-chip whether or not the card is selected, so someone scanning the
-    // grid can tell "short focus" cards from "multi-day" cards immediately.
-    // Selection is still communicated the same way as before — a filled
-    // background and a solid (rather than faint) border — just using that
-    // preset's own tier color instead of one fixed blue for every card.
     val tierAccent  = preset.tier.accent
-    val bgColor     = if (selected) tierAccent.copy(alpha = 0.14f) else CardSurface
-    val borderColor = if (selected) tierAccent else tierAccent.copy(alpha = 0.30f)
-    val iconTint    = tierAccent
+    val bgColor     = if (selected) tierAccent.copy(alpha = 0.16f) else CardSurface.copy(alpha = 0.6f)
+    val borderColor = if (selected) tierAccent else tierAccent.copy(alpha = 0.28f)
 
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
+    Row(
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
             .background(bgColor)
-            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(18.dp))
+            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        Box(
-            modifier         = Modifier.size(30.dp).clip(CircleShape).background(iconTint.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(preset.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
-        }
+        Icon(preset.icon, contentDescription = null, tint = tierAccent, modifier = Modifier.size(16.dp))
         Column {
             Text(
                 preset.label,
-                style      = MaterialTheme.typography.labelLarge,
+                style      = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color      = if (selected) TextPrimary else TextSecondary
             )
             Text(
                 formatDuration(preset.minutes),
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 color = if (selected) tierAccent else TextMuted
             )
         }
