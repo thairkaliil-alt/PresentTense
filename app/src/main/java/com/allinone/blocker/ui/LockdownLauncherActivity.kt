@@ -691,9 +691,10 @@ private fun LockdownEntryRitual(play: Boolean) {
     )
 }
 
-
+/**
+ * A slow, soft wash of color behind the focus ring — the screen's answer to
+ * the "flat background, no depth" note in the visual-depth backlog item.
  *
- * Deliberately restrained on every axis that could make it read as flashy
  * rather than ambient:
  *   - Low peak alpha (never above ~0.2) — a hint of color, not a spotlight.
  *   - Slow breathing (9s) and an even slower horizontal drift (14s), both
@@ -747,7 +748,10 @@ private fun AmbientGlow(color: Color) {
     }
 }
 
-
+/**
+ * The breathing/progress ring drawn around the countdown during an active
+ * lockdown session.
+ *
  * TWO MODES, chosen by [progress]:
  *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
  *     session, or the brief window before the session tracker has recorded a
