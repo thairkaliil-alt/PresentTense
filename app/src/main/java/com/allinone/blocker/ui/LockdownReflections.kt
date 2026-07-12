@@ -1,6 +1,15 @@
 package com.allinone.blocker.ui
 
 /**
+ * The coarse "why" category a lockdown reason falls into. Shared by
+ * [LockdownReflections] (which line to show) and, per the visual-depth
+ * backlog item, the ambient glow color in [LockdownLauncherActivity] — one
+ * keyword match feeding both, so the copy and the color mood can never
+ * drift out of sync with each other.
+ */
+internal enum class LockdownMood { SLEEP, FAMILY, FOCUS, GENERIC }
+
+/**
  * The quiet, rotating reflective line shown under the countdown on the
  * active lockdown screen (see [LockdownLauncherActivity]). This is the
  * screen's one line of "why", not just "how long" — see the UX-audit
@@ -63,14 +72,22 @@ internal object LockdownReflections {
         "Being unreachable is allowed."
     )
 
-    private fun linesFor(reason: String): List<String> {
+    /** The mood category [reason] falls into — see [LockdownMood]. */
+    fun moodFor(reason: String): LockdownMood {
         val r = reason.lowercase()
         return when {
-            sleepKeywords.any { r.contains(it) } -> sleepLines
-            familyKeywords.any { r.contains(it) } -> familyLines
-            focusKeywords.any { r.contains(it) } -> focusLines
-            else -> genericLines
+            sleepKeywords.any { r.contains(it) } -> LockdownMood.SLEEP
+            familyKeywords.any { r.contains(it) } -> LockdownMood.FAMILY
+            focusKeywords.any { r.contains(it) } -> LockdownMood.FOCUS
+            else -> LockdownMood.GENERIC
         }
+    }
+
+    private fun linesFor(reason: String): List<String> = when (moodFor(reason)) {
+        LockdownMood.SLEEP -> sleepLines
+        LockdownMood.FAMILY -> familyLines
+        LockdownMood.FOCUS -> focusLines
+        LockdownMood.GENERIC -> genericLines
     }
 
     /**
