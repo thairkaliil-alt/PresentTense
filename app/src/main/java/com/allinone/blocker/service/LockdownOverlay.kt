@@ -208,13 +208,28 @@ object LockdownOverlay {
             // paint under the status/nav bar areas so the lockdown surface reads
             // as one uninterrupted screen. The window is left focusable (no
             // FLAG_NOT_FOCUSABLE) so the BACK swallow above actually receives keys.
+            //
+            // FLAG_HARDWARE_ACCELERATED — THE FIX FOR THE LAGGY WHITELIST GRID:
+            // windows added directly via WindowManager.addView() (as this one is)
+            // do NOT inherit hardware acceleration the way a normal Activity window
+            // does. android:hardwareAccelerated="true" in the manifest only covers
+            // windows that belong to an Activity/Dialog; a raw overlay window like
+            // this one silently falls back to software (CPU) rendering unless this
+            // flag is set explicitly. Software rendering is fine for a static block
+            // screen, but this window hosts a scrolling grid of app icons plus
+            // continuously-animated gradients/rings (AmbientGlow, LockdownFocusRing)
+            // — exactly the kind of content that's dramatically slower on the CPU,
+            // which is what was showing up as severe scroll lag. This flag moves
+            // the whole window onto the GPU, matching how every other (Activity-
+            // based) screen in the app already renders.
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 type,
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS,
+                    WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS or
+                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.OPAQUE
             )
             // On Android 11+ the legacy LAYOUT_IN_SCREEN/NO_LIMITS flags above
