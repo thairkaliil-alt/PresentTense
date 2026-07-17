@@ -12,7 +12,6 @@ import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.ScreenTimeTracker
 import com.allinone.blocker.data.UrlExtractor
 import com.allinone.blocker.ui.InstalledApps
-import com.allinone.blocker.ui.LockdownLauncherActivity
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -144,6 +143,13 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         activeRoot?.recycle()
         if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
             corralToLockdownLauncher(activePkg)
+        } else if (activePkg != null && activePkg != packageName) {
+            // An allowed app (whitelisted / always-exempt) is genuinely in the
+            // foreground — the lockdown overlay must not sit on top of it.
+            // With the old Activity-based screen the permitted app naturally
+            // covered it; an overlay window covers EVERYTHING, so it has to be
+            // dismissed explicitly. No-op when it's already hidden.
+            LockdownOverlay.hide()
         }
         return true
     }
@@ -167,6 +173,10 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             activeRoot?.recycle()
             if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
                 corralToLockdownLauncher(activePkg)
+            } else if (activePkg != null && activePkg != packageName) {
+                // Same as in tickLockdownGuard: an allowed app owns the screen,
+                // so the overlay must come down off it.
+                LockdownOverlay.hide()
             }
             return
         }
@@ -174,8 +184,10 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         val className = event.className?.toString() ?: ""
 
-        // Our own activities: MainActivity is exempt from the generic lockdown
-        // branch below, so corral it explicitly; LockdownLauncherActivity stays.
+        // Our own windows: MainActivity is exempt from the generic lockdown
+        // branch below, so corral it explicitly; the LockdownOverlay window
+        // (which also reports our package) is left alone via the isShowing
+        // check inside shouldCorralDuringLockdown.
         if (pkg == packageName) {
             if (className.contains("MainActivity")) {
                 overlay.hide()
@@ -246,6 +258,13 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (shouldCorralDuringLockdown(pkg, className)) {
             corralToLockdownLauncher(pkg)
             return
+        }
+
+        // Reaching here during an active lockdown means [pkg] is allowed
+        // (whitelisted / always-exempt) — make sure the lockdown overlay
+        // isn't sitting on top of it. No-op when already hidden.
+        if (LockdownOverlay.isShowing && isLockdownActive()) {
+            LockdownOverlay.hide()
         }
 
         if (pkg in UrlExtractor.BROWSER_PACKAGES) {
@@ -390,7 +409,14 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (!isLockdownActive()) return false
 
         if (pkg == packageName) {
-            return className?.contains("LockdownLauncherActivity") != true
+            // Our own windows: the lockdown screen is now the LockdownOverlay
+            // window (not an Activity with a recognizable class name), so
+            // "showing" is the signal that the user is already corralled.
+            // While it's up, everything of ours is covered by it — corralling
+            // would just be a no-op show() plus a bogus blocked-attempt stat
+            // every 3s guard tick. When it's NOT up (e.g. MainActivity in the
+            // foreground mid-session), corral as before.
+            return !LockdownOverlay.isShowing
         }
 
         if (pkg.contains("systemui", ignoreCase = true)) return true
@@ -428,7 +454,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, blockedPkg) }
         overlay.hide()
         lastOverlayShouldShow = false
-        LockdownLauncherActivity.launch(this)
+        LockdownOverlay.show(this)
     }
 
     override fun onInterrupt() {}

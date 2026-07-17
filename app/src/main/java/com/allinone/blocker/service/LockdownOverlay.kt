@@ -69,6 +69,20 @@ object LockdownOverlay {
     /** The single live overlay window, or null when nothing is shown. */
     private var host: Host? = null
 
+    /**
+     * While a whitelisted app is being launched from the lockdown screen,
+     * [show] is suppressed until this deadline. Launching an app isn't
+     * instant: the overlay comes down first, and for a beat the thing
+     * visible (and reported to the accessibility service) is whatever was
+     * underneath — usually the real home screen. Without this window the
+     * corral sees that, "recovers" by re-showing the overlay, and the
+     * overlay lands on top of the very app the user was just allowed to
+     * open — the "whitelisted apps still get blocked" bug.
+     */
+    @Volatile
+    private var suppressShowUntilMillis = 0L
+    private const val LAUNCH_GRACE_MS = 3_000L
+
     val isShowing: Boolean get() = host != null
 
     /**
@@ -81,6 +95,7 @@ object LockdownOverlay {
         val appContext = context.applicationContext
         runOnMain {
             if (host != null) return@runOnMain
+            if (System.currentTimeMillis() < suppressShowUntilMillis) return@runOnMain
             if (!Settings.canDrawOverlays(appContext)) return@runOnMain
             if (!BlockerRepository.isInitialized) BlockerRepository.init(appContext)
             if (!LockdownCompletionRepository.isInitialized) {
@@ -202,6 +217,18 @@ object LockdownOverlay {
                     WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS,
                 PixelFormat.OPAQUE
             )
+            // On Android 11+ the legacy LAYOUT_IN_SCREEN/NO_LIMITS flags above
+            // are ignored and windows fit the system-bar insets by default —
+            // which left the status/nav-bar strips uncovered, with the home
+            // screen visible through them around the lockdown surface.
+            // fitInsetsTypes = 0 is the modern way to say "cover everything".
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                params.fitInsetsTypes = 0
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                params.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
 
             runCatching { windowManager.addView(rootView, params) }
                 .onSuccess { lifecycleRegistry.currentState = Lifecycle.State.RESUMED }
@@ -218,7 +245,10 @@ object LockdownOverlay {
             val intent = context.packageManager.getLaunchIntentForPackage(pkg) ?: return
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             // Yield the screen to the permitted app: the overlay must come down
-            // or it would cover the very app the user just chose to open.
+            // or it would cover the very app the user just chose to open. The
+            // grace stamp keeps the corral from re-showing the overlay while
+            // the launch transition briefly exposes the home screen underneath.
+            suppressShowUntilMillis = System.currentTimeMillis() + LAUNCH_GRACE_MS
             hide()
             runCatching { context.startActivity(intent) }
         }
