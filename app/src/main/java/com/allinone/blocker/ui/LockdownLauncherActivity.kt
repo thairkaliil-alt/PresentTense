@@ -1,14 +1,11 @@
 package com.allinone.blocker.ui
 
-import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Telephony
 import android.telecom.TelecomManager
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
-import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -79,9 +76,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
-import com.allinone.blocker.data.LockdownDecision
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGracePeriod
+import com.allinone.blocker.service.LockdownOverlay
 import com.allinone.blocker.ui.motion.AnimatedAppearance
 import com.allinone.blocker.ui.motion.LocalReducedMotion
 import com.allinone.blocker.ui.motion.MotionDurations
@@ -94,37 +91,32 @@ import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
-import com.allinone.blocker.ui.theme.BlockerTheme
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.delay
 
 /**
- * The full-phone lockdown "home screen". While a lockdown is active this is the
- * only screen the user can reach: a black launcher showing the whitelisted apps
- * as a grid. Tapping one launches it normally; pressing back does nothing; and
- * the AccessibilityService bounces the user straight back here the moment they
- * try to open anything that isn't whitelisted.
+ * The full-phone lockdown "home screen" — a black launcher showing the
+ * whitelisted apps as a grid. Tapping one launches it normally; pressing back
+ * does nothing; and the [AppBlockerAccessibilityService] bounces the user
+ * straight back here the moment they try to open anything that isn't
+ * whitelisted. Together they turn the device into a single inescapable screen —
+ * the Digital-Detox effect — without needing Device Owner / ADB.
  *
- * Together with [AppBlockerAccessibilityService] this turns the device into a
- * single inescapable screen — the Digital-Detox effect — without needing
- * Device Owner / ADB.
+ * WHERE THE SCREEN ACTUALLY LIVES: the visible UI ([LockdownLauncherScreen]) is
+ * no longer hosted by this Activity. It's drawn by [LockdownOverlay] as a
+ * system overlay WINDOW that stays painted on top even when Home is pressed —
+ * which is what removed the old "press Home and the screen rolls away for a
+ * split second" flash. An Activity is a task the OS can switch away from before
+ * we can react; an overlay window is not, so there's no switch to flash past.
+ * The earlier Screen Pinning (Activity.startLockTask()) approach was dropped:
+ * it couldn't even run here (this Activity is excludeFromRecents + a HOME
+ * launcher, which Android refuses to pin) and required a manual system toggle.
  *
- * SCREEN PINNING: while this screen is on top of a live lockdown, the
- * activity also pins itself using Android's built-in Screen Pinning
- * (Activity.startLockTask()). This is the same feature behind "pin this
- * app" in the Recents screen, and it disables the Home and Recents
- * buttons at the OS level — not by reacting after the fact, but by making
- * them inert while pinned. That's what closes the "press Home and the
- * screen rolls away for a split second" gap: there's nothing left for the
- * accessibility service to react to, because Home never gets a chance to
- * switch away in the first place. Pinning is released the instant the
- * user taps a whitelisted app (see [launchApp]) or the session legitimately
- * ends (see [exitToApp]), so it never traps the user inside a permitted app.
- *
- * When no lockdown is active this activity is harmless: it immediately hands
- * off to [MainActivity], so it can safely be registered as a HOME launcher.
+ * This Activity now only survives as the HOME-intent fallback registered in the
+ * manifest: if it's ever launched it makes sure the overlay is up for a live
+ * session and immediately hands off to [MainActivity].
  */
 class LockdownLauncherActivity : ComponentActivity() {
 
@@ -133,128 +125,38 @@ class LockdownLauncherActivity : ComponentActivity() {
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
         if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
 
-        // Edge-to-edge, immersive: hide the status & nav bars so the lockdown
-        // screen reads as one uninterrupted surface. Swiping reveals them only
-        // transiently — they can't be used to escape because the accessibility
-        // service bounces any non-whitelisted app straight back here.
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior =
-                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // The lockdown screen itself is no longer an Activity — it's a system
+        // overlay window (see [LockdownOverlay]) that stays on top even when
+        // Home is pressed, which is what removes the old "it goes away and
+        // comes back" flash. This Activity now only exists as the HOME-intent
+        // fallback registered in the manifest: if it's ever launched (e.g. the
+        // user pressed Home and Present Tense happens to be their default home
+        // app), make sure the overlay is up when a session is live, then get
+        // out of the way to the normal app underneath.
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        if (decision.active || decision.onBreak) {
+            LockdownOverlay.show(this)
         }
 
-        // Swallow back — there is no "leaving" the lockdown screen.
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { /* intentionally nothing */ }
-        })
-
-        setContent {
-            BlockerTheme(darkTheme = true) {
-                LockdownLauncherScreen(
-                    onLaunchApp = ::launchApp,
-                    onExitToApp = ::exitToApp,
-                    onSessionComplete = ::handleSessionComplete
-                )
-            }
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // If lockdown ended while we were backgrounded, don't trap the user here.
-        val decision = currentLockdownDecision()
-        if (!decision.active) {
-            if (decision.onBreak) exitToApp() else handleSessionComplete()
-            return
-        }
-        // Re-pin every time this screen comes back to the front — including
-        // the very first time, and every time the watchdog/accessibility
-        // service relaunches it after corralling the user back here.
-        armScreenPinning()
-    }
-
-    /**
-     * The session is truly over (not just paused for a break) — record the
-     * completion (a safe no-op if the watchdog/accessibility loop already
-     * beat us to it) and hand off. Called from two places: [onResume], for
-     * the case where this screen was backgrounded when the session ended,
-     * and the [LaunchedEffect] inside [LockdownLauncherScreen], for the far
-     * more common case where the user was sitting on this exact screen —
-     * unable to leave by design — when the countdown reached zero. Without
-     * that second path this screen has no way to notice its own timer
-     * running out while it's the one thing on screen: `onResume()` only
-     * fires again if the Activity was paused and resumed, which never
-     * happens if the user just waits it out.
-     */
-    private fun handleSessionComplete() {
-        LockdownCompletionRepository.recordCompletionIfNeeded()
-        exitToApp()
-    }
-
-    private fun currentLockdownDecision(): LockdownDecision = LockdownEngine.evaluate(
-        manualLockUntil = BlockerRepository.manualLockUntil.value,
-        schedules = BlockerRepository.schedules.value
-    )
-
-    private fun launchApp(pkg: String) {
-        // Release the pin before handing off — otherwise the whitelisted app
-        // would inherit a Home/Recents-disabled state it never asked for.
-        disarmScreenPinning()
-        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { startActivity(intent) }
-    }
-
-    private fun exitToApp() {
-        disarmScreenPinning()
-        val intent = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        runCatching { startActivity(intent) }
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        )
         finish()
     }
 
-    /** True if this screen (or any screen) is currently pinned via Screen Pinning. */
-    private fun isScreenPinningActive(): Boolean {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
-        return am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
-    }
-
-    /**
-     * Pins the lockdown screen so Home/Recents stop responding at the OS
-     * level. Safe to call repeatedly — does nothing if already pinned.
-     *
-     * BUGFIX: this used to call startLockTask() unconditionally, every
-     * single time this screen resumed (which happens a lot — every time the
-     * accessibility service bounces the user back here). Without Device
-     * Owner, startLockTask() only actually works if the user has turned on
-     * Android's own "Screen pinning" setting first — if they haven't,
-     * every one of those calls silently failed and Android showed its own
-     * confusing system message about it not being supported, over and
-     * over. Now we check first, only attempt it when it can actually
-     * succeed, and surface a clear one-time in-app explanation instead
-     * (see the "Turn on Screen Pinning" card in LockdownLauncherScreen)
-     * rather than letting the OS repeat itself at the user.
-     */
-    private fun armScreenPinning() {
-        if (isScreenPinningActive()) return
-        if (!Permissions.hasScreenPinningEnabled(this)) return
-        runCatching { startLockTask() }
-    }
-
-    /** Un-pins the screen. Safe to call repeatedly — does nothing if not pinned. */
-    private fun disarmScreenPinning() {
-        if (!isScreenPinningActive()) return
-        runCatching { stopLockTask() }
-    }
-
     companion object {
-        /** Brings the lockdown launcher to the front (used when a session starts
-         *  and by the accessibility service when corralling the user). */
+        /**
+         * Brings the lockdown screen up. Kept as the single entrypoint every
+         * caller already uses (accessibility corral, watchdog, MainActivity,
+         * LockdownScreen) — it now raises the overlay window rather than
+         * starting this Activity, so none of those call sites had to change.
+         */
         fun launch(context: Context) {
-            val intent = Intent(context, LockdownLauncherActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { context.startActivity(intent) }
+            LockdownOverlay.show(context)
         }
     }
 }
@@ -263,7 +165,7 @@ class LockdownLauncherActivity : ComponentActivity() {
 private data class LauncherApp(val packageName: String, val label: String)
 
 @Composable
-private fun LockdownLauncherScreen(
+internal fun LockdownLauncherScreen(
     onLaunchApp: (String) -> Unit,
     onExitToApp: () -> Unit,
     onSessionComplete: () -> Unit
@@ -276,13 +178,6 @@ private fun LockdownLauncherScreen(
 
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedTicker { now = it }
-
-    // BUGFIX: replaces the repeated, unexplained "screen pinning isn't
-    // supported" system toast with a single clear in-app card. Re-checked
-    // every time this screen ticks so the card disappears on its own the
-    // moment the user actually turns the setting on and comes back.
-    var pinningDismissed by remember { mutableStateOf(false) }
-    val pinningEnabled = remember(now) { Permissions.hasScreenPinningEnabled(context) }
 
     val decision = remember(manualUntil, schedules, breakUntil, now) {
         LockdownEngine.evaluate(manualUntil, schedules, now, breakUntil)
@@ -515,14 +410,6 @@ private fun LockdownLauncherScreen(
 
             Spacer(Modifier.height(56.dp))
 
-            if (!pinningEnabled && !pinningDismissed) {
-                ScreenPinningNudgeCard(
-                    onOpenSettings = { Permissions.openScreenPinningSettings(context) },
-                    onDismiss = { pinningDismissed = true }
-                )
-                Spacer(Modifier.height(24.dp))
-            }
-
             if (apps.isEmpty()) {
                 Text(
                     "No apps whitelisted.\nPhone and Messages still work.",
@@ -569,85 +456,6 @@ private fun LockdownLauncherScreen(
         // so it's on top of everything else, fading away to reveal a screen
         // that's already fully in place underneath it.
         LockdownEntryRitual(play = isGenuineSessionStart)
-    }
-}
-
-/**
- * BUGFIX: replaces Android's own repeated, confusing "screen pinning isn't
- * supported" system toast with a single clear explanation the user can
- * actually act on. Shown only while the setting is off; disappears on its
- * own once it's turned on (see the pinningEnabled check in
- * LockdownLauncherScreen), and can be dismissed for this session if the
- * user doesn't want the extra hardening.
- *
- * Styled with a tinted icon chip + matching border instead of a flat
- * white-alpha box, so it reads as part of this screen's considered look
- * rather than a bolted-on system dialog.
- */
-@Composable
-private fun ScreenPinningNudgeCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(AccentTeal.copy(alpha = 0.07f))
-            .border(1.dp, AccentTeal.copy(alpha = 0.16f), RoundedCornerShape(18.dp))
-            .padding(16.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(AccentTeal.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.Lock,
-                    contentDescription = null,
-                    tint = AccentTeal,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(
-                "Turn on Screen Pinning",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "For the tightest lockdown, turn on Android's Screen Pinning once, under " +
-                "Settings > Security. Blocking still works without it — this just closes a " +
-                "brief flash that can happen when leaving the Home screen.",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextTertiary
-        )
-        Spacer(Modifier.height(12.dp))
-        Row {
-            Text(
-                "Open Settings",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = AccentBlue,
-                modifier = Modifier.pressable(
-                    pressedScale = MotionTokens.PressScaleSmall,
-                    onClick = onOpenSettings
-                )
-            )
-            Spacer(Modifier.width(20.dp))
-            Text(
-                "Dismiss",
-                style = MaterialTheme.typography.labelMedium,
-                color = TextMuted,
-                modifier = Modifier.pressable(
-                    pressedScale = MotionTokens.PressScaleSmall,
-                    onClick = onDismiss
-                )
-            )
-        }
     }
 }
 
