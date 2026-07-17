@@ -3,7 +3,9 @@ package com.allinone.blocker.service
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
@@ -161,6 +163,12 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) return
+
+        // BUGFIX ("typing in a whitelisted app bounces back to the lockdown
+        // screen"): see isInputMethodWindowEvent's doc below. Must run before
+        // anything else touches `event.packageName`, since that's exactly
+        // the field this bug was caused by.
+        if (isInputMethodWindowEvent(event, event.packageName?.toString())) return
 
         // Some devices only signal Home/recents via WINDOWS_CHANGED, with no
         // follow-up WINDOW_STATE_CHANGED for the launcher — check the active
@@ -465,6 +473,45 @@ class AppBlockerAccessibilityService : AccessibilityService() {
                 .also { thirdPartyHomeLaunchers = it }
         }
         return pkg in launchers
+    }
+
+    /**
+     * True if [event] belongs to the on-screen keyboard's own window
+     * (Gboard, SwiftKey, or any other IME) rather than a real switch to a
+     * different app.
+     *
+     * BUGFIX ("typing inside a whitelisted app bounces back to the
+     * lockdown screen"): the keyboard is a separate window that Android
+     * layers on top of whichever app is focused underneath. Opening it
+     * fires its own WINDOW_STATE_CHANGED event carrying the KEYBOARD's
+     * own package name (for Gboard: "com.google.android.inputmethod.latin")
+     * instead of the app's — which used to be read as "the user switched
+     * to an unlisted app" and corralled them straight back to the lockdown
+     * screen, even though the whitelisted app never actually left the
+     * foreground. Voice-to-text never opens this window, which is exactly
+     * why only typing triggered it.
+     *
+     * Checked two independent ways, since either alone can miss on some
+     * OEM builds:
+     * 1) Android itself tags the window TYPE_INPUT_METHOD — only a
+     *    package the user has explicitly enabled as a keyboard under
+     *    Settings > Language & input can create one, so this can't be
+     *    spoofed by an ordinary app trying to dodge a block.
+     * 2) [pkg] matches the system's currently-selected default keyboard.
+     */
+    private fun isInputMethodWindowEvent(event: AccessibilityEvent, pkg: String?): Boolean {
+        val byWindowType = runCatching {
+            val id = event.windowId
+            id != -1 && windows?.any { it.id == id && it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD } == true
+        }.getOrDefault(false)
+        if (byWindowType) return true
+
+        if (pkg == null) return false
+        val defaultImePkg = runCatching {
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                ?.substringBefore('/')
+        }.getOrNull()
+        return defaultImePkg != null && pkg == defaultImePkg
     }
 
     private fun corralToLockdownLauncher(blockedPkg: String) {
