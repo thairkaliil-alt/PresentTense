@@ -154,9 +154,15 @@ object LockdownOverlay {
             savedStateController.performRestore(null)
             lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
-            composeView.setViewTreeLifecycleOwner(this)
-            composeView.setViewTreeViewModelStoreOwner(this)
-            composeView.setViewTreeSavedStateRegistryOwner(this)
+            // The owners MUST be set on the view handed to WindowManager
+            // (rootView), not on the ComposeView inside it: Compose's window
+            // recomposer resolves ViewTreeLifecycleOwner from the WINDOW ROOT
+            // view, and children find the owners by walking up the tree.
+            // Setting them only on the child ComposeView crashes with
+            // "ViewTreeLifecycleOwner not found" the moment the window attaches.
+            rootView.setViewTreeLifecycleOwner(this)
+            rootView.setViewTreeViewModelStoreOwner(this)
+            rootView.setViewTreeSavedStateRegistryOwner(this)
 
             rootView.isFocusableInTouchMode = true
             rootView.addView(
