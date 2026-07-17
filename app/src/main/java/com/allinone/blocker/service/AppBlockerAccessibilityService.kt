@@ -202,9 +202,26 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
         // Home/recents are reported as System UI on most devices — never skip
         // these during lockdown or the user can escape via the Home button.
+        //
+        // BUT: System UI also produces a constant background hum of events
+        // that say nothing about where the user actually is — the status-bar
+        // clock ticking over each minute, battery/signal icons redrawing,
+        // heads-up notifications sliding in over whatever app is open. This
+        // used to corral on ALL of them, which is the "whitelisted app
+        // bounces back to the lockdown screen after a while" bug: the user
+        // sits safely inside an allowed app until some status-bar repaint
+        // fires, and gets yanked out for it. So instead of trusting the
+        // event's package, ask what actually OWNS the screen right now and
+        // only corral if THAT shouldn't be there (recents open, a launcher,
+        // the shade) — never because a passive System UI surface repainted.
         if (pkg.contains("systemui", ignoreCase = true)) {
-            if (shouldCorralDuringLockdown(pkg, className)) {
-                corralToLockdownLauncher(pkg)
+            if (!isLockdownActive()) return
+            val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
+            val activePkg = activeRoot?.packageName?.toString()
+            val activeClass = activeRoot?.className?.toString()
+            activeRoot?.recycle()
+            if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
+                corralToLockdownLauncher(activePkg)
             }
             return
         }
