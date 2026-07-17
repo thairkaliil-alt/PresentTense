@@ -10,6 +10,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -123,9 +124,13 @@ object LockdownOverlay {
         private val windowManager =
             context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-        // Swallow BACK — there is no "leaving" the lockdown screen, same as the
-        // old Activity's onBackPressed callback did.
-        private val composeView = object : ComposeView(context) {
+        private val composeView = ComposeView(context)
+
+        // The window's root view. ComposeView is final and can't be subclassed,
+        // so the BACK-swallow lives here on the FrameLayout that hosts it —
+        // there is no "leaving" the lockdown screen, same as the old Activity's
+        // onBackPressed callback did.
+        private val rootView = object : FrameLayout(context) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) return true
                 return super.dispatchKeyEvent(event)
@@ -139,7 +144,15 @@ object LockdownOverlay {
             composeView.setViewTreeLifecycleOwner(this)
             composeView.setViewTreeViewModelStoreOwner(this)
             composeView.setViewTreeSavedStateRegistryOwner(this)
-            composeView.isFocusableInTouchMode = true
+
+            rootView.isFocusableInTouchMode = true
+            rootView.addView(
+                composeView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
 
             composeView.setContent {
                 BlockerTheme(darkTheme = true) {
@@ -171,14 +184,14 @@ object LockdownOverlay {
                 PixelFormat.OPAQUE
             )
 
-            runCatching { windowManager.addView(composeView, params) }
+            runCatching { windowManager.addView(rootView, params) }
                 .onSuccess { lifecycleRegistry.currentState = Lifecycle.State.RESUMED }
                 .onFailure { lifecycleRegistry.currentState = Lifecycle.State.DESTROYED }
         }
 
         fun detach() {
             lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
-            runCatching { windowManager.removeView(composeView) }
+            runCatching { windowManager.removeView(rootView) }
             store.clear()
         }
 
