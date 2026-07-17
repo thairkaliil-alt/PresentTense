@@ -86,7 +86,16 @@ object LockdownOverlay {
             if (!LockdownCompletionRepository.isInitialized) {
                 LockdownCompletionRepository.init(appContext)
             }
-            host = Host(appContext).also { it.attach() }
+            // Never let a failure to bring the overlay up crash the process: a
+            // crash here, while a lockdown session stays active, would re-fire
+            // on every relaunch and permanently brick the app. Fall back to the
+            // accessibility corral (which will just try show() again) instead.
+            runCatching { Host(appContext).also { it.attach() } }
+                .onSuccess { host = it }
+                .onFailure {
+                    android.util.Log.e("LockdownOverlay", "Failed to show lockdown overlay", it)
+                    host = null
+                }
         }
     }
 
@@ -138,6 +147,10 @@ object LockdownOverlay {
         }
 
         fun attach() {
+            // performAttach() MUST precede performRestore() on savedstate 1.2.0+
+            // (performRestore throws otherwise). Both must run while the
+            // lifecycle is still INITIALIZED, before we advance it below.
+            savedStateController.performAttach()
             savedStateController.performRestore(null)
             lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
