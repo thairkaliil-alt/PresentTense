@@ -518,8 +518,23 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, blockedPkg) }
         overlay.hide()
         lastOverlayShouldShow = false
-        LockdownOverlay.show(this)
+        LockdownOverlay.show(this, blockedPkg, isHomeOrSystemSurface(blockedPkg))
     }
+
+    /**
+     * True for the transient system surfaces — the home launcher, or System
+     * UI (status bar / quick settings / recents) — that legitimately flash
+     * into view for a moment while a whitelisted app is still cold-starting
+     * after being launched from the lockdown screen. These are the ONLY
+     * surfaces [LockdownOverlay]'s post-launch grace window is allowed to
+     * wave through (see its isWithinLaunchGrace doc). A real app — our own
+     * MainActivity included — is never one of these, so tapping one always
+     * ends the grace immediately instead of quietly riding out whatever
+     * time is left on someone else's window. See BUGFIX note on
+     * LockdownOverlay.isWithinLaunchGrace for the bypass this closes.
+     */
+    private fun isHomeOrSystemSurface(pkg: String): Boolean =
+        pkg.contains("systemui", ignoreCase = true) || isThirdPartyHomeLauncher(pkg)
 
     override fun onInterrupt() {}
 
