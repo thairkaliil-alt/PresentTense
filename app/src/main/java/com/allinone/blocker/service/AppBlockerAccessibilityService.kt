@@ -151,7 +151,10 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             // With the old Activity-based screen the permitted app naturally
             // covered it; an overlay window covers EVERYTHING, so it has to be
             // dismissed explicitly. No-op when it's already hidden.
-            LockdownOverlay.hide()
+            // Passing activePkg here also ends the post-launch grace the
+            // instant this app is confirmed up — see LockdownOverlay.hide's
+            // BUGFIX doc for why that matters.
+            LockdownOverlay.hide(confirmedForegroundPackage = activePkg)
         }
         return true
     }
@@ -183,8 +186,10 @@ class AppBlockerAccessibilityService : AccessibilityService() {
                 corralToLockdownLauncher(activePkg)
             } else if (activePkg != null && activePkg != packageName) {
                 // Same as in tickLockdownGuard: an allowed app owns the screen,
-                // so the overlay must come down off it.
-                LockdownOverlay.hide()
+                // so the overlay must come down off it — and this confirms it,
+                // ending the post-launch grace right away (see
+                // LockdownOverlay.hide's BUGFIX doc).
+                LockdownOverlay.hide(confirmedForegroundPackage = activePkg)
             }
             return
         }
@@ -287,7 +292,12 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
         // Reaching here during an active lockdown means [pkg] is allowed
         // (whitelisted / always-exempt) — make sure the lockdown overlay
-        // isn't sitting on top of it. No-op when already hidden.
+        // isn't sitting on top of it. No-op when already hidden. This is
+        // also the most common point where a just-launched whitelisted app
+        // is first confirmed on screen, so it always reports pkg to end the
+        // post-launch grace immediately (not just when the overlay happens
+        // to still be showing) — see LockdownOverlay.hide's BUGFIX doc.
+        LockdownOverlay.confirmForeground(pkg)
         if (LockdownOverlay.isShowing && isLockdownActive()) {
             LockdownOverlay.hide()
         }
