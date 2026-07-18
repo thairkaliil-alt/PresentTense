@@ -170,8 +170,51 @@ object LockdownOverlay {
         return isHomeOrSystemSurface
     }
 
-    /** Tears the overlay down. Safe to call from any thread and when nothing is shown. */
-    fun hide() {
+    /**
+     * BUGFIX (lockdown bypass: "press Home right after opening a whitelisted
+     * app and the lockdown screen never comes back"): [isWithinLaunchGrace]
+     * waves through the home launcher / System UI for the *entire*
+     * [LAUNCH_GRACE_MS] window, no matter what, because it can't tell a
+     * brief cold-start flash (legitimate — the previous app underneath is
+     * visible for a beat while the new one loads) apart from the user
+     * genuinely pressing Home once the whitelisted app is already up and
+     * running (not legitimate — that's a real "I'm leaving" signal). Both
+     * look exactly the same to that function: the home launcher is in front
+     * and the grace clock hasn't run out.
+     *
+     * The fix: the ONE moment we can be certain the transition is over is
+     * when the whitelisted app itself is confirmed genuinely on screen —
+     * i.e. the accessibility service actually saw it there, not just
+     * inferred it. The instant that happens, call this to end the grace
+     * right then instead of letting it run for the rest of its 3 seconds.
+     * From that point on, the home launcher reappearing can only mean the
+     * user actually left, so it's corralled immediately like anything else
+     * — instead of getting a multi-second free pass to sit on the real home
+     * screen (and, functionally, open whatever was tapped next) every
+     * single time.
+     *
+     * No-ops if [pkg] isn't the package the grace is currently vouching for.
+     */
+    fun confirmForeground(pkg: String) {
+        if (pkg == suppressShowForPackage) {
+            suppressShowUntilMillis = 0L
+            suppressShowForPackage = null
+        }
+    }
+
+    /**
+     * Tears the overlay down. Safe to call from any thread and when nothing
+     * is shown.
+     *
+     * @param confirmedForegroundPackage Same idea as [confirmForeground] —
+     *   pass the package the caller has just confirmed is genuinely in the
+     *   foreground, when it knows one, so hiding the overlay for it also
+     *   ends the launch grace for it in the same breath. Leave null when the
+     *   caller isn't hiding the overlay because of a specific confirmed app
+     *   (e.g. the user tapped exit, or a session ended).
+     */
+    fun hide(confirmedForegroundPackage: String? = null) {
+        if (confirmedForegroundPackage != null) confirmForeground(confirmedForegroundPackage)
         runOnMain {
             host?.detach()
             host = null
