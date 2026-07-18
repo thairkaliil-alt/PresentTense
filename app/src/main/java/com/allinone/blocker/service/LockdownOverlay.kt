@@ -81,6 +81,14 @@ object LockdownOverlay {
      */
     @Volatile
     private var suppressShowUntilMillis = 0L
+
+    /**
+     * The one package [suppressShowUntilMillis] is actually vouching for —
+     * i.e. the whitelisted app someone just tapped from the lockdown
+     * screen. See [isWithinLaunchGrace] for why this matters.
+     */
+    @Volatile
+    private var suppressShowForPackage: String? = null
     private const val LAUNCH_GRACE_MS = 3_000L
 
     val isShowing: Boolean get() = host != null
@@ -90,12 +98,23 @@ object LockdownOverlay {
      * often as you like — it hops to the main thread (WindowManager requires
      * it) and no-ops if the overlay is already showing or the app lacks the
      * "draw over other apps" permission.
+     *
+     * @param foregroundPackage The package the caller has actually confirmed
+     *   is in front right now, if it knows — used to decide whether the
+     *   post-whitelisted-launch grace window still applies (see
+     *   [isWithinLaunchGrace]). Leave null when the caller has no way to
+     *   know what's currently in front (e.g. the watchdog alarm, or the
+     *   HOME-intent fallback); the grace window never applies to those.
+     * @param isHomeOrSystemSurface Whether [foregroundPackage] is a
+     *   transient system surface (home launcher, status bar/recents) rather
+     *   than a real app someone opened. Only relevant together with
+     *   [foregroundPackage] — see [isWithinLaunchGrace].
      */
-    fun show(context: Context) {
+    fun show(context: Context, foregroundPackage: String? = null, isHomeOrSystemSurface: Boolean = false) {
         val appContext = context.applicationContext
         runOnMain {
             if (host != null) return@runOnMain
-            if (System.currentTimeMillis() < suppressShowUntilMillis) return@runOnMain
+            if (isWithinLaunchGrace(foregroundPackage, isHomeOrSystemSurface)) return@runOnMain
             if (!Settings.canDrawOverlays(appContext)) return@runOnMain
             if (!BlockerRepository.isInitialized) BlockerRepository.init(appContext)
             if (!LockdownCompletionRepository.isInitialized) {
@@ -112,6 +131,43 @@ object LockdownOverlay {
                     host = null
                 }
         }
+    }
+
+    /**
+     * BUGFIX (lockdown bypass): the launch grace used to be a blanket "don't
+     * show the overlay for 3 seconds, no matter what," armed the instant a
+     * whitelisted app was tapped from the lockdown screen — and it didn't
+     * care what actually showed up in front during those 3 seconds. That
+     * meant: tap a whitelisted app, immediately press Home (the grace waves
+     * the home screen through — see below), then within the same window
+     * open Present Tense's own MainActivity, or a completely different
+     * blocked app directly — and the lockdown screen would simply never
+     * come back to stop it, because every re-show attempt during those 3
+     * seconds was unconditionally swallowed.
+     *
+     * Fix: the grace now only rides for the ONE specific package it was
+     * armed for ([suppressShowForPackage]) — or a transient system surface
+     * ([isHomeOrSystemSurface]: the home launcher, status bar, recents)
+     * that's structurally guaranteed to flash up for a moment while that
+     * one app is still cold-starting. The instant anything else takes the
+     * foreground — our own app's UI, or any other real app — the grace
+     * ends right there even if time is still left on the clock, and the
+     * very next corral attempt shows the overlay for real. A slow-starting
+     * whitelisted app still gets the full benefit of the window (how long
+     * it's allowed to take hasn't changed); what changed is that the
+     * window can no longer be spent on anything else.
+     *
+     * Callers that don't know what's actually in the foreground (pass
+     * `foregroundPackage = null`, the default) never qualify for the grace
+     * at all — there's nothing to safely vouch for, so this always returns
+     * false for them and [show] proceeds immediately.
+     */
+    private fun isWithinLaunchGrace(foregroundPackage: String?, isHomeOrSystemSurface: Boolean): Boolean {
+        if (System.currentTimeMillis() >= suppressShowUntilMillis) return false
+        val expectedPackage = suppressShowForPackage ?: return false
+        if (foregroundPackage == null) return false
+        if (foregroundPackage == expectedPackage) return true
+        return isHomeOrSystemSurface
     }
 
     /** Tears the overlay down. Safe to call from any thread and when nothing is shown. */
@@ -262,8 +318,11 @@ object LockdownOverlay {
             // Yield the screen to the permitted app: the overlay must come down
             // or it would cover the very app the user just chose to open. The
             // grace stamp keeps the corral from re-showing the overlay while
-            // the launch transition briefly exposes the home screen underneath.
+            // the launch transition briefly exposes the home screen underneath
+            // — but only vouches for THIS package specifically, see
+            // isWithinLaunchGrace's doc for why that scoping matters.
             suppressShowUntilMillis = System.currentTimeMillis() + LAUNCH_GRACE_MS
+            suppressShowForPackage = pkg
             hide()
             runCatching { context.startActivity(intent) }
         }
