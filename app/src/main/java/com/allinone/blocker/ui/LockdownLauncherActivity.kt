@@ -6,10 +6,8 @@ import android.os.Bundle
 import android.provider.Telephony
 import android.telecom.TelecomManager
 import androidx.activity.ComponentActivity
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -20,11 +18,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -342,35 +335,56 @@ internal fun LockdownLauncherScreen(
             LockdownFocusRing(progress = sessionProgress, color = displayMoodColor)
             Spacer(Modifier.height(24.dp))
 
-            // Countdown / status — generous size, minimal chrome. The digits
-            // themselves now carry more weight (displayLarge, Medium instead
-            // of Light) and roll from one value to the next via AnimatedContent
-            // instead of snapping — the same pattern StreaksScreen.kt already
-            // uses for its counting number, reused here for consistency.
+            // Countdown — deliberately STILL. This used to roll each new
+            // second in via AnimatedContent (slide + fade), which was the
+            // actual source of the "flickering, distracting" complaint: a
+            // large slide/fade transition firing once a second, for the
+            // entire length of a session that can run for hours or days, is
+            // exactly what Apple's Human Interface Guidelines warn against —
+            // "don't add motion for the sake of adding motion... avoid using
+            // movement or blinking as the only way to convey information" —
+            // and what Amber Case's Calm Technology describes as the
+            // opposite of the goal: technology should take "the smallest
+            // possible amount of attention" it can get away with. A lockdown
+            // screen exists so the user stops looking at their phone; a
+            // number that visibly moves every second works against that. So
+            // the digits below now just change value on each tick — the
+            // same way a native OS clock or a watch face updates — with
+            // zero added motion.
+            //
+            // The second, less obvious fix: fontFeatureSettings = "tnum"
+            // turns on the font's TABULAR numerals. Roboto's digits are
+            // proportional by default (a "1" is narrower than an "8"), so
+            // without this a perfectly still, unanimated countdown would
+            // still visibly drift left/right every second as its own width
+            // changes — the same jitter fixed by `tabular-nums` in CSS for
+            // stock tickers and stopwatches. With it, every digit occupies
+            // identical width and the number holds its position on its own.
+            //
+            // Sized down from displayLarge/Medium weight to displayMedium/
+            // Light — Type.kt's own usage guide already earmarks
+            // displayMedium for "hero numbers... e.g. lockdown panel";
+            // Light instead of Medium/Bold reads as calm status rather than
+            // an alarm, matching how the rest of this screen already treats
+            // ambient information (see the indefinite-lock branch below,
+            // which was already Light).
             if (target in 1 until Long.MAX_VALUE) {
                 val remainingSec = ((target - now) / 1000L).coerceAtLeast(0)
-                AnimatedContent(
-                    targetState = formatLockCountdown(remainingSec),
-                    transitionSpec = {
-                        (slideInVertically { h -> h / 4 } + fadeIn(tween(160)))
-                            .togetherWith(slideOutVertically { h -> -h / 4 } + fadeOut(tween(160)))
-                            .using(SizeTransform(clip = false))
-                    },
-                    label = "lockdownCountdown"
-                ) { text ->
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.displayLarge,
-                        fontWeight = FontWeight.Medium,
-                        color = TextPrimary
-                    )
-                }
-                Spacer(Modifier.height(2.dp))
+                Text(
+                    formatLockCountdown(remainingSec),
+                    style = MaterialTheme.typography.displayMedium.copy(
+                        fontWeight = FontWeight.Light,
+                        letterSpacing = 1.sp,
+                        fontFeatureSettings = "tnum"
+                    ),
+                    color = TextPrimary
+                )
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "REMAINING",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextMuted,
-                    letterSpacing = 2.sp
+                    letterSpacing = 3.sp
                 )
             } else {
                 Text(
@@ -647,11 +661,14 @@ private fun AmbientGlow(color: Color) {
 @Composable
 private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue) {
     val infinite = rememberInfiniteTransition(label = "focusBreath")
+    // Slowed from a 3.2s to a 4.8s half-cycle and narrowed from 0.4–0.9 to
+    // 0.45–0.75 — still alive, but felt rather than noticed, so it doesn't
+    // compete with the now-still countdown digits below it.
     val breath by infinite.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 0.9f,
+        initialValue = 0.45f,
+        targetValue = 0.75f,
         animationSpec = infiniteRepeatable(
-            animation = tween(3200, easing = FastOutSlowInEasing),
+            animation = tween(4800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "breathAlpha"
@@ -673,15 +690,15 @@ private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue
 
     // The breathing haptic — see the header comment above for why this is
     // scoped to indefinite locks only. Fires once per full breath cycle
-    // (the ring's tween is 3.2s out, 3.2s back — a 6.4s round trip), timed
+    // (the ring's tween is 4.8s out, 4.8s back — a 9.6s round trip), timed
     // to the moment the ring is fullest, matching what's on screen.
     if (progress == null) {
         val haptics = rememberHaptics()
         LaunchedEffect(Unit) {
             while (true) {
-                delay(3_200L)
+                delay(4_800L)
                 haptics.breathPulse()
-                delay(3_200L)
+                delay(4_800L)
             }
         }
     }
