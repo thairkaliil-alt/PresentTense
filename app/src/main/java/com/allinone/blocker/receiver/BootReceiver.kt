@@ -8,6 +8,7 @@ import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
 import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.data.LockdownGuard
+import com.allinone.blocker.data.LockdownScheduleAlarms
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.ScreenTimeTracker
 import kotlin.concurrent.thread
@@ -45,5 +46,13 @@ class BootReceiver : BroadcastReceiver() {
         if (decision.active || decision.onBreak) {
             LockdownGuard.ensureRunning(context.applicationContext)
         }
+
+        // Android clears every AlarmManager alarm on reboot, same as it
+        // does for Strict Alarms above — so the "wake the device for the
+        // next scheduled lockdown" alarm (see LockdownScheduleAlarms) needs
+        // to be explicitly re-armed here too, not only relied on via
+        // BlockerApp's own startup observer, so a scheduled lockdown can
+        // never silently go quiet after a reboot.
+        LockdownScheduleAlarms.rearm(context.applicationContext)
     }
 }
