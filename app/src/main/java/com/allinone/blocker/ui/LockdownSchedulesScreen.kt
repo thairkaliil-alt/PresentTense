@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -70,6 +71,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownEngine
@@ -139,7 +141,14 @@ private sealed class PendingImmediateStart {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LockdownSchedulesScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     val schedules by BlockerRepository.schedules.collectAsState()
+    // Scheduled lockdowns start themselves on time via an exact AlarmManager
+    // wake-up (see LockdownScheduleAlarms) — the same "Alarms & reminders"
+    // system permission Strict Alarms already needs (see AlarmScheduler).
+    // Checked once per visit to this screen, same as StrictAlarmEditScreen
+    // does for the identical permission.
+    val canScheduleExact = remember { AlarmScheduler.canScheduleExact(context) }
     var showAddSchedule by remember { mutableStateOf<LockdownSchedule?>(null) }
     var pendingImmediateStart by remember { mutableStateOf<PendingImmediateStart?>(null) }
 
@@ -186,80 +195,94 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                 )
             }
         ) { pad ->
+            Column(modifier = Modifier.padding(pad).fillMaxSize()) {
+                // Without this permission, the exact wake-up alarm that
+                // starts a scheduled lockdown on its own (see
+                // LockdownScheduleAlarms) may fire late or not at all —
+                // surfaced here, right where schedules are managed, so
+                // it's never a silent, invisible failure.
+                if (!canScheduleExact) {
+                    SchedulePermissionNotice(
+                        onGrant = { AlarmScheduler.requestExactAlarmPermission(context) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, top = 8.dp)
+                    )
+                }
 
-            if (schedules.isEmpty()) {
-                EmptyHintCard(
-                    modifier = Modifier.padding(pad).fillMaxSize(),
-                    text     = "No schedules yet. Add one for things like \u201CLock every night 11pm\u20137am.\u201D"
-                )
-                return@Scaffold
-            }
-
-            ReorderableColumn(
-                items     = schedules,
-                key       = { it.id },
-                onReorder = { newOrder -> BlockerRepository.reorderSchedules(newOrder) },
-                modifier  = Modifier
-                    .padding(pad)
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) { schedule, dragState ->
-                // Elevation and scale animate up while this card is the one
-                // being dragged — purely visual, on top of the reordering
-                // and sliding that ReorderableColumn already handles.
-                val elevation by animateDpAsState(
-                    targetValue   = if (dragState.isDragging) 16.dp else 2.dp,
-                    animationSpec = MotionSpecs.reorderPickup(),
-                    label         = "scheduleCardElevation"
-                )
-                val scale by animateFloatAsState(
-                    targetValue   = if (dragState.isDragging) 1.045f else 1f,
-                    animationSpec = MotionSpecs.reorderPickup(),
-                    label         = "scheduleCardScale"
-                )
-                ScheduleCard(
-                    schedule     = schedule,
-                    isDragging   = dragState.isDragging,
-                    elevation    = elevation,
-                    scale        = scale,
-                    modifier     = dragState.itemModifier,
-                    isRevealed   = revealedScheduleId == schedule.id,
-                    onRevealChange = { open ->
-                        revealedScheduleId = if (open) schedule.id else null
-                    },
-                    onToggle = { checked ->
-                        when {
-                            !checked -> StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
-                            LockdownEngine.wouldBeActiveNow(schedule.copy(enabled = true)) ->
-                                pendingImmediateStart = PendingImmediateStart.Toggle(schedule)
-                            else -> BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
-                        }
-                    },
-                    onClick  = { showAddSchedule = schedule },
-                    onDelete = {
-                        // The reveal-then-confirm swipe already IS the
-                        // confirmation — no dialog. Delete right away and
-                        // give a few seconds of Undo via the snackbar host,
-                        // the same safety net the Strict Alarms list uses.
-                        StrictModeGate.guard {
-                            val removed = schedule
-                            if (revealedScheduleId == removed.id) revealedScheduleId = null
-                            BlockerRepository.removeSchedule(removed.id)
-                            scope.launch {
-                                val result = snackbarHostState.showSnackbar(
-                                    message           = "Schedule deleted",
-                                    actionLabel       = "Undo",
-                                    withDismissAction = false,
-                                    duration          = androidx.compose.material3.SnackbarDuration.Short
-                                )
-                                if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                                    BlockerRepository.addSchedule(removed)
+                if (schedules.isEmpty()) {
+                    EmptyHintCard(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        text     = "No schedules yet. Add one for things like \u201CLock every night 11pm\u20137am.\u201D"
+                    )
+                } else {
+                    ReorderableColumn(
+                        items     = schedules,
+                        key       = { it.id },
+                        onReorder = { newOrder -> BlockerRepository.reorderSchedules(newOrder) },
+                        modifier  = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) { schedule, dragState ->
+                        // Elevation and scale animate up while this card is the one
+                        // being dragged — purely visual, on top of the reordering
+                        // and sliding that ReorderableColumn already handles.
+                        val elevation by animateDpAsState(
+                            targetValue   = if (dragState.isDragging) 16.dp else 2.dp,
+                            animationSpec = MotionSpecs.reorderPickup(),
+                            label         = "scheduleCardElevation"
+                        )
+                        val scale by animateFloatAsState(
+                            targetValue   = if (dragState.isDragging) 1.045f else 1f,
+                            animationSpec = MotionSpecs.reorderPickup(),
+                            label         = "scheduleCardScale"
+                        )
+                        ScheduleCard(
+                            schedule     = schedule,
+                            isDragging   = dragState.isDragging,
+                            elevation    = elevation,
+                            scale        = scale,
+                            modifier     = dragState.itemModifier,
+                            isRevealed   = revealedScheduleId == schedule.id,
+                            onRevealChange = { open ->
+                                revealedScheduleId = if (open) schedule.id else null
+                            },
+                            onToggle = { checked ->
+                                when {
+                                    !checked -> StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
+                                    LockdownEngine.wouldBeActiveNow(schedule.copy(enabled = true)) ->
+                                        pendingImmediateStart = PendingImmediateStart.Toggle(schedule)
+                                    else -> BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
+                                }
+                            },
+                            onClick  = { showAddSchedule = schedule },
+                            onDelete = {
+                                // The reveal-then-confirm swipe already IS the
+                                // confirmation — no dialog. Delete right away and
+                                // give a few seconds of Undo via the snackbar host,
+                                // the same safety net the Strict Alarms list uses.
+                                StrictModeGate.guard {
+                                    val removed = schedule
+                                    if (revealedScheduleId == removed.id) revealedScheduleId = null
+                                    BlockerRepository.removeSchedule(removed.id)
+                                    scope.launch {
+                                        val result = snackbarHostState.showSnackbar(
+                                            message           = "Schedule deleted",
+                                            actionLabel       = "Undo",
+                                            withDismissAction = false,
+                                            duration          = androidx.compose.material3.SnackbarDuration.Short
+                                        )
+                                        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                            BlockerRepository.addSchedule(removed)
+                                        }
+                                    }
                                 }
                             }
-                        }
+                        )
                     }
-                )
+                }
             }
         }
     }
@@ -325,6 +348,30 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                 TextButton(onClick = { pendingImmediateStart = null }) { Text("Cancel") }
             }
         )
+    }
+}
+
+@Composable
+private fun SchedulePermissionNotice(onGrant: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .border(1.dp, AccentRed.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+            .pressable(onClick = onGrant)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Permission needed",
+                style      = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Tap to allow exact alarms, or schedules could start late \u2014 or not at all.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary
+            )
+        }
     }
 }
 
