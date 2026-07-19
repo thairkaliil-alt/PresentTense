@@ -77,6 +77,9 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     /** Backstop loop that keeps a live lockdown session protected — see [tickLockdownGuard]. */
     private var lockdownGuardJob: Job? = null
 
+    /** Throttle for [clearStuckSystemSurfaceIfNeeded] — see its doc for why this exists. */
+    private var lastStuckSurfaceNudgeAtMillis = 0L
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
@@ -526,9 +529,62 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     private fun corralToLockdownLauncher(blockedPkg: String) {
         ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, blockedPkg) }
+        val wasAlreadyShowing = LockdownOverlay.isShowing
+        val fromSystemSurface = isHomeOrSystemSurface(blockedPkg)
         overlay.hide()
         lastOverlayShouldShow = false
-        LockdownOverlay.show(this, blockedPkg, isHomeOrSystemSurface(blockedPkg))
+        LockdownOverlay.show(this, blockedPkg, fromSystemSurface)
+        // Only on the moment the overlay FIRST goes up over Home/Recents/System
+        // UI — never on the repeated steady-state calls this same function gets
+        // every ~3s guard tick while the user is just sitting on the lockdown
+        // screen. See clearStuckSystemSurfaceIfNeeded's doc for the full story.
+        if (!wasAlreadyShowing && fromSystemSurface) {
+            clearStuckSystemSurfaceIfNeeded()
+        }
+    }
+
+    /**
+     * BUGFIX ("whitelisted app flickers/closes once or twice right after
+     * using Recent Apps during lockdown"): pressing the Recent Apps
+     * button/gesture opens the system's task-switcher (Overview). Our
+     * lockdown overlay correctly paints over it — the user is visibly
+     * pulled straight back to the lockdown screen, which is the intended
+     * behavior. But Overview itself is still technically open underneath,
+     * just covered — [LockdownOverlay] is a window drawn ON TOP of
+     * whatever's there, it never actually tells Overview to close. When the
+     * user then taps a whitelisted app from the lockdown screen, it launches
+     * into a system that still half-thinks it's mid task-switch, which is
+     * what causes it to restart once or twice before settling down.
+     *
+     * Manually pressing the physical Back button after landing on the
+     * lockdown screen fixes it — Back is exactly how Android normally
+     * dismisses Overview. So instead of relying on the user to do that by
+     * hand, we do it for them: one single simulated Back press, shortly
+     * after the overlay first appears over Home/Recents/System UI. This
+     * mirrors the manual fix exactly, so a whitelisted app launched right
+     * after starts cleanly.
+     *
+     * Kept deliberately narrow so it can't cause side effects elsewhere:
+     * - Only fires on the FIRST corral onto Home/Recents/System UI (the
+     *   `!wasAlreadyShowing` check at the call site) — not on every guard
+     *   tick while the user is just sitting on the lockdown screen.
+     * - Throttled below regardless, in case two near-simultaneous events
+     *   both catch the overlay mid-transition.
+     * - A single Back press is a safe no-op almost everywhere it could
+     *   possibly land: on the home screen it does nothing; on our own
+     *   overlay it's swallowed with no effect (see [LockdownOverlay]'s
+     *   BACK-swallow in its Host.rootView); the only place it actually
+     *   changes anything is exactly the stuck Overview screen this is
+     *   meant to close.
+     */
+    private fun clearStuckSystemSurfaceIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (now - lastStuckSurfaceNudgeAtMillis < STUCK_SURFACE_NUDGE_THROTTLE_MS) return
+        lastStuckSurfaceNudgeAtMillis = now
+        ioScope.launch {
+            delay(STUCK_SURFACE_NUDGE_DELAY_MS)
+            runCatching { performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }
+        }
     }
 
     /**
@@ -559,5 +615,11 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MOTIVATION = "Discipline is choosing what you want most over what you want now."
+
+        /** How long to wait after the overlay appears before nudging Back — see [clearStuckSystemSurfaceIfNeeded]. */
+        private const val STUCK_SURFACE_NUDGE_DELAY_MS = 250L
+
+        /** Minimum gap between Back nudges — see [clearStuckSystemSurfaceIfNeeded]. */
+        private const val STUCK_SURFACE_NUDGE_THROTTLE_MS = 2_000L
     }
 }
