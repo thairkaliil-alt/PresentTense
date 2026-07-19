@@ -173,6 +173,16 @@
             android:name=".receiver.LockdownWatchdogReceiver"
             android:exported="false" />
 
+        <!-- Scheduled lockdown trigger: an exact AlarmManager wake-up set
+             by LockdownScheduleAlarms for the precise moment a scheduled
+             (or manual) lockdown is due to start, end, or resume after a
+             break. This is what makes a scheduled lockdown start ON ITS
+             OWN at the right time, even if the phone was asleep and
+             Present Tense wasn't running at all. -->
+        <receiver
+            android:name=".receiver.LockdownScheduleTriggerReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>
