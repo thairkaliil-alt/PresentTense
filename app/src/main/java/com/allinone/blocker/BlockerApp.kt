@@ -3,14 +3,32 @@ package com.allinone.blocker
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.util.Log
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
 import com.allinone.blocker.data.LockdownCompletionRepository
+import com.allinone.blocker.data.LockdownScheduleAlarms
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.StreakRepository
 import com.allinone.blocker.ui.InstalledApps
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 
 class BlockerApp : Application() {
+
+    // Isolated, app-lifetime background scope. SupervisorJob so a failure
+    // in one task here can never cancel any other; the exception handler
+    // logs instead of letting a hiccup crash the whole app — same pattern
+    // as AppBlockerAccessibilityService.ioScope, for the same reason.
+    private val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            Log.e("BlockerApp", "Background task failed (isolated, not fatal)", throwable)
+        }
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -41,6 +59,27 @@ class BlockerApp : Application() {
         // "Add app" / "Whitelist" / Stats screens almost never have to wait
         // on it later - see InstalledApps.kt for why this matters.
         InstalledApps.ensureLoaded(this)
+
+        // BUGFIX ("scheduled lockdown doesn't start on its own — only
+        // kicks in once I open the app"): keeps the "wake the device for
+        // the next scheduled lockdown" alarm (see LockdownScheduleAlarms)
+        // always pointed at the right moment. Any time a schedule is
+        // added, edited, removed, or toggled; a manual lockdown is started
+        // or stopped; or an emergency break starts or ends — this
+        // re-arms the alarm automatically, from one single place, instead
+        // of relying on every screen that touches those to remember to do
+        // it itself. combine()'s first emission (using whatever was just
+        // loaded from disk above) also covers "re-arm on every app start",
+        // so nothing extra is needed for that case.
+        appScope.launch {
+            combine(
+                BlockerRepository.schedules,
+                BlockerRepository.manualLockUntil,
+                BlockerRepository.breakUntil
+            ) { _, _, _ -> Unit }.collect {
+                LockdownScheduleAlarms.rearm(this@BlockerApp)
+            }
+        }
     }
 
     private fun createNotificationChannel() {
