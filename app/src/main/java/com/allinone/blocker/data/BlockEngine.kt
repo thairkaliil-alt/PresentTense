@@ -17,16 +17,24 @@ object BlockEngine {
     fun evaluate(
         context: Context,
         app: BlockedApp,
-        reelsKillSwitch: Boolean,
         nowMillis: Long = System.currentTimeMillis(),
         sessionStart: Long = 0L
     ): BlockDecision {
         if (!app.enabled) return BlockDecision(false)
 
-        // Reels / Shorts kill switch (README 4.1) forces known short-form apps off.
-        if (reelsKillSwitch && app.isReels) {
-            return BlockDecision(true, "Reels / Shorts kill switch is on")
-        }
+        // NOTE: the Reels/Shorts kill switch is intentionally NOT handled
+        // here. It used to short-circuit here with a blanket "block the
+        // whole app" whenever the app was reels-capable (Instagram,
+        // YouTube, Facebook, Snapchat, TikTok) — but that's not what the
+        // kill switch is supposed to do; it should only block the
+        // Reels/Shorts SCREEN inside the app, not the whole app. That
+        // screen-level check needs the live accessibility node tree (see
+        // ReelsDetector), which this function doesn't have access to, so
+        // it's handled directly in AppBlockerAccessibilityService instead —
+        // and only AFTER this function has already had first say on
+        // whether the app is fully blocked by its own rules (schedule,
+        // permanent block, limits, etc.). See the BUGFIX note over there
+        // for why that order matters.
 
         // No explicit rules but the app is enabled -> treat as a simple block.
         if (app.rules.isEmpty()) {
