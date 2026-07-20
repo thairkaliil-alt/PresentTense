@@ -60,6 +60,9 @@ class OverlayManager(private val context: Context) {
 
     val isShowing: Boolean get() = attached && overlay?.isAttachedToWindow == true
 
+    /** The package this overlay is currently showing a block screen for, or null if hidden. */
+    val currentPackageName: String? get() = if (isShowing) shownFor else null
+
     fun show(
         packageName: String,
         appName: String,
