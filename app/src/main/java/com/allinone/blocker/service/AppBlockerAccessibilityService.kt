@@ -131,6 +131,20 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             // always safe to call this from more than one place.
             LockdownCompletionRepository.recordCompletionIfNeeded()
             LockdownGuard.ensureStopped(applicationContext)
+            // BUGFIX: if the "Settings is blocked, even on a break" screen
+            // (see corralToLockdownLauncher) is still up right as the
+            // underlying session ends entirely — not just a break lapsing,
+            // the WHOLE session — nothing else would ever clear it, since
+            // this early return skips the corral call below that normally
+            // hides `overlay`. Driven by what's actually on screen right
+            // now rather than a separately-tracked flag, so this can never
+            // misfire and hide an unrelated block (Reels, a normal app
+            // block) that happens to be showing for some other reason at
+            // the same moment.
+            if (LockdownEngine.isSystemSettingsPackage(overlay.currentPackageName ?: "")) {
+                overlay.hide()
+                lastOverlayShouldShow = false
+            }
             return false
         }
 
@@ -140,12 +154,27 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         // up and already handling whitelisted apps correctly, so the
         // watchdog's 45s backstop should stand down instead of relaunching.
         BlockerRepository.recordLockdownHeartbeat()
-        if (!decision.active) return true // on an emergency break — don't corral right now
 
         val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
         val activePkg = activeRoot?.packageName?.toString()
         val activeClass = activeRoot?.className?.toString()
         activeRoot?.recycle()
+
+        if (!decision.active) {
+            // On an emergency break: ordinary apps stay free to use — that's
+            // the whole point of a break — but shouldCorralDuringLockdown
+            // still says yes for Settings specifically (see its doc), and
+            // corralToLockdownLauncher renders that correctly for a break
+            // (the ordinary per-app block screen, not the full lockdown
+            // screen). This is just the ~3s backstop for that; the instant,
+            // normal-case path is the exact same shouldCorralDuringLockdown
+            // call made from onAccessibilityEvent.
+            if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
+                corralToLockdownLauncher(activePkg)
+            }
+            return true
+        }
+
         if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
             corralToLockdownLauncher(activePkg)
         } else if (activePkg != null && activePkg != packageName) {
@@ -180,7 +209,15 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         // follow-up WINDOW_STATE_CHANGED for the launcher — check the active
         // window directly while lockdown is running.
         if (eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            if (!isLockdownActive()) return
+            // BUGFIX: was isLockdownActive() (false during a break), which
+            // meant this whole branch — and therefore any chance of it
+            // catching Settings via this specific event path — went dark
+            // the moment a break started. isLockdownSessionLive() stays
+            // true through a break, so shouldCorralDuringLockdown (called
+            // just below) still gets a chance to say yes for Settings
+            // specifically, while every other app is correctly left alone
+            // by that same function's decision.active check.
+            if (!isLockdownSessionLive()) return
             val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
             val activePkg = activeRoot?.packageName?.toString()
             val activeClass = activeRoot?.className?.toString()
@@ -231,7 +268,14 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         // only corral if THAT shouldn't be there (recents open, a launcher,
         // the shade) — never because a passive System UI surface repainted.
         if (pkg.contains("systemui", ignoreCase = true)) {
-            if (!isLockdownActive()) return
+            // BUGFIX (this is the exact path "pull down the curtain, tap the
+            // Settings gear" goes through — the shade itself is reported as
+            // System UI): was isLockdownActive() (false during a break),
+            // which skipped this whole branch — and with it, any chance of
+            // catching Settings opened this way — for the entire break. See
+            // the TYPE_WINDOWS_CHANGED branch above for the same fix and a
+            // fuller explanation.
+            if (!isLockdownSessionLive()) return
             val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
             val activePkg = activeRoot?.packageName?.toString()
             val activeClass = activeRoot?.className?.toString()
@@ -309,69 +353,48 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             handleBrowserContentChanged(pkg)
         }
 
-        // ── App-level rules (schedule, permanent block, limits, etc.) ─────────
-        // Checked FIRST — this is the whole-app block, and it must always
-        // win over the Reels/Shorts kill switch check further down.
-        //
-        // BUGFIX ("Reels kill switch unblocks an already-scheduled-blocked
-        // app"): this used to run AFTER a reels-capable check that returned
-        // immediately on a match — so opening Instagram while it was fully
-        // blocked by a schedule, with the Reels kill switch also on, skipped
-        // this whole-app check entirely. Only the Reels tab itself stayed
-        // blocked (via the separate, narrower check below); the rest of the
-        // scheduled-blocked app opened freely, which is backwards — turning
-        // the Reels kill switch ON should never make an already-blocked app
-        // MORE accessible. Checking the app's own rules first, and only
-        // falling through to the Reels-specific screen check when those
-        // rules do NOT currently block it, fixes that: a full app block
-        // always wins, exactly like it did before the Reels kill switch
-        // existed.
-        val app = BlockerRepository.appFor(pkg)
-        if (app != null) {
-            if (overlay.isShowing.not()) {
-                BlockerRepository.recordOpen(pkg)
-            }
-
-            val decision = BlockEngine.evaluate(
-                context = this,
-                app = app,
-                sessionStart = sessionStart
-            )
-
-            if (decision.blocked) {
-                ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
-                overlay.show(
-                    packageName = pkg,
-                    appName = app.appName,
-                    reason = decision.reason,
-                    motivation = MOTIVATION,
-                    isLockdown = false
-                )
-                lastOverlayShouldShow = true
-                return
-            }
-        }
-
         // ── Reels / Shorts kill switch ────────────────────────────────────────
         // Only block if the user is actually ON the Reels/Shorts screen,
-        // not just because they opened Instagram or YouTube — and only
-        // reached when the app-level rules above did NOT already block the
-        // whole app (see BUGFIX note above).
+        // not just because they opened Instagram or YouTube.
         // TikTok is always blocked (entire app is short-form).
         if (BlockerRepository.reelsKillSwitch.value && InstalledApps.isReelsCapable(pkg)) {
             handleReelsContentChanged(pkg)
             return
         }
 
+        val app = BlockerRepository.appFor(pkg)
         if (app == null) {
             overlay.hide()
             lastOverlayShouldShow = false
             return
         }
 
-        overlay.hide()
-        lastOverlayShouldShow = false
-        BlockerRepository.recordUse(pkg, System.currentTimeMillis())
+        if (overlay.isShowing.not()) {
+            BlockerRepository.recordOpen(pkg)
+        }
+
+        val decision = BlockEngine.evaluate(
+            context = this,
+            app = app,
+            reelsKillSwitch = BlockerRepository.reelsKillSwitch.value,
+            sessionStart = sessionStart
+        )
+
+        if (decision.blocked) {
+            ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
+            overlay.show(
+                packageName = pkg,
+                appName = app.appName,
+                reason = decision.reason,
+                motivation = MOTIVATION,
+                isLockdown = false
+            )
+            lastOverlayShouldShow = true
+        } else {
+            overlay.hide()
+            lastOverlayShouldShow = false
+            BlockerRepository.recordUse(pkg, System.currentTimeMillis())
+        }
     }
 
     /**
@@ -460,12 +483,67 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     ).active
 
     /**
+     * True whenever a lockdown session is "live" right now — whether it's
+     * actively being enforced OR merely paused for an emergency break. A
+     * break frees up ordinary apps, but the underlying session hasn't
+     * actually ended, so anything that must survive a break (right now:
+     * only the Settings-app corral inside [shouldCorralDuringLockdown])
+     * needs this instead of [isLockdownActive] to decide whether it's even
+     * worth checking what's in the foreground.
+     */
+    private fun isLockdownSessionLive(): Boolean {
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        return decision.active || decision.onBreak
+    }
+
+    /**
      * True when lockdown is active and [pkg] must not stay in the foreground.
      * Whitelisted apps are allowed, but home/recents surfaces and third-party
      * launchers are never allowed — they expose the whole device.
      */
     private fun shouldCorralDuringLockdown(pkg: String, className: String?): Boolean {
-        if (!isLockdownActive()) return false
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+
+        // BUGFIX (lockdown bypass: "pull down the notification shade and tap
+        // the Settings gear — or just start an emergency break — and
+        // Settings opens freely, permissions and all"): the phone's own
+        // Settings app is how someone would turn off this app's
+        // Accessibility Service or Device Admin — i.e. the actual off
+        // switch for enforcement itself — so it must be unreachable for as
+        // long as a lockdown session is live AT ALL, whether it's actively
+        // being enforced right now or merely paused for a break.
+        //
+        // This used to only be checked after bailing out on
+        // `!isLockdownActive()` below — and isLockdownActive() is false
+        // during a break — so a break silently exempted Settings along with
+        // every ordinary app, even though a break is only ever meant to
+        // free up ORDINARY apps for a few minutes, never double as a side
+        // door into disabling the blocker entirely. Checked first now,
+        // independent of decision.active, so that can't happen again.
+        // Deliberately still ahead of the whitelist check too (old installs
+        // may have Settings whitelisted from before this protection
+        // existed — BlockerRepository also refuses new whitelist entries
+        // for it, see addToWhitelist) — whitelisting it can never override
+        // this either way.
+        //
+        // See corralToLockdownLauncher for how this one `true` renders
+        // differently depending on which case triggered it: the ordinary
+        // per-app block screen during a break, vs. the full lockdown screen
+        // during active enforcement.
+        if ((decision.active || decision.onBreak) &&
+            pkg != packageName &&
+            LockdownEngine.isSystemSettingsPackage(pkg)
+        ) {
+            return true
+        }
+
+        if (!decision.active) return false
 
         if (pkg == packageName) {
             // Our own windows: the lockdown screen is now the LockdownOverlay
@@ -480,16 +558,6 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
         if (pkg.contains("systemui", ignoreCase = true)) return true
         if (isThirdPartyHomeLauncher(pkg)) return true
-
-        // The phone's own Settings app is a special case: it's how someone
-        // would turn off this app's Accessibility Service or Device Admin —
-        // i.e. the actual off switch for enforcement itself — so it must
-        // never be reachable during lockdown, full stop. This check is
-        // deliberately BEFORE the whitelist check, so it can't be
-        // circumvented by whitelisting it (old installs may have it
-        // whitelisted from before this existed — BlockerRepository also
-        // refuses new whitelist entries for it, see addToWhitelist).
-        if (LockdownEngine.isSystemSettingsPackage(pkg)) return true
 
         if (BlockerRepository.isWhitelisted(pkg)) return false
         if (LockdownEngine.isAlwaysExempt(this, pkg)) return false
@@ -550,6 +618,39 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     private fun corralToLockdownLauncher(blockedPkg: String) {
         ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, blockedPkg) }
+
+        // BUGFIX (lockdown bypass): shouldCorralDuringLockdown now says yes
+        // for Settings even while a break is running (see its doc above),
+        // but the FULL lockdown screen below (LockdownOverlay) is the wrong
+        // thing to show for that specific case. LockdownLauncherScreen has
+        // its own exit effect — LaunchedEffect(decision.active,
+        // decision.onBreak) calling onExitToApp() the instant it sees
+        // active=false while onBreak=true — which is exactly right when
+        // that screen shows up mid-break for any other reason (it means
+        // "let the user back into the app"), but wrong here: it would
+        // clear the Settings block the same frame it appears. So Settings
+        // gets the same ordinary per-app block screen every other blocked
+        // app already uses instead — proven to already work, has no such
+        // exit effect, and reads correctly to the user ("this one thing is
+        // blocked") instead of dropping them into a whitelist-app picker
+        // mid-break.
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        if (!decision.active && decision.onBreak && LockdownEngine.isSystemSettingsPackage(blockedPkg)) {
+            LockdownOverlay.hide()
+            overlay.show(
+                packageName = blockedPkg,
+                appName = appLabelOrPackage(blockedPkg),
+                reason = "Settings stays blocked for the rest of this lockdown session — including breaks",
+                motivation = MOTIVATION,
+                isLockdown = false
+            )
+            lastOverlayShouldShow = true
+            return
+        }
+
         val wasAlreadyShowing = LockdownOverlay.isShowing
         val fromSystemSurface = isHomeOrSystemSurface(blockedPkg)
         overlay.hide()
