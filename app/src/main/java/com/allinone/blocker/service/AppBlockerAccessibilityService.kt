@@ -376,7 +376,6 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         val decision = BlockEngine.evaluate(
             context = this,
             app = app,
-            reelsKillSwitch = BlockerRepository.reelsKillSwitch.value,
             sessionStart = sessionStart
         )
 
