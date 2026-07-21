@@ -618,6 +618,45 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     private fun corralToLockdownLauncher(blockedPkg: String) {
         ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, blockedPkg) }
 
+        // BUGFIX (lockdown bypass: "the 'Present Tense is displaying over
+        // other apps' notification opens Settings and lets you turn the
+        // permission off, which kills the block screen and unlocks the
+        // whole phone"): starting with Android 12, the specific Settings
+        // screens that grant/revoke a sensitive permission — "Display over
+        // other apps" (this app's own overlay permission), the
+        // Accessibility Service on/off toggle, Device Admin deactivation,
+        // and similar "special app access" screens — call the platform API
+        // Window.setHideOverlayWindows(true). That's Android deliberately
+        // and forcibly HIDING every third-party overlay window (including
+        // both `overlay` and `LockdownOverlay`, which are ordinary
+        // TYPE_APPLICATION_OVERLAY windows) for as long as one of those
+        // screens is on top. It exists so a malicious overlay app can never
+        // visually trap someone on the exact screen that would let them
+        // turn that overlay off — but the side effect is that OUR block
+        // screen goes invisible at the one moment it matters most, and the
+        // toggle underneath is fully tappable the whole time.
+        //
+        // performGlobalAction() is not a window — it's the same system
+        // action a real Home-button press or gesture triggers — so it is
+        // NOT covered by setHideOverlayWindows and can't be hidden by the
+        // OS the way our overlay can. So every time Settings is corralled
+        // during lockdown, in addition to trying to cover it visually
+        // below, we also immediately evict the user from it via
+        // GLOBAL_ACTION_HOME — before there's realistically time to
+        // register a tap on whatever screen is open. We can't tell from
+        // the accessibility event alone which Settings sub-screen someone
+        // is on, so this fires for the whole app rather than just the
+        // known-dangerous screens; it's a harmless no-op on ordinary
+        // Settings screens (our overlay already covers those fine, so
+        // being sent Home too changes nothing visible) and the only real
+        // defense on the ones the OS deliberately hides us from. This
+        // closes the same hole for the Accessibility and Device Admin
+        // screens too, since both live under this same package and go
+        // through this same corral.
+        if (LockdownEngine.isSystemSettingsPackage(blockedPkg)) {
+            runCatching { performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }
+        }
+
         // BUGFIX (lockdown bypass): shouldCorralDuringLockdown now says yes
         // for Settings even while a break is running (see its doc above),
         // but the FULL lockdown screen below (LockdownOverlay) is the wrong
