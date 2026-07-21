@@ -170,7 +170,16 @@ data class LockdownSchedule(
     val startMinutes: Int = 23 * 60,
     val endMinutes: Int = 7 * 60,
     val daysOfWeek: Set<Int> = (1..7).toSet(),
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    // Off by default, and per-schedule — NOT the same thing as the global
+    // Strict Mode switch. Strict Mode is deliberately global for blocked
+    // apps/websites (see AppRulesScreen's StrictModeLinkCard comment), but
+    // a schedule opting into it here is a separate, individual choice. Only
+    // schedules with this turned on route their "disable" and "delete"
+    // actions through StrictModeGate.guard (see LockdownSchedulesScreen) —
+    // every other schedule disables/deletes freely regardless of whether
+    // Strict Mode is on globally.
+    val strictModeProtected: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -179,6 +188,7 @@ data class LockdownSchedule(
         put("endMinutes", endMinutes)
         put("daysOfWeek", JSONArray(daysOfWeek.toList()))
         put("enabled", enabled)
+        put("strictModeProtected", strictModeProtected)
     }
 
     companion object {
@@ -196,7 +206,13 @@ data class LockdownSchedule(
                 startMinutes = o.optInt("startMinutes", 23 * 60),
                 endMinutes = o.optInt("endMinutes", 7 * 60),
                 daysOfWeek = days,
-                enabled = o.optBoolean("enabled", true)
+                enabled = o.optBoolean("enabled", true),
+                // Missing on every schedule saved before this feature existed —
+                // optBoolean defaults those to false, i.e. unprotected, which is
+                // exactly right: old schedules should NOT suddenly start
+                // demanding a Strict Mode challenge just because this field
+                // now exists.
+                strictModeProtected = o.optBoolean("strictModeProtected", false)
             )
         }
     }
