@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -81,6 +82,7 @@ import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
+import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -104,6 +106,16 @@ import kotlinx.coroutines.launch
 // (see StrictAlarmListScreen.kt's AlarmCard) via the shared ReorderableColumn
 // and MotionSpecs/Haptics helpers, so schedules get the same polished feel
 // instead of a second, different-feeling implementation.
+//
+// FIX: that same reuse also carried over a StrictModeGate.guard() wrapper on
+// disabling/deleting a schedule — copied from the Strict Alarms list without
+// meaning to pull Strict Mode along with it. Strict Mode is deliberately
+// global for blocked apps/websites (see AppRulesScreen's StrictModeLinkCard),
+// but a lockdown schedule is a different kind of thing, and there was never
+// an intentional decision to gate schedules on it too. Each LockdownSchedule
+// now carries its own strictModeProtected flag (default off, set via the
+// "Protect with Strict Mode" toggle in ScheduleEditDialog below) — only a
+// schedule that opts in routes its disable/delete through StrictModeGate.
 // ════════════════════════════════════════════════════════════════════════════
 
 private val DAY_LABELS = mapOf(
@@ -250,8 +262,19 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                                 revealedScheduleId = if (open) schedule.id else null
                             },
                             onToggle = { checked ->
+                                // Only a schedule with its own "Protect with Strict
+                                // Mode" toggle on (see ScheduleEditDialog) has to pass
+                                // the Strict Mode challenge to be turned off. This
+                                // used to run through StrictModeGate for EVERY
+                                // schedule any time Strict Mode was on globally —
+                                // unintentional, since Strict Mode was only ever
+                                // meant to protect blocked apps/websites unless a
+                                // schedule specifically opts in.
                                 when {
-                                    !checked -> StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
+                                    !checked && schedule.strictModeProtected ->
+                                        StrictModeGate.guard { BlockerRepository.updateSchedule(schedule.copy(enabled = checked)) }
+                                    !checked ->
+                                        BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
                                     LockdownEngine.wouldBeActiveNow(schedule.copy(enabled = true)) ->
                                         pendingImmediateStart = PendingImmediateStart.Toggle(schedule)
                                     else -> BlockerRepository.updateSchedule(schedule.copy(enabled = checked))
@@ -263,7 +286,14 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                                 // confirmation — no dialog. Delete right away and
                                 // give a few seconds of Undo via the snackbar host,
                                 // the same safety net the Strict Alarms list uses.
-                                StrictModeGate.guard {
+                                //
+                                // The delete itself only additionally routes through
+                                // StrictModeGate when THIS schedule has "Protect with
+                                // Strict Mode" turned on (see ScheduleEditDialog) —
+                                // not for every schedule whenever Strict Mode happens
+                                // to be on globally. See the matching comment on
+                                // onToggle above for why.
+                                val commitDelete: () -> Unit = {
                                     val removed = schedule
                                     if (revealedScheduleId == removed.id) revealedScheduleId = null
                                     BlockerRepository.removeSchedule(removed.id)
@@ -279,6 +309,7 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                                         }
                                     }
                                 }
+                                if (schedule.strictModeProtected) StrictModeGate.guard(commitDelete) else commitDelete()
                             }
                         )
                     }
@@ -630,6 +661,16 @@ private fun ScheduleCard(
                     )
                 }
 
+                if (schedule.strictModeProtected) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = "Protected by Strict Mode",
+                        tint     = AccentBlue.copy(alpha = if (schedule.enabled) 1f else 0.5f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
+
                 Switch(
                     checked         = schedule.enabled,
                     onCheckedChange = { checked -> onToggle(checked) },
@@ -661,6 +702,7 @@ private fun ScheduleEditDialog(schedule: LockdownSchedule, onDismiss: () -> Unit
     var start by remember { mutableStateOf(schedule.startMinutes) }
     var end   by remember { mutableStateOf(schedule.endMinutes) }
     var days  by remember { mutableStateOf(schedule.daysOfWeek) }
+    var strictModeProtected by remember { mutableStateOf(schedule.strictModeProtected) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -682,11 +724,80 @@ private fun ScheduleEditDialog(schedule: LockdownSchedule, onDismiss: () -> Unit
                         )
                     }
                 }
+                StrictModeProtectionToggle(
+                    checked         = strictModeProtected,
+                    onCheckedChange = { strictModeProtected = it }
+                )
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(schedule.copy(label = label, startMinutes = start, endMinutes = end, daysOfWeek = days)) }) { Text("Save") } },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(schedule.copy(label = label, startMinutes = start, endMinutes = end, daysOfWeek = days, strictModeProtected = strictModeProtected))
+            }) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+// ── "Protect with Strict Mode" toggle ──────────────────────────────────────
+// Opt-in, per schedule — this is what decides whether THIS schedule's
+// disable/delete actions route through StrictModeGate (see the onToggle and
+// onDelete call sites above). Off by default. Visual language borrows
+// directly from StrictModeSettingsScreen's own MasterToggleCard — same
+// Shield glyph, same AccentBlue — so Strict Mode reads as one consistent
+// feature across the app instead of two different-looking implementations.
+@Composable
+private fun StrictModeProtectionToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (checked) AccentBlue.copy(alpha = 0.12f) else CardSurface)
+            .border(
+                width = 1.dp,
+                color = if (checked) AccentBlue.copy(alpha = 0.35f) else TextMuted.copy(alpha = 0.14f),
+                shape = RoundedCornerShape(14.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment      = Alignment.CenterVertically,
+        horizontalArrangement  = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (checked) AccentBlue.copy(alpha = 0.20f) else TextMuted.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Shield,
+                contentDescription = null,
+                tint     = if (checked) AccentBlue else TextMuted,
+                modifier = Modifier.size(17.dp)
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Protect with Strict Mode",
+                style      = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color      = TextPrimary
+            )
+            Text(
+                "Turning this schedule off or deleting it will require your Strict Mode challenge.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextTertiary
+            )
+        }
+        Switch(
+            checked         = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = AccentBlue
+            )
+        )
+    }
 }
 
 private fun pickTime(context: android.content.Context, currentMinutes: Int, onPicked: (Int) -> Unit) {
