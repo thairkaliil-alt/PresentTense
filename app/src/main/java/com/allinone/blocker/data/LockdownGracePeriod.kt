@@ -20,11 +20,30 @@ package com.allinone.blocker.data
  * whichever session [LockdownCompletionRepository] is CURRENTLY tracking
  * via its [LockdownCompletionRepository.OngoingSessionMarker] (never a
  * separately-computed timer of its own — see [currentOngoingSession]'s
- * kdoc), and only acts while `now - startedAtMillis < GRACE_PERIOD_MS`. The
- * instant that window closes, cancelling stops being possible and the
- * session runs exactly as strict as configured, completely unchanged from
- * today — Strict Mode, the emergency-break limit, corralling, and the
- * watchdog are never touched by this file.
+ * kdoc), and only acts while
+ * `now - firstObservedAtMillis < GRACE_PERIOD_MS`. The instant that window
+ * closes, cancelling stops being possible and the session runs exactly as
+ * strict as configured, completely unchanged from today — Strict Mode, the
+ * emergency-break limit, corralling, and the watchdog are never touched by
+ * this file.
+ *
+ * BUGFIX (what the countdown is measured from): this used to measure from
+ * the marker's `startedAtMillis`. For a MANUAL session that's fine — it's
+ * always set to the exact moment the person tapped "lock" — but for a
+ * SCHEDULED session `startedAtMillis` is the schedule's own start-of-window
+ * time (e.g. "9:00 PM"), which can already be minutes in the past the
+ * moment this app first notices the session at all: a schedule whose window
+ * already covers right now the instant it's saved/enabled is exactly the
+ * scenario this whole file exists to protect against (see above), and a
+ * window only picked up late after the phone was asleep is no different.
+ * Measuring from a timestamp that can already be stale before tracking even
+ * begins meant the safety net could be partially, or entirely, burned
+ * before the person ever got to use it. It now measures from
+ * [LockdownCompletionRepository.OngoingSessionMarker.firstObservedAtMillis]
+ * instead — the real wall-clock moment the app actually started tracking
+ * the session — so the full minute is always available right from the
+ * start of every session, regardless of which minute the underlying
+ * schedule happens to be keyed to.
  *
  * WHAT "CANCEL" MEANS PER SESSION KIND:
  *   - MANUAL: the one sanctioned place `manualLockUntil` is ever set back to
@@ -62,8 +81,14 @@ object LockdownGracePeriod {
      * but this is handy for a UI countdown ("cancel for the next 43s").
      */
     fun remainingMs(nowMillis: Long = System.currentTimeMillis()): Long {
-        val startedAt = LockdownCompletionRepository.currentSessionStartedAtMillis() ?: return 0L
-        return (GRACE_PERIOD_MS - (nowMillis - startedAt)).coerceAtLeast(0L)
+        // firstObservedAtMillis, not startedAtMillis — see the BUGFIX note in
+        // this file's header comment. Using startedAtMillis here was the bug:
+        // for a SCHEDULED session it's the schedule's own start-of-window
+        // time, which can already be minutes in the past by the time this is
+        // first evaluated, silently eating into (or fully consuming) the
+        // safety net before the person ever saw it.
+        val firstObservedAt = LockdownCompletionRepository.currentSessionFirstObservedAtMillis() ?: return 0L
+        return (GRACE_PERIOD_MS - (nowMillis - firstObservedAt)).coerceAtLeast(0L)
     }
 
     /** True while the no-friction cancel option should still be shown for whatever session is currently tracked. */
