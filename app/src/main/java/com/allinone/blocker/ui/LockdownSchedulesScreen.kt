@@ -121,17 +121,22 @@ import kotlinx.coroutines.launch
 // pushed in with the same ScreenPush transition every other stacked
 // sub-screen in the app uses (Settings, Strict Alarms, …), so schedules get
 // real room to breathe and read as a first-class screen instead of a popup.
-// DAY_LABELS, DAY_ORDER, repeatSummary() and StrictModeProtectionToggle below
-// are `internal` (not `private`) specifically so that new file can reuse
-// them instead of duplicating this logic.
+// DAY_LABELS, DAY_ORDER and repeatSummary() below stay `private` (file-scoped)
+// on purpose — StrictAlarmEditScreen.kt and StrictAlarmListScreen.kt already
+// each have their own identically-named private versions for their own day
+// pickers, and Kotlin allows that as long as none of them are widened past
+// file scope. LockdownScheduleEditScreen.kt has its own small copy of the
+// same lists rather than reusing these, for the same reason. Only
+// StrictModeProtectionToggle below is `internal` (not `private`), since that
+// name is unique across the codebase and both files can safely share it.
 // ════════════════════════════════════════════════════════════════════════════
 
-internal val DAY_LABELS = mapOf(
+private val DAY_LABELS = mapOf(
     Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
     Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
     Calendar.SUNDAY to "Sun"
 )
-internal val DAY_ORDER = listOf(
+private val DAY_ORDER = listOf(
     Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY,
     Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
 )
@@ -702,9 +707,12 @@ private fun ScheduleCard(
     }
 }
 
-// `internal` (not `private`) so LockdownScheduleEditScreen.kt's live summary
-// line uses this exact same wording instead of a second, possibly-drifting copy.
-internal fun repeatSummary(daysOfWeek: Set<Int>): String {
+// `private` (file-scoped) — StrictAlarmListScreen.kt has its own separate
+// repeatSummary() of the same name for the same reason; Kotlin allows that
+// as long as neither is widened past file scope, which is why this one
+// stays private rather than internal (LockdownScheduleEditScreen.kt has its
+// own equivalent copy for the same reason DAY_LABELS/DAY_ORDER do below).
+private fun repeatSummary(daysOfWeek: Set<Int>): String {
     if (daysOfWeek.isEmpty()) return "Never"
     if (daysOfWeek.size == 7) return "Every day"
     val weekdays = setOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY)
