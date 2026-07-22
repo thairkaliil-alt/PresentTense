@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.allinone.blocker.data.BlockDecision
 import com.allinone.blocker.data.BlockEngine
@@ -159,7 +160,19 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
         val activePkg = activeRoot?.packageName?.toString()
         val activeClass = activeRoot?.className?.toString()
+        val isShade = isShadeOrStatusBarWindow(activeRoot)
         activeRoot?.recycle()
+
+        // BUGFIX ("pull down the notification shade over a whitelisted app
+        // during lockdown — the app closes and lockdown snaps back up"):
+        // this ~3s backstop used to treat the shade being pulled down
+        // exactly like leaving for Home/Recents (both get reported to us as
+        // package "com.android.systemui"), and would re-corral on every
+        // single tick for as long as the shade stayed open. See
+        // isShadeOrStatusBarWindow's doc below — pulling the shade down
+        // never actually takes the user away from the app underneath, so
+        // there's nothing here to correct while it's showing.
+        if (isShade) return true
 
         if (!decision.active) {
             // On an emergency break: ordinary apps stay free to use — that's
@@ -222,7 +235,14 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
             val activePkg = activeRoot?.packageName?.toString()
             val activeClass = activeRoot?.className?.toString()
+            val isShade = isShadeOrStatusBarWindow(activeRoot)
             activeRoot?.recycle()
+            // BUGFIX ("pull down the notification shade over a whitelisted
+            // app during lockdown — the app closes and lockdown snaps back
+            // up"): see isShadeOrStatusBarWindow's doc below. The shade is
+            // not the user leaving the app, so do nothing and let whatever
+            // is already on screen keep showing underneath it.
+            if (isShade) return
             if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
                 corralToLockdownLauncher(activePkg)
             } else if (activePkg != null && activePkg != packageName) {
@@ -260,27 +280,37 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         // BUT: System UI also produces a constant background hum of events
         // that say nothing about where the user actually is — the status-bar
         // clock ticking over each minute, battery/signal icons redrawing,
-        // heads-up notifications sliding in over whatever app is open. This
-        // used to corral on ALL of them, which is the "whitelisted app
-        // bounces back to the lockdown screen after a while" bug: the user
-        // sits safely inside an allowed app until some status-bar repaint
-        // fires, and gets yanked out for it. So instead of trusting the
-        // event's package, ask what actually OWNS the screen right now and
-        // only corral if THAT shouldn't be there (recents open, a launcher,
-        // the shade) — never because a passive System UI surface repainted.
+        // heads-up notifications sliding in over whatever app is open, and
+        // the notification shade itself sliding down over whatever's open.
+        // This used to corral on ALL of them, which caused two separate
+        // bugs: "whitelisted app bounces back to the lockdown screen after a
+        // while" (a status-bar repaint fires while just sitting in an
+        // allowed app) and "pulling down the curtain over a whitelisted app
+        // closes it and snaps back to the lockdown screen" (the shade itself
+        // reads as System UI too). So instead of trusting the event's
+        // package, ask what actually OWNS the screen right now and only
+        // corral if THAT shouldn't be there (recents open, a launcher) —
+        // never because a passive System UI surface repainted, and never
+        // just because the shade is pulled down (see isShadeOrStatusBarWindow's
+        // doc below for how those two cases are told apart).
         if (pkg.contains("systemui", ignoreCase = true)) {
-            // BUGFIX (this is the exact path "pull down the curtain, tap the
-            // Settings gear" goes through — the shade itself is reported as
-            // System UI): was isLockdownActive() (false during a break),
-            // which skipped this whole branch — and with it, any chance of
-            // catching Settings opened this way — for the entire break. See
-            // the TYPE_WINDOWS_CHANGED branch above for the same fix and a
+            // was isLockdownActive() (false during a break), which skipped
+            // this whole branch — and with it, any chance of catching
+            // Settings opened this way — for the entire break. See the
+            // TYPE_WINDOWS_CHANGED branch above for the same fix and a
             // fuller explanation.
             if (!isLockdownSessionLive()) return
             val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
             val activePkg = activeRoot?.packageName?.toString()
             val activeClass = activeRoot?.className?.toString()
+            val isShade = isShadeOrStatusBarWindow(activeRoot)
             activeRoot?.recycle()
+            // BUGFIX ("pull down the notification shade over a whitelisted
+            // app during lockdown — the app closes and lockdown snaps back
+            // up"): see isShadeOrStatusBarWindow's doc below. Pulling the
+            // shade down never actually takes the user away from the app
+            // underneath, so there's nothing to corral away from.
+            if (isShade) return
             if (activePkg != null && shouldCorralDuringLockdown(activePkg, activeClass)) {
                 corralToLockdownLauncher(activePkg)
             }
@@ -606,6 +636,12 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             return !LockdownOverlay.isShowing
         }
 
+        // Note: this still needs to say yes for Home/Recents on devices
+        // where those are reported under the systemui package too — the
+        // notification shade itself never reaches here in the first place
+        // any more, since every call site now checks
+        // isShadeOrStatusBarWindow first and skips calling this function at
+        // all while the shade is what's active. See that function's doc.
         if (pkg.contains("systemui", ignoreCase = true)) return true
         if (isThirdPartyHomeLauncher(pkg)) return true
 
@@ -626,6 +662,36 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         }
         return pkg in launchers
     }
+
+    /**
+     * True when [node] (the root of whatever window is currently active) is
+     * sitting inside a passive System UI surface — the status bar, the
+     * notification shade, or the quick settings panel — rather than a real
+     * screen the user has actually navigated to.
+     *
+     * BUGFIX ("pull down the notification shade over a whitelisted app
+     * during lockdown — the app closes and lockdown snaps back up"): the
+     * shade is reported to us as package "com.android.systemui", exactly
+     * like Home and Recents are on some devices — which is why every check
+     * in this file that sees a systemui-owned screen normally treats it as
+     * something to corral away from. But the shade is just a translucent
+     * panel that slides down OVER whatever app is already open; dismissing
+     * it (swipe up, tap outside, or just releasing it) lands the user right
+     * back where they were. It was never actually leaving the app, so
+     * treating it as an escape and yanking the user back to the lockdown
+     * screen was always wrong.
+     *
+     * Android tags this specific kind of passive system surface with window
+     * type TYPE_SYSTEM — a stable classification the OS assigns, unlike the
+     * package name, which some OEMs reuse for Home/Recents too. Checking the
+     * type instead of just the package name is exactly the same trick this
+     * file already uses to spot the on-screen keyboard (see
+     * isInputMethodWindowEvent) — it lets us tell "just the shade" apart
+     * from an actual escape to Home/Recents, which still correctly corrals
+     * since those remain a different window type.
+     */
+    private fun isShadeOrStatusBarWindow(node: AccessibilityNodeInfo?): Boolean =
+        runCatching { node?.window?.type == AccessibilityWindowInfo.TYPE_SYSTEM }.getOrDefault(false)
 
     /**
      * True if [event] belongs to the on-screen keyboard's own window
