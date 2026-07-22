@@ -562,6 +562,32 @@ private fun PremiumTimePickerDialog(
 
 // ── Small pure helpers ─────────────────────────────────────────────────────
 
+// Its own copies, `private` (file-scoped) rather than sharing
+// LockdownSchedulesScreen.kt's — that file's DAY_LABELS/DAY_ORDER/
+// repeatSummary() are also file-private, matching the same "each screen
+// keeps its own small copy" pattern StrictAlarmEditScreen.kt and
+// StrictAlarmListScreen.kt already use for the identical thing.
+private val DAY_LABELS = mapOf(
+    Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
+    Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
+    Calendar.SUNDAY to "Sun"
+)
+private val DAY_ORDER = listOf(
+    Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY,
+    Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
+)
+
+/** Same wording as the list screen's own repeatSummary() — "Weekdays" / "Weekends" / "Every day" / specific days / "Never". */
+private fun repeatSummary(daysOfWeek: Set<Int>): String {
+    if (daysOfWeek.isEmpty()) return "Never"
+    if (daysOfWeek.size == 7) return "Every day"
+    val weekdays = setOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY)
+    val weekend = setOf(Calendar.SATURDAY, Calendar.SUNDAY)
+    if (daysOfWeek == weekdays) return "Weekdays"
+    if (daysOfWeek == weekend) return "Weekends"
+    return daysOfWeek.sortedBy { DAY_ORDER.indexOf(it) }.mapNotNull { DAY_LABELS[it] }.joinToString(" \u00B7 ")
+}
+
 /**
  * Minutes between [start] and [end] on a 24-hour clock, wrapping past
  * midnight when [end] is earlier than [start] (e.g. 11:00 PM \u2192 7:00 AM
