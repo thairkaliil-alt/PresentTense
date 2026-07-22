@@ -860,7 +860,28 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         lastStuckSurfaceNudgeAtMillis = now
         ioScope.launch {
             delay(STUCK_SURFACE_NUDGE_DELAY_MS)
-            runCatching { performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }
+            // BUGFIX ("whitelisted app closes itself right after opening it —
+            // repeatedly — right after backing out of another whitelisted app
+            // during lockdown"): this nudge is armed the moment the lockdown
+            // screen lands on Home/Recents/System UI, but doesn't actually
+            // fire until STUCK_SURFACE_NUDGE_DELAY_MS later. If the user taps
+            // a whitelisted app from the lockdown screen during that gap, the
+            // overlay comes down for real (see LockdownOverlay.hide inside
+            // launchApp) and the just-opened app is now what's on screen.
+            // This delayed Back press used to fire completely blind to that —
+            // landing on the freshly-opened app instead of the stuck
+            // Overview/Home screen it was meant for, and closing it right
+            // back out. That re-triggers the lockdown screen, which can arm
+            // this same timer again, so it could repeat on every retry.
+            //
+            // Checking isShowing again right before firing (not just when
+            // this was scheduled) means the nudge only ever acts while the
+            // lockdown screen is still genuinely what's covering the
+            // display. If the user has since moved on to a real app, this
+            // quietly does nothing instead of reaching out and closing it.
+            if (LockdownOverlay.isShowing) {
+                runCatching { performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }
+            }
         }
     }
 
