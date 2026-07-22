@@ -1,6 +1,5 @@
 package com.allinone.blocker.ui
 
-import android.app.TimePickerDialog
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -13,8 +12,6 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -37,12 +34,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -80,6 +74,7 @@ import com.allinone.blocker.data.LockdownSchedule
 import com.allinone.blocker.data.StrictModeGate
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.ReorderableColumn
+import com.allinone.blocker.ui.motion.ScreenPush
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
@@ -98,8 +93,9 @@ import kotlinx.coroutines.launch
 // The dedicated schedules manager — reached via the schedule icon in the
 // Lockdown screen's top bar. Everything about recurring "lock every night
 // 11pm–7am"-style rules lives here: the list of schedules, the empty-state
-// hint, and the add/edit dialog, all relocated from the old decluttered
-// Lockdown screen without any behavior changes.
+// hint, and (in LockdownScheduleEditScreen.kt) the add/edit screen, all
+// relocated from the old decluttered Lockdown screen without any behavior
+// changes.
 //
 // The card list below deliberately reuses the exact same drag-to-reorder +
 // swipe-to-reveal-delete interaction built for the Strict Alarms list
@@ -114,16 +110,28 @@ import kotlinx.coroutines.launch
 // but a lockdown schedule is a different kind of thing, and there was never
 // an intentional decision to gate schedules on it too. Each LockdownSchedule
 // now carries its own strictModeProtected flag (default off, set via the
-// "Protect with Strict Mode" toggle in ScheduleEditDialog below) — only a
-// schedule that opts in routes its disable/delete through StrictModeGate.
+// "Protect with Strict Mode" toggle in StrictModeProtectionToggle below) —
+// only a schedule that opts in routes its disable/delete through
+// StrictModeGate.
+//
+// REDESIGN: the add/edit experience used to be a plain AlertDialog
+// (ScheduleEditDialog) — a cramped popup with a native, unthemed
+// TimePickerDialog and a row of boxy FilterChips. It's been replaced by a
+// dedicated full-screen ScheduleEditScreen (see LockdownScheduleEditScreen.kt)
+// pushed in with the same ScreenPush transition every other stacked
+// sub-screen in the app uses (Settings, Strict Alarms, …), so schedules get
+// real room to breathe and read as a first-class screen instead of a popup.
+// DAY_LABELS, DAY_ORDER, repeatSummary() and StrictModeProtectionToggle below
+// are `internal` (not `private`) specifically so that new file can reuse
+// them instead of duplicating this logic.
 // ════════════════════════════════════════════════════════════════════════════
 
-private val DAY_LABELS = mapOf(
+internal val DAY_LABELS = mapOf(
     Calendar.MONDAY to "Mon", Calendar.TUESDAY to "Tue", Calendar.WEDNESDAY to "Wed",
     Calendar.THURSDAY to "Thu", Calendar.FRIDAY to "Fri", Calendar.SATURDAY to "Sat",
     Calendar.SUNDAY to "Sun"
 )
-private val DAY_ORDER = listOf(
+internal val DAY_ORDER = listOf(
     Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY,
     Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
 )
@@ -139,7 +147,7 @@ private sealed class PendingImmediateStart {
     data class Toggle(val schedule: LockdownSchedule) : PendingImmediateStart()
 }
 
-// BUGFIX: ScheduleEditDialog's Save button, and ScheduleCard's off→on toggle,
+// BUGFIX: ScheduleEditScreen's Save button, and ScheduleCard's off→on toggle,
 // used to call addSchedule()/updateSchedule() immediately with zero
 // confirmation. Because LockdownEngine.evaluate() treats "is the current
 // moment inside this schedule's window" as "lockdown is active right now",
@@ -263,7 +271,7 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                             },
                             onToggle = { checked ->
                                 // Only a schedule with its own "Protect with Strict
-                                // Mode" toggle on (see ScheduleEditDialog) has to pass
+                                // Mode" toggle on (see ScheduleEditScreen) has to pass
                                 // the Strict Mode challenge to be turned off. This
                                 // used to run through StrictModeGate for EVERY
                                 // schedule any time Strict Mode was on globally —
@@ -289,7 +297,7 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                                 //
                                 // The delete itself only additionally routes through
                                 // StrictModeGate when THIS schedule has "Protect with
-                                // Strict Mode" turned on (see ScheduleEditDialog) —
+                                // Strict Mode" turned on (see ScheduleEditScreen) —
                                 // not for every schedule whenever Strict Mode happens
                                 // to be on globally. See the matching comment on
                                 // onToggle above for why.
@@ -316,28 +324,38 @@ fun LockdownSchedulesScreen(onBack: () -> Unit) {
                 }
             }
         }
-    }
 
-    showAddSchedule?.let { editing ->
-        ScheduleEditDialog(
-            schedule  = editing,
-            onDismiss = { showAddSchedule = null },
-            onSave    = { saved ->
-                // Checked "as if enabled = true" regardless of the schedule's
-                // actual saved enabled state — see the kdoc on
-                // LockdownEngine.wouldBeActiveNow() for why.
-                if (LockdownEngine.wouldBeActiveNow(saved.copy(enabled = true))) {
-                    pendingImmediateStart = PendingImmediateStart.Save(saved)
-                } else {
-                    commitScheduleSave(saved)
-                    showAddSchedule = null
-                }
+        // ── Full-screen schedule editor ─────────────────────────────────────
+        // A second child of this same Box, drawn — and so stacked visually —
+        // on top of the Scaffold above. ScreenPush gives it the same
+        // directional "push deeper into the app" slide+fade every other
+        // stacked sub-screen uses (see ScreenTransition.kt), replacing the
+        // old ScheduleEditDialog AlertDialog. See LockdownScheduleEditScreen.kt
+        // for the full redesign.
+        ScreenPush(targetState = showAddSchedule) { editing ->
+            if (editing != null) {
+                ScheduleEditScreen(
+                    schedule  = editing,
+                    isNew     = schedules.none { it.id == editing.id },
+                    onDismiss = { showAddSchedule = null },
+                    onSave    = { saved ->
+                        // Checked "as if enabled = true" regardless of the
+                        // schedule's actual saved enabled state — see the
+                        // kdoc on LockdownEngine.wouldBeActiveNow() for why.
+                        if (LockdownEngine.wouldBeActiveNow(saved.copy(enabled = true))) {
+                            pendingImmediateStart = PendingImmediateStart.Save(saved)
+                        } else {
+                            commitScheduleSave(saved)
+                            showAddSchedule = null
+                        }
+                    }
+                )
             }
-        )
+        }
     }
 
     // The confirmation dialog itself. Cancel leaves everything untouched —
-    // for a Save, that means the ScheduleEditDialog above (still open,
+    // for a Save, that means the ScheduleEditScreen above (still open,
     // since we never called showAddSchedule = null for this path) simply
     // reappears with nothing changed; for a Toggle, the switch just stays
     // off since updateSchedule() was never called.
@@ -684,7 +702,9 @@ private fun ScheduleCard(
     }
 }
 
-private fun repeatSummary(daysOfWeek: Set<Int>): String {
+// `internal` (not `private`) so LockdownScheduleEditScreen.kt's live summary
+// line uses this exact same wording instead of a second, possibly-drifting copy.
+internal fun repeatSummary(daysOfWeek: Set<Int>): String {
     if (daysOfWeek.isEmpty()) return "Never"
     if (daysOfWeek.size == 7) return "Every day"
     val weekdays = setOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY)
@@ -694,51 +714,6 @@ private fun repeatSummary(daysOfWeek: Set<Int>): String {
     return daysOfWeek.sortedBy { DAY_ORDER.indexOf(it) }.mapNotNull { DAY_LABELS[it] }.joinToString(" \u00B7 ")
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-private fun ScheduleEditDialog(schedule: LockdownSchedule, onDismiss: () -> Unit, onSave: (LockdownSchedule) -> Unit) {
-    val context = LocalContext.current
-    var label by remember { mutableStateOf(schedule.label) }
-    var start by remember { mutableStateOf(schedule.startMinutes) }
-    var end   by remember { mutableStateOf(schedule.endMinutes) }
-    var days  by remember { mutableStateOf(schedule.daysOfWeek) }
-    var strictModeProtected by remember { mutableStateOf(schedule.strictModeProtected) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title            = { Text("Lockdown schedule") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = label, onValueChange = { label = it }, label = { Text("Name (optional)") }, singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { pickTime(context, start) { start = it } }) { Text("From ${BlockEngine.formatMinutes(start)}") }
-                    OutlinedButton(onClick = { pickTime(context, end)   { end   = it } }) { Text("To ${BlockEngine.formatMinutes(end)}") }
-                }
-                Text("Active on:", style = MaterialTheme.typography.bodySmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DAY_ORDER.forEach { day ->
-                        FilterChip(
-                            selected = day in days,
-                            onClick  = { days = if (day in days) days - day else days + day },
-                            label    = { Text(DAY_LABELS[day] ?: "") }
-                        )
-                    }
-                }
-                StrictModeProtectionToggle(
-                    checked         = strictModeProtected,
-                    onCheckedChange = { strictModeProtected = it }
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                onSave(schedule.copy(label = label, startMinutes = start, endMinutes = end, daysOfWeek = days, strictModeProtected = strictModeProtected))
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
 // ── "Protect with Strict Mode" toggle ──────────────────────────────────────
 // Opt-in, per schedule — this is what decides whether THIS schedule's
 // disable/delete actions route through StrictModeGate (see the onToggle and
@@ -746,8 +721,10 @@ private fun ScheduleEditDialog(schedule: LockdownSchedule, onDismiss: () -> Unit
 // directly from StrictModeSettingsScreen's own MasterToggleCard — same
 // Shield glyph, same AccentBlue — so Strict Mode reads as one consistent
 // feature across the app instead of two different-looking implementations.
+// `internal` (not `private`) so LockdownScheduleEditScreen.kt's full-screen
+// editor can reuse this exact composable instead of a second copy.
 @Composable
-private fun StrictModeProtectionToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+internal fun StrictModeProtectionToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -798,8 +775,4 @@ private fun StrictModeProtectionToggle(checked: Boolean, onCheckedChange: (Boole
             )
         )
     }
-}
-
-private fun pickTime(context: android.content.Context, currentMinutes: Int, onPicked: (Int) -> Unit) {
-    TimePickerDialog(context, { _, h, m -> onPicked(h * 60 + m) }, currentMinutes / 60, currentMinutes % 60, false).show()
 }
