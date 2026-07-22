@@ -61,7 +61,7 @@ object LockdownEngine {
                 // marker or resets breaks.
                 if (!BlockerRepository.isScheduleOccurrenceCancelled(s.id, startedAtMillis)) {
                     BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
-                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id)
+                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id, nowMillis)
                     if (breakUntilMillis > nowMillis) {
                         return LockdownDecision(
                             active = false,
@@ -85,7 +85,7 @@ object LockdownEngine {
                 // Same cancelled-occurrence check as the branch above.
                 if (!BlockerRepository.isScheduleOccurrenceCancelled(s.id, startedAtMillis)) {
                     BlockerRepository.maybeResetBreaksForScheduledSession(endMillis)
-                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id)
+                    LockdownCompletionRepository.maybeMarkScheduledSessionStarted(startedAtMillis, endMillis, s.label, s.id, nowMillis)
                     if (breakUntilMillis > nowMillis) {
                         return LockdownDecision(
                             active = false,
