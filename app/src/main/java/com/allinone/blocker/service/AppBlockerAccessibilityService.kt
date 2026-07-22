@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
+import com.allinone.blocker.data.BlockDecision
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
@@ -320,10 +321,27 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             if (pkg in UrlExtractor.BROWSER_PACKAGES) {
                 handleBrowserContentChanged(pkg)
             }
+            // BUGFIX (Reels kill switch bypassing a full app block): check the
+            // app's own block rules FIRST — see evaluateAppBlock's doc for why.
+            // If the app is already fully blocked, its block overlay is already
+            // showing (from the WINDOW_STATE_CHANGED event that opened it) —
+            // leave it alone and don't let Reels detection below touch it.
+            // Without this check, a stray CONTENT_CHANGED event (these fire
+            // constantly — autoplay, feed refreshes — even while our overlay
+            // visually covers the app) could reach handleReelsContentChanged,
+            // decide "not currently on the Reels tab", and HIDE the full-block
+            // overlay it has no business touching — silently unblocking a
+            // fully-blocked app the moment anything changed on screen.
+            if (evaluateAppBlock(pkg)?.blocked == true) {
+                return
+            }
             // ── Reels content-change detection ───────────────────────────────
             // When the user is already inside a reels-capable app and swipes
             // to the Reels tab (or away from it), we get CONTENT_CHANGED events
-            // but NOT a WINDOW_STATE_CHANGED. So we must handle it here.
+            // but NOT a WINDOW_STATE_CHANGED. So we must handle it here. Only
+            // reached once we know the app itself isn't fully blocked, so this
+            // can only ever ADD a narrower block for the Reels/Shorts screen —
+            // never remove the app's own block.
             if (BlockerRepository.reelsKillSwitch.value && InstalledApps.isReelsCapable(pkg)) {
                 handleReelsContentChanged(pkg)
             }
@@ -353,47 +371,80 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             handleBrowserContentChanged(pkg)
         }
 
+        // BUGFIX (Reels kill switch bypassing a full app block): the app's
+        // own block rules (Blocked Apps entry, schedule, daily limit,
+        // cooldown, session limit) must always get first say — checked here
+        // BEFORE any Reels/Shorts-specific logic runs. Previously this
+        // checked the Reels kill switch FIRST and returned immediately for
+        // any reels-capable app (Instagram, TikTok, YouTube, Facebook,
+        // Snapchat), which meant a fully-blocked app became fully reachable
+        // — just not the Reels/Shorts tab specifically — the instant the
+        // kill switch was toggled on. The kill switch is meant to be a
+        // narrower, ADDITIONAL restriction that applies inside an app that's
+        // otherwise allowed; it must never loosen a full app block.
+        val app = BlockerRepository.appFor(pkg)
+        if (app != null) {
+            if (overlay.isShowing.not()) {
+                BlockerRepository.recordOpen(pkg)
+            }
+
+            val decision = BlockEngine.evaluate(
+                context = this,
+                app = app,
+                sessionStart = sessionStart
+            )
+
+            if (decision.blocked) {
+                ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
+                overlay.show(
+                    packageName = pkg,
+                    appName = app.appName,
+                    reason = decision.reason,
+                    motivation = MOTIVATION,
+                    isLockdown = false
+                )
+                lastOverlayShouldShow = true
+                return
+            }
+
+            BlockerRepository.recordUse(pkg, System.currentTimeMillis())
+        }
+
         // ── Reels / Shorts kill switch ────────────────────────────────────────
-        // Only block if the user is actually ON the Reels/Shorts screen,
-        // not just because they opened Instagram or YouTube.
-        // TikTok is always blocked (entire app is short-form).
+        // Only reached once we know the app itself isn't fully blocked (or has
+        // no block rule at all), so this can only ever ADD a narrower block for
+        // the Reels/Shorts screen — it can no longer be used as a way around a
+        // full app block. Only blocks if the user is actually ON the
+        // Reels/Shorts screen, not just because they opened Instagram or
+        // YouTube. TikTok is always blocked (entire app is short-form).
         if (BlockerRepository.reelsKillSwitch.value && InstalledApps.isReelsCapable(pkg)) {
             handleReelsContentChanged(pkg)
             return
         }
 
-        val app = BlockerRepository.appFor(pkg)
-        if (app == null) {
-            overlay.hide()
-            lastOverlayShouldShow = false
-            return
-        }
+        overlay.hide()
+        lastOverlayShouldShow = false
+    }
 
-        if (overlay.isShowing.not()) {
-            BlockerRepository.recordOpen(pkg)
-        }
-
-        val decision = BlockEngine.evaluate(
+    /**
+     * Evaluates [pkg] against its own ordinary block rules (Blocked Apps
+     * entry, schedule, daily limit, cooldown, session limit, etc.) — the
+     * exact same decision the block overlay is normally driven by. Returns
+     * null when there's no rule for [pkg] at all (nothing to evaluate).
+     *
+     * This is checked, and acted on, in BOTH places Reels/Shorts detection
+     * can run from (the main event path and the content-changed path) —
+     * always before that Reels-specific logic gets a turn. See the BUGFIX
+     * notes at both call sites for the bug this prevents: the Reels kill
+     * switch silently unblocking an otherwise fully-blocked app.
+     */
+    private fun evaluateAppBlock(pkg: String): BlockDecision? {
+        val app = BlockerRepository.appFor(pkg) ?: return null
+        return BlockEngine.evaluate(
             context = this,
             app = app,
             sessionStart = sessionStart
         )
-
-        if (decision.blocked) {
-            ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
-            overlay.show(
-                packageName = pkg,
-                appName = app.appName,
-                reason = decision.reason,
-                motivation = MOTIVATION,
-                isLockdown = false
-            )
-            lastOverlayShouldShow = true
-        } else {
-            overlay.hide()
-            lastOverlayShouldShow = false
-            BlockerRepository.recordUse(pkg, System.currentTimeMillis())
-        }
     }
 
     /**
