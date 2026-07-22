@@ -126,7 +126,22 @@ object LockdownCompletionRepository {
         val sessionKind: SessionKind,
         val reasonLabel: String,
         /** The [LockdownSchedule.id] this occurrence came from, or null for a MANUAL session. Lets the grace-period cancel (see [LockdownGracePeriod]) know exactly which schedule's occurrence to suppress, without recomputing which schedule "must have" produced this marker. */
-        val scheduleId: String? = null
+        val scheduleId: String? = null,
+        /**
+         * The real wall-clock moment THIS app process first became aware of this
+         * session — as opposed to [startedAtMillis], which for a SCHEDULED session
+         * is the schedule's own start-of-window time and can already be in the past
+         * the moment this marker is first created (e.g. a schedule whose window
+         * happens to already cover "now" the instant it's saved/enabled, or a
+         * session only picked up late after the phone was asleep). [startedAtMillis]
+         * has to stay exactly what it is for [plannedMinutes] and the cancelled-
+         * occurrence keying (see [BlockerRepository.markScheduleOccurrenceCancelled])
+         * to keep working — this field exists purely so [LockdownGracePeriod] has an
+         * honest "when did the safety net actually begin counting down" anchor
+         * instead of borrowing a timestamp that means something else. For a MANUAL
+         * session the two are always identical (see [markManualSessionStarted]).
+         */
+        val firstObservedAtMillis: Long = startedAtMillis
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("startedAtMillis", startedAtMillis)
@@ -135,18 +150,26 @@ object LockdownCompletionRepository {
             put("sessionKind", sessionKind.name)
             put("reasonLabel", reasonLabel)
             put("scheduleId", scheduleId ?: JSONObject.NULL)
+            put("firstObservedAtMillis", firstObservedAtMillis)
         }
 
         companion object {
-            fun fromJson(o: JSONObject): OngoingSessionMarker = OngoingSessionMarker(
-                startedAtMillis = o.optLong("startedAtMillis", 0L),
-                plannedEndAtMillis = o.optLong("plannedEndAtMillis", 0L),
-                plannedMinutes = o.optInt("plannedMinutes", 0),
-                sessionKind = runCatching { SessionKind.valueOf(o.getString("sessionKind")) }
-                    .getOrDefault(SessionKind.MANUAL),
-                reasonLabel = o.optString("reasonLabel", "Lockdown"),
-                scheduleId = if (o.isNull("scheduleId")) null else o.optString("scheduleId", null)
-            )
+            fun fromJson(o: JSONObject): OngoingSessionMarker {
+                val startedAtMillis = o.optLong("startedAtMillis", 0L)
+                return OngoingSessionMarker(
+                    startedAtMillis = startedAtMillis,
+                    plannedEndAtMillis = o.optLong("plannedEndAtMillis", 0L),
+                    plannedMinutes = o.optInt("plannedMinutes", 0),
+                    sessionKind = runCatching { SessionKind.valueOf(o.getString("sessionKind")) }
+                        .getOrDefault(SessionKind.MANUAL),
+                    reasonLabel = o.optString("reasonLabel", "Lockdown"),
+                    scheduleId = if (o.isNull("scheduleId")) null else o.optString("scheduleId", null),
+                    // Falls back to startedAtMillis for a marker persisted by an older
+                    // build that predates this field, which just resumes the old
+                    // (buggy) behavior for that one in-flight session instead of crashing.
+                    firstObservedAtMillis = o.optLong("firstObservedAtMillis", startedAtMillis)
+                )
+            }
         }
     }
 
@@ -163,18 +186,29 @@ object LockdownCompletionRepository {
     data class OngoingSessionSnapshot(
         val startedAtMillis: Long,
         val sessionKind: SessionKind,
-        val scheduleId: String?
+        val scheduleId: String?,
+        /** See [OngoingSessionMarker.firstObservedAtMillis]. */
+        val firstObservedAtMillis: Long
     )
 
     /** See [OngoingSessionSnapshot]. Null if no session is currently being tracked. */
     fun currentOngoingSession(): OngoingSessionSnapshot? {
         if (!initialized) return null
         val m = loadOngoingMarker() ?: return null
-        return OngoingSessionSnapshot(m.startedAtMillis, m.sessionKind, m.scheduleId)
+        return OngoingSessionSnapshot(m.startedAtMillis, m.sessionKind, m.scheduleId, m.firstObservedAtMillis)
     }
 
     /** Convenience accessor for just the start time of whatever session is currently being tracked — see [currentOngoingSession]. */
     fun currentSessionStartedAtMillis(): Long? = currentOngoingSession()?.startedAtMillis
+
+    /**
+     * Convenience accessor for [OngoingSessionMarker.firstObservedAtMillis] —
+     * i.e. when the app actually first noticed the currently-tracked session,
+     * which is what [LockdownGracePeriod] anchors its safety-net countdown to.
+     * Deliberately separate from [currentSessionStartedAtMillis]; see that
+     * field's kdoc for why the two aren't the same thing.
+     */
+    fun currentSessionFirstObservedAtMillis(): Long? = currentOngoingSession()?.firstObservedAtMillis
 
     private lateinit var prefs: SharedPreferences
     @Volatile private var initialized = false
@@ -225,7 +259,12 @@ object LockdownCompletionRepository {
                 plannedEndAtMillis = if (indefinite) Long.MAX_VALUE else startedAtMillis + plannedMinutes * 60_000L,
                 plannedMinutes = if (indefinite) -1 else plannedMinutes,
                 sessionKind = SessionKind.MANUAL,
-                reasonLabel = "Manual lockdown"
+                reasonLabel = "Manual lockdown",
+                // A manual session is always started by a real, in-the-moment tap —
+                // startedAtMillis already IS "now" here, so this is just that same
+                // value again (see firstObservedAtMillis's kdoc for why the two
+                // fields exist separately at all).
+                firstObservedAtMillis = startedAtMillis
             )
         )
     }
@@ -242,7 +281,13 @@ object LockdownCompletionRepository {
      * schedule count each day's occurrence as its own completed session instead of one
      * continuous blob.
      */
-    fun maybeMarkScheduledSessionStarted(startedAtMillis: Long, plannedEndAtMillis: Long, label: String, scheduleId: String) {
+    fun maybeMarkScheduledSessionStarted(
+        startedAtMillis: Long,
+        plannedEndAtMillis: Long,
+        label: String,
+        scheduleId: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ) {
         if (!initialized) return
         val current = loadOngoingMarker()
         if (current != null && current.sessionKind == SessionKind.SCHEDULED && current.plannedEndAtMillis == plannedEndAtMillis) {
@@ -257,7 +302,19 @@ object LockdownCompletionRepository {
                 plannedMinutes = plannedMinutes,
                 sessionKind = SessionKind.SCHEDULED,
                 reasonLabel = label.ifBlank { "Scheduled lockdown" },
-                scheduleId = scheduleId
+                scheduleId = scheduleId,
+                // BUGFIX: this is the one place a SCHEDULED session's marker gets
+                // created, and startedAtMillis here is the schedule's own
+                // start-of-window time — which, unlike a manual session's, can
+                // already be minutes (or more) in the past by the time this line
+                // actually runs (a schedule saved/enabled while its window already
+                // covers right now; a window only picked up late after the phone
+                // was asleep). Recording nowMillis here — the real moment this
+                // occurrence was first noticed — instead of reusing startedAtMillis
+                // is what makes LockdownGracePeriod's 1-minute safety net always
+                // start counting down from the moment the session actually begins
+                // being enforced, instead of sometimes starting pre-expired.
+                firstObservedAtMillis = nowMillis
             )
         )
     }
