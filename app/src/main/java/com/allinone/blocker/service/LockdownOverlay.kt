@@ -3,6 +3,7 @@ package com.allinone.blocker.service
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -343,6 +344,25 @@ object LockdownOverlay {
                 params.layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
+
+            // BUGFIX ("stuck sideways" overlay): this window has no Activity, so
+            // nothing was ever telling the phone which way it should face. If a
+            // whitelisted app (e.g. a video app) was rotated to landscape to
+            // watch a video, its Activity underneath is still alive and still
+            // silently asking the phone to stay landscape even after this
+            // overlay pops back on top of it (e.g. because the person poked at
+            // Settings or wandered somewhere off the whitelist). Since our
+            // overlay never stated an opinion, the phone just kept honoring the
+            // hidden app's landscape request — that's why the lockdown screen
+            // came back sideways and stayed that way until the phone was
+            // physically turned back by hand.
+            //
+            // Setting screenOrientation here makes THIS window's request
+            // ("I want portrait") win the instant it's shown, regardless of
+            // what the app underneath wants — so the phone snaps back to
+            // upright on its own, every single time the lockdown screen
+            // reappears, with no manual flipping needed.
+            params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 
             runCatching { windowManager.addView(rootView, params) }
                 .onSuccess { lifecycleRegistry.currentState = Lifecycle.State.RESUMED }
