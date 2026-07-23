@@ -54,7 +54,6 @@ import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.ui.motion.AnimatedAppearance
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.theme.AccentAmber
-import com.allinone.blocker.ui.theme.AccentBlue
 import com.allinone.blocker.ui.theme.AccentPurple
 import com.allinone.blocker.ui.theme.AccentPurpleSoft
 import com.allinone.blocker.ui.theme.BgDarkest
@@ -72,16 +71,42 @@ import java.util.Locale
 // A full sleep cycle averages ~90 minutes. Waking at the end of a cycle (rather
 // than mid-cycle) is what leaves you feeling refreshed instead of groggy. We add
 // a 15-minute buffer for the time it takes the average person to actually fall
-// asleep, and offer a 25-minute "power nap" as the shortest option.
+// asleep, and offer a 25-minute "power nap" as a separate, secondary option.
+//
+// We only show 3-6 cycles (4.5-9 hours) in the list, and only ever badge ONE
+// option "Recommended" (5 cycles / 7.5 hours). The old version showed up to 8
+// options with two different "recommended" badges — more choices make people
+// slower and less confident to decide (this is "Hick's Law" in UX research),
+// so the list is deliberately short and has one clear best answer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 private const val CYCLE_MINUTES = 90
 private const val FALL_ASLEEP_MINUTES = 15
 private const val NAP_MINUTES = 25
-/** Quick "bed now" alarm offset — 7 hours 40 minutes from tap time. */
-private const val BED_NOW_ALARM_MINUTES = 7 * 60 + 40
+private const val MIN_CYCLES = 3
+private const val MAX_CYCLES = 6
+private const val RECOMMENDED_CYCLES = 5
 
-private enum class CalcMode { WAKE_AT, SLEEP_AT }
+// ─────────────────────────────────────────────────────────────────────────────
+// WHICH TIME THE USER IS PROVIDING
+//
+// Named after the INPUT, not the result — mixing those two up (labeling a mode
+// by its answer instead of its question) is exactly what made the old version
+// show correct numbers under swapped headings. Keep this pairing in mind when
+// editing anything below:
+//
+//   SleepInput.BEDTIME       "I'm going to bed at ___ (or right now)."
+//                             -> shows RECOMMENDED WAKE-UP TIMES, each with a
+//                                "Set alarm" button, since these map to a
+//                                real alarm.
+//
+//   SleepInput.WAKE_UP_TIME  "I need to wake up at ___."
+//                             -> shows RECOMMENDED BEDTIMES. No alarm button
+//                                here — a bedtime isn't an alarm.
+//
+// The input you collect always produces the OTHER kind of time as the result.
+// ─────────────────────────────────────────────────────────────────────────────
+private enum class SleepInput { BEDTIME, WAKE_UP_TIME }
 
 /** A single recommended time the calculator produces. */
 private data class SleepOption(
@@ -107,7 +132,8 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
     val seedAlarm = remember(allAlarms) {
         allAlarms.filter { it.enabled }.minByOrNull { it.hour * 60 + it.minute }
             ?: allAlarms.firstOrNull()
-?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(BlockerRepository.nextAlarmRequestCode())    }
+            ?: com.allinone.blocker.data.StrictAlarmEntry.newDefault(BlockerRepository.nextAlarmRequestCode())
+    }
 
     fun saveAlarm(updated: com.allinone.blocker.data.StrictAlarmEntry) {
         if (allAlarms.any { it.id == updated.id }) {
@@ -118,13 +144,16 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
         AlarmScheduler.schedule(context, updated)
     }
 
-    var mode by remember { mutableStateOf(CalcMode.WAKE_AT) }
+    // Default to BEDTIME: opening the calculator immediately shows wake-up
+    // suggestions for "right now" — the single most common reason someone
+    // opens a sleep calculator — with zero typing needed to get an answer.
+    var sleepInput by remember { mutableStateOf(SleepInput.BEDTIME) }
 
-    // Wake-at target — seeded from the seed alarm's time.
+    // Wake-up-time input — seeded from the seed alarm's time.
     var wakeHour by remember { mutableIntStateOf(seedAlarm.hour) }
     var wakeMinute by remember { mutableIntStateOf(seedAlarm.minute) }
 
-    // Sleep-at base — seeded to "now".
+    // Bedtime input — seeded to "now".
     val nowCal = remember { Calendar.getInstance() }
     var bedHour by remember { mutableIntStateOf(nowCal.get(Calendar.HOUR_OF_DAY)) }
     var bedMinute by remember { mutableIntStateOf(nowCal.get(Calendar.MINUTE)) }
@@ -150,34 +179,15 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AnimatedAppearance {
-                ModeSwitch(mode = mode, onModeChange = { mode = it })
+                ModeSwitch(sleepInput = sleepInput, onChange = { sleepInput = it })
             }
 
             AnimatedAppearance(delayMs = 40) {
-                if (mode == CalcMode.WAKE_AT) {
-                    BedNowCard(
-                        onNowClick = {
-                            val cal = Calendar.getInstance().apply {
-                                add(Calendar.MINUTE, BED_NOW_ALARM_MINUTES)
-                            }
-                            val updated = seedAlarm.copy(
-                                enabled = true,
-                                hour = cal.get(Calendar.HOUR_OF_DAY),
-                                minute = cal.get(Calendar.MINUTE)
-                            )
-                            saveAlarm(updated)
-                            Toast.makeText(
-                                context,
-                                "Alarm set for ${formatClock(updated.hour, updated.minute)}",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    )
-                } else {
-                    TimeSelectCard(
+                when (sleepInput) {
+                    SleepInput.BEDTIME -> TimeInputCard(
                         accent = AccentPurple,
                         icon = Icons.Filled.Bedtime,
-                        caption = "When to go to bed",
+                        caption = "I'm going to bed at",
                         hour = bedHour,
                         minute = bedMinute,
                         trailing = {
@@ -195,18 +205,33 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
                             ).show()
                         }
                     )
+                    SleepInput.WAKE_UP_TIME -> TimeInputCard(
+                        accent = AccentAmber,
+                        icon = Icons.Filled.LightMode,
+                        caption = "I need to wake up at",
+                        hour = wakeHour,
+                        minute = wakeMinute,
+                        trailing = null,
+                        onClick = {
+                            TimePickerDialog(
+                                context,
+                                { _, h, m -> wakeHour = h; wakeMinute = m },
+                                wakeHour, wakeMinute, false
+                            ).show()
+                        }
+                    )
                 }
             }
 
-            val options = remember(mode, wakeHour, wakeMinute, bedHour, bedMinute) {
-                if (mode == CalcMode.WAKE_AT) bedtimeOptions(wakeHour, wakeMinute)
-                else wakeOptions(bedHour, bedMinute)
+            val options = remember(sleepInput, wakeHour, wakeMinute, bedHour, bedMinute) {
+                if (sleepInput == SleepInput.BEDTIME) wakeUpOptions(bedHour, bedMinute)
+                else bedtimeOptions(wakeHour, wakeMinute)
             }
 
             AnimatedAppearance(delayMs = 80) {
                 Text(
-                  text = if (mode == CalcMode.WAKE_AT)
-                        "Best times to wake up" else "Best times to fall asleep",
+                    text = if (sleepInput == SleepInput.BEDTIME)
+                        "Recommended wake-up times" else "Recommended bedtimes",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -214,23 +239,32 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
 
             AnimatedAppearance(delayMs = 100) {
                 Text(
-                    text = if (mode == CalcMode.WAKE_AT)
-                        "Each time below lands at the end of a full cycle, so you wake up clear-headed."
+                    text = if (sleepInput == SleepInput.BEDTIME)
+                        "Each one lands at the end of a full cycle, so you wake up clear-headed instead of groggy."
                     else
-                        "Pick a time that gives you complete sleep cycles. More cycles, more rest.",
+                        "Go to sleep at one of these times to get complete cycles before you wake up.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
             }
-Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 options.forEachIndexed { index, option ->
-                if (index == 1) {
-                    Spacer(Modifier.height(12.dp))
-                }
+                    if (index == 1) {
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    if (option.isNap) {
+                        Text(
+                            "Just need a nap?",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextTertiary,
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp)
+                        )
+                    }
                     AnimatedAppearance(delayMs = 120 + index * 45) {
                         OptionCard(
                             option = option,
-                            isWakeResult = mode == CalcMode.SLEEP_AT,
+                            isWakeResult = sleepInput == SleepInput.BEDTIME,
                             onSetAlarm = {
                                 val updated = seedAlarm.copy(
                                     enabled = true,
@@ -251,8 +285,8 @@ Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
             AnimatedAppearance(delayMs = 140) {
                 Text(
-                    "Based on 90-minute sleep cycles plus ~15 minutes to fall asleep. " +
-                        "Highlighted times give you the 5–6 cycles most adults need.",
+                    "Based on 90-minute sleep cycles plus about 15 minutes to fall asleep. " +
+                        "The highlighted time gives you 5 full cycles (7.5 hours) — the sweet spot most adults need.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextTertiary
                 )
@@ -268,7 +302,7 @@ Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ModeSwitch(mode: CalcMode, onModeChange: (CalcMode) -> Unit) {
+private fun ModeSwitch(sleepInput: SleepInput, onChange: (SleepInput) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -277,21 +311,21 @@ private fun ModeSwitch(mode: CalcMode, onModeChange: (CalcMode) -> Unit) {
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-      SegmentButton(
-            label = "When to go to bed",
+        SegmentButton(
+            label = "Bedtime",
             icon = Icons.Filled.NightsStay,
-            selected = mode == CalcMode.SLEEP_AT,
+            selected = sleepInput == SleepInput.BEDTIME,
             accent = AccentPurple,
             modifier = Modifier.weight(1f),
-            onClick = { onModeChange(CalcMode.SLEEP_AT) }
+            onClick = { onChange(SleepInput.BEDTIME) }
         )
         SegmentButton(
-            label = "When to wake up",
+            label = "Wake-up time",
             icon = Icons.Filled.LightMode,
-            selected = mode == CalcMode.WAKE_AT,
+            selected = sleepInput == SleepInput.WAKE_UP_TIME,
             accent = AccentAmber,
             modifier = Modifier.weight(1f),
-            onClick = { onModeChange(CalcMode.WAKE_AT) }
+            onClick = { onChange(SleepInput.WAKE_UP_TIME) }
         )
     }
 }
@@ -331,79 +365,12 @@ private fun SegmentButton(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BED NOW CARD (When to wake up tab)
+// TIME INPUT CARD — shared by both modes. Tap it to open a time picker; the
+// "Now" chip (bedtime mode only) jumps it straight to the current time.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun BedNowCard(onNowClick: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(AccentAmber.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.Bedtime,
-                    contentDescription = null,
-                    tint = AccentAmber,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Spacer(Modifier.size(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "I am going to bed now!",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Set alarm after 7.5 hours",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-            NowButton(onClick = onNowClick)
-        }
-    }
-}
-
-@Composable
-private fun NowButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(AccentAmber.copy(alpha = 0.2f))
-            .pressable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp)
-    ) {
-        Text(
-            "Now",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = AccentAmber
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TIME SELECT CARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun TimeSelectCard(
+private fun TimeInputCard(
     accent: Color,
     icon: ImageVector,
     caption: String,
@@ -574,51 +541,43 @@ private fun cycleDurationLabel(cycles: Int): String {
 }
 
 /**
- * Given a target wake time, the recommended bedtimes — most cycles (earliest)
- * first. Cycles 5 and 6 are the sweet spot for most adults.
+ * The shared math behind both modes: MIN_CYCLES..MAX_CYCLES full cycles away
+ * from [baseHour]:[baseMinute], counted backwards (an earlier time) if
+ * [subtractFromBase] is true, or forwards (a later time) otherwise. The
+ * RECOMMENDED_CYCLES option is always returned first.
  */
-private fun bedtimeOptions(wakeHour: Int, wakeMinute: Int): List<SleepOption> {
-    val allCycles = (3..6).map { cycles ->
+private fun cycleOptions(baseHour: Int, baseMinute: Int, subtractFromBase: Boolean): List<SleepOption> {
+    val allCycles = (MIN_CYCLES..MAX_CYCLES).map { cycles ->
         val offset = cycles * CYCLE_MINUTES + FALL_ASLEEP_MINUTES
-        val (h, m) = addMinutes(wakeHour, wakeMinute, -offset)
+        val (h, m) = addMinutes(baseHour, baseMinute, if (subtractFromBase) -offset else offset)
         SleepOption(
             hour = h,
             minute = m,
             cycles = cycles,
             durationLabel = cycleDurationLabel(cycles),
-            recommended = cycles == 5,
+            recommended = cycles == RECOMMENDED_CYCLES,
             isNap = false
         )
     }
-    val fiveCycle = allCycles.first { it.cycles == 5 }
-    val rest = allCycles.filter { it.cycles != 5 }.sortedBy { it.cycles }
-    return listOf(fiveCycle) + rest
+    val recommended = allCycles.first { it.cycles == RECOMMENDED_CYCLES }
+    val rest = allCycles.filter { it.cycles != RECOMMENDED_CYCLES }.sortedBy { it.cycles }
+    return listOf(recommended) + rest
 }
 
+/** Given a target WAKE-UP time, the recommended BEDTIMES that reach it. */
+private fun bedtimeOptions(wakeHour: Int, wakeMinute: Int): List<SleepOption> =
+    cycleOptions(wakeHour, wakeMinute, subtractFromBase = true)
+
 /**
- * Given a bedtime, the times you'd wake at the end of each full cycle (plus a
- * short power nap). Fewest cycles (soonest) first.
+ * Given a BEDTIME, the recommended WAKE-UP times — plus a short power nap,
+ * kept separate at the very end since it isn't a full-cycle recommendation.
  */
-private fun wakeOptions(bedHour: Int, bedMinute: Int): List<SleepOption> {
+private fun wakeUpOptions(bedHour: Int, bedMinute: Int): List<SleepOption> {
     val nap = run {
         val (h, m) = addMinutes(bedHour, bedMinute, NAP_MINUTES)
         SleepOption(h, m, 0, "$NAP_MINUTES-min power nap", recommended = false, isNap = true)
     }
-    val allCycles = (1..7).map { c ->
-        val offset = FALL_ASLEEP_MINUTES + c * CYCLE_MINUTES
-        val (h, m) = addMinutes(bedHour, bedMinute, offset)
-        SleepOption(
-            hour = h,
-            minute = m,
-            cycles = c,
-            durationLabel = cycleDurationLabel(c),
-            recommended = c == 5 || c == 6,
-            isNap = false
-        )
-    }
-    val fiveCycle = allCycles.first { it.cycles == 5 }
-    val rest = allCycles.filter { it.cycles != 5 }.sortedBy { it.cycles } + listOf(nap)
-    return listOf(fiveCycle) + rest
+    return cycleOptions(bedHour, bedMinute, subtractFromBase = false) + listOf(nap)
 }
 
 private fun formatClock(hour: Int, minute: Int): String {
