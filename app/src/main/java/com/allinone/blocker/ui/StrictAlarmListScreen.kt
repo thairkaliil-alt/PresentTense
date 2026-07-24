@@ -73,6 +73,7 @@ import com.allinone.blocker.ui.motion.ReorderableColumn
 import com.allinone.blocker.ui.motion.pressable
 import com.allinone.blocker.ui.motion.rememberHaptics
 import com.allinone.blocker.ui.theme.AccentBlue
+import com.allinone.blocker.ui.theme.AccentPurple
 import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.CardSurface
 import com.allinone.blocker.ui.theme.CardSurfaceAlt
@@ -600,21 +601,38 @@ private fun AlarmCard(
                     )
                 }
 
-                // ── Label pill (only if set) ────────────────────────────────
+                // ── Strict Mode badge + label pill (either/both, only if set) ──
                 // A small rounded tag instead of a bare line of text — reads as
                 // a proper label at a glance, the way a chip does in MD3.
-                if (entry.label.isNotBlank()) {
+                if (entry.label.isNotBlank() || entry.strictModeEnabled) {
                     Spacer(Modifier.height(10.dp))
-                    Box(
-                        modifier = Modifier
-                            .background(CardSurfaceAlt, RoundedCornerShape(50))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text  = entry.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = TextSecondary
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (entry.strictModeEnabled) {
+                            Box(
+                                modifier = Modifier
+                                    .background(AccentPurple.copy(alpha = 0.16f), RoundedCornerShape(50))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text  = "🔒 Strict",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = AccentPurple
+                                )
+                            }
+                        }
+                        if (entry.label.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .background(CardSurfaceAlt, RoundedCornerShape(50))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text  = entry.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -640,7 +658,7 @@ private fun EmptyAlarmsState(modifier: Modifier = Modifier, onAddAlarm: () -> Un
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Tap the + button to add your first strict alarm.",
+                "Tap the + button to add your first alarm.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
