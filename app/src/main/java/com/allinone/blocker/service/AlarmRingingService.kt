@@ -26,10 +26,17 @@ class AlarmRingingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         activeInstance = this
-        startForeground(NOTIF_ID, buildNotification())
-        startRinging()
 
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
+
+        // FIX: alarmId now reaches the ring screen. Previously the ring
+        // screen was never told which alarm fired, so it always fell back
+        // to a generic label and — before this update — always ran the
+        // same hard-coded challenge. Now it can look up this exact alarm's
+        // label and its own Strict Mode / snooze settings.
+        startForeground(NOTIF_ID, buildNotification(alarmId))
+        startRinging()
+
         val alarm = BlockerRepository.strictAlarms.value.firstOrNull { it.id == alarmId }
         if (alarm != null) {
             if (alarm.isOneTime) {
@@ -55,6 +62,7 @@ class AlarmRingingService : Service() {
 
         if (screenIsOn && phoneIsUnlocked) {
             val activityIntent = Intent(this, AlarmRingActivity::class.java).apply {
+                putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_NO_USER_ACTION or
@@ -114,13 +122,14 @@ class AlarmRingingService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(alarmId: String?): Notification {
         ensureAlarmChannel()
 
         val fullScreenIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, AlarmRingActivity::class.java).apply {
+                putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
