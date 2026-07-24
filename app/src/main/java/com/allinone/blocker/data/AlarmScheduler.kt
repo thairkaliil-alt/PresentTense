@@ -106,10 +106,68 @@ object AlarmScheduler {
         alarms.forEach { cancel(context, it) }
     }
 
-    /** Cancels the pending alarm for ONE entry. */
+    /** Cancels the pending alarm for ONE entry. Also clears any pending
+     *  Snooze for it, so turning an alarm off (or editing/rescheduling it —
+     *  schedule() calls this first) can never leave a stray snooze ringing
+     *  later on its own. */
     fun cancel(context: Context, alarm: StrictAlarmEntry) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         runCatching { am.cancel(buildPendingIntent(context, alarm)) }
+        cancelSnooze(context, alarm)
+    }
+
+    /**
+     * Schedules ONE extra wake-up [minutesFromNow] minutes from now — this
+     * is what the Snooze button on the ring screen calls. It rings the same
+     * alarm again (same id, same label, same Strict Mode settings if any),
+     * it just doesn't touch the alarm's regular saved time at all.
+     *
+     * Uses its own request-code offset (see [SNOOZE_INTENT_OFFSET]), so a
+     * snooze can never collide with — or accidentally cancel — this alarm's
+     * normal schedule, or any other alarm's snooze.
+     */
+    fun scheduleSnooze(context: Context, alarm: StrictAlarmEntry, minutesFromNow: Int) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val triggerAt = System.currentTimeMillis() + minutesFromNow.coerceAtLeast(1) * 60_000L
+
+        val intent = Intent(context, AlarmTriggerReceiver::class.java).apply {
+            putExtra(EXTRA_ALARM_ID, alarm.id)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            alarm.requestCode + SNOOZE_INTENT_OFFSET,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val showIntent = PendingIntent.getActivity(
+            context,
+            alarm.requestCode + SNOOZE_INTENT_OFFSET + 1,
+            Intent(context, com.allinone.blocker.ui.MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        runCatching {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAt, showIntent), pendingIntent)
+        }
+    }
+
+    /** Cancels a pending snooze for this alarm, if one was scheduled. Safe
+     *  to call even when there wasn't one. */
+    fun cancelSnooze(context: Context, alarm: StrictAlarmEntry) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, AlarmTriggerReceiver::class.java).apply {
+            putExtra(EXTRA_ALARM_ID, alarm.id)
+        }
+        runCatching {
+            am.cancel(
+                PendingIntent.getBroadcast(
+                    context,
+                    alarm.requestCode + SNOOZE_INTENT_OFFSET,
+                    intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+                )
+            )
+        }
     }
 
     /**
@@ -151,4 +209,9 @@ object AlarmScheduler {
     // The show-intent is offset far away from the broadcast intent so they
     // can never share a request code even when requestCode is small (e.g. 1).
     private const val SHOW_INTENT_OFFSET = 200_000
+
+    // Snooze's one-shot extra alarm gets its own offset, far from both the
+    // main request code AND the show-intent offset above, so the regular
+    // schedule, the show-intent, and a snooze can never collide.
+    private const val SNOOZE_INTENT_OFFSET = 400_000
 }
