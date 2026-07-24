@@ -15,6 +15,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timer
@@ -56,15 +58,16 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -75,6 +78,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,13 +125,12 @@ import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.rememberHaptics
-import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentBlue
-import com.allinone.blocker.ui.theme.AccentPurple
-import com.allinone.blocker.ui.theme.AccentRed
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.CardSurface
+import com.allinone.blocker.ui.theme.CardSurfaceAlt
+import com.allinone.blocker.ui.theme.NumeralFontFamily
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
@@ -153,22 +156,22 @@ import kotlin.math.sin
 // distinct *intents* rather than raw numbers.
 
 // Three duration "tiers" — short focus sessions, day-length sessions, and
-// multi-day commitments — each with its own accent color pulled from the
-// app's existing Accent* tokens rather than a new palette:
-//   • AccentPurple is already documented in Theme.kt as "calm, deep work,
-//     focus" — a direct match for short focus sessions.
-//   • AccentAmber is already documented as "streaks, screen-time warnings" —
-//     fits the "this is a bigger commitment" feel of multi-day lockdowns.
-//   • AccentBlue (the app's general "primary interactive" color) covers the
-//     middle, day-length tier.
-// tierForMinutes() is the single source of truth for the boundaries, used
-// both by each preset (via DurationPreset.tier below) and by the live wheel
-// readout in [PickDurationCard], so a custom wheel value always gets the
-// same color a preset in that same range would.
-private enum class DurationTier(val accent: Color) {
-    FOCUS(AccentPurple),
-    EXTENDED(AccentBlue),
-    MULTI_DAY(AccentAmber)
+// multi-day commitments — used to each carry their own accent color
+// (purple/blue/amber). Design pass verdict: a screen whose whole job is
+// "pick a number and commit" doesn't need a different hue per bracket —
+// that's three extra colors earning very little. Every tier now reads in
+// the same AccentBlue; "bigger commitment" comes through increasing FILL
+// weight instead (see [PresetChip] below — a selected Focus chip's fill is
+// barely there, a selected Multi-day chip's is the most solid), never a hue
+// swap. AccentPurple/AccentAmber stay exactly as defined in Theme.kt for
+// the other screens that still use them — this screen just stopped
+// drawing from them.
+// tierForMinutes() is still the single source of truth for the boundaries,
+// used by each preset via DurationPreset.tier below.
+private enum class DurationTier(val fillAlpha: Float) {
+    FOCUS(0.10f),
+    EXTENDED(0.16f),
+    MULTI_DAY(0.24f)
 }
 
 private fun tierForMinutes(minutes: Int): DurationTier = when {
@@ -282,6 +285,11 @@ fun LockdownScreen(
     // there's always a sensible value ready the first time someone opens
     // this screen, rather than forcing a choice before the orb does anything.
     var armedMinutes by remember { mutableStateOf(25) }
+
+    // Drives [ManageLockdownSheet] — the single overflow entry point that
+    // replaced the old 3-icon top bar (Schedules / Emergency Breaks /
+    // Whitelist). See the topBar's actions block above.
+    var showManageSheet by remember { mutableStateOf(false) }
 
     // ── Hold-to-void ignition state ──────────────────────────────────────
     // Lives here, at the screen root, rather than down inside the hero
@@ -416,14 +424,15 @@ fun LockdownScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = onManageSchedules) {
-                            Icon(Icons.Filled.Schedule, contentDescription = "Manage schedules")
-                        }
-                        IconButton(onClick = onManageEmergencyBreaks) {
-                            Icon(Icons.Filled.Bolt, contentDescription = "Manage emergency breaks")
-                        }
-                        IconButton(onClick = onManageWhitelist) {
-                            Icon(Icons.Filled.Shield, contentDescription = "Manage whitelist")
+                        // Was 3 separate icon buttons (Schedules / Emergency
+                        // Breaks / Whitelist) greeting you every time this tab
+                        // opened, each a glyph-only guess as to what it did.
+                        // These are setup actions you touch rarely — they now
+                        // live behind one overflow entry point that opens
+                        // [ManageLockdownSheet] below, with real words on
+                        // each row instead of a bare icon.
+                        IconButton(onClick = { showManageSheet = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Manage lockdown")
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -450,6 +459,89 @@ fun LockdownScreen(
                 onCancelGrace       = { LockdownGracePeriod.cancelCurrentSession(now) }
             )
         }
+
+        if (showManageSheet) {
+            ManageLockdownSheet(
+                onDismiss               = { showManageSheet = false },
+                onManageSchedules       = onManageSchedules,
+                onManageWhitelist       = onManageWhitelist,
+                onManageEmergencyBreaks = onManageEmergencyBreaks
+            )
+        }
+    }
+}
+
+// ════════════════════════════════════ Manage Lockdown sheet ════════════════════════════════════
+//
+// Replaces the old row of 3 unlabeled top-bar icons. Those are setup/
+// configuration actions someone touches rarely, not something that needs to
+// greet them every time they open this tab (design pass, "top bar
+// consolidation"). Reuses the exact ModalBottomSheet convention already
+// established in PresetsSection.kt — CardSurface container, 0dp tonal
+// elevation, top-rounded-only shape — so bottom sheets read consistently
+// everywhere in the app, not just here.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ManageLockdownSheet(
+    onDismiss              : () -> Unit,
+    onManageSchedules      : () -> Unit,
+    onManageWhitelist      : () -> Unit,
+    onManageEmergencyBreaks: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope      = rememberCoroutineScope()
+
+    // Lets the sheet play its own closing animation (sheetState.hide() is a
+    // suspend call) before the destination screen navigates away, instead
+    // of yanking the sheet off screen the instant a row is tapped.
+    fun selectAndDismiss(action: () -> Unit) {
+        scope.launch {
+            sheetState.hide()
+            onDismiss()
+            action()
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = CardSurface,
+        tonalElevation   = 0.dp,
+        shape            = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+            Text(
+                "Manage Lockdown",
+                style      = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color      = TextTertiary,
+                modifier   = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            )
+            ManageSheetRow(Icons.Filled.Schedule, "Schedules")        { selectAndDismiss(onManageSchedules) }
+            ManageSheetRow(Icons.Filled.Shield,   "Whitelist")        { selectAndDismiss(onManageWhitelist) }
+            ManageSheetRow(Icons.Filled.Bolt,     "Emergency Breaks") { selectAndDismiss(onManageEmergencyBreaks) }
+        }
+    }
+}
+
+// A single labeled row inside [ManageLockdownSheet] — words plus an icon,
+// never a glyph on its own, per the design pass's "words, not just glyphs."
+@Composable
+private fun ManageSheetRow(
+    icon   : androidx.compose.ui.graphics.vector.ImageVector,
+    label  : String,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = TextPrimary)
     }
 }
 
@@ -820,17 +912,15 @@ private fun LockdownHeroSection(
             onHoldStart  = onHoldStart,
             onHoldEnd    = onHoldEnd
         )
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(36.dp))
 
-        Text(
-            "Present Tense",
-            style        = MaterialTheme.typography.titleMedium,
-            fontWeight   = FontWeight.Medium,
-            color        = TextTertiary,
-            letterSpacing = 2.sp
-        )
-
-        Spacer(Modifier.height(32.dp))
+        // The "Present Tense" wordmark used to sit here — cut in the design
+        // pass ("say the brand name once per screen, not twice"): the leaf
+        // mark is already inside the orb right above, so a second,
+        // standalone brand label directly underneath it was pure
+        // decoration, not information. The spacer above was bumped up
+        // slightly (28dp → 36dp) so the orb and the card below it still get
+        // a considered gap now that there's nothing sitting between them.
 
         // The wheel is the one confident primary control; Quick Pick sits
         // underneath it, visually quieter and closed by default — see the
@@ -910,55 +1000,43 @@ private fun PickDurationCard(
             modifier            = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 26.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(Icons.Filled.Bolt, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(18.dp))
-                Text("Pick Duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-            }
-            Spacer(Modifier.height(4.dp))
-            // Small copywriting pass — same meaning as before ("everything
-            // except your whitelist gets blocked"), just phrased to match
-            // the app's own calm/quiet voice (the orb, the void, "Present
-            // Tense") instead of reading like a permissions dialog.
-            Text("Everything goes quiet except your whitelist.", style = MaterialTheme.typography.bodySmall, color = TextTertiary, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(4.dp))
+            // Design pass, "cut the stack down": this card used to open with
+            // an icon+title row ("⚡ Pick Duration"), then this same
+            // subtitle, then — after the wheel — a divider and a second,
+            // closing sentence ("Ready when you are, hold the orb above…")
+            // that mostly just re-said the number back to you. Down to ONE
+            // sentence of microcopy now, and it's this one: it tells you
+            // something the number and the wheel alone can't — what a
+            // lockdown actually *does* — where the old closing hint didn't.
+            Text(
+                "Everything goes quiet except your whitelist.",
+                style     = MaterialTheme.typography.bodySmall,
+                color     = TextTertiary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(10.dp))
 
             // The live readout — always reflects exactly what's armed right
-            // now, whether the wheel or a Quick Pick tap set it last.
-            // Sized down from displaySmall/Bold to headlineMedium/SemiBold —
-            // still the most prominent text in this card, but no longer
-            // competing with the orb's own visual weight above it. Its color
-            // now reflects armedMinutes' duration tier (same Focus/Extended/
-            // Multi-day coloring as the preset cards below), using the same
-            // tierForMinutes() so a hand-dialed wheel value gets exactly the
-            // color a preset in that same range would.
+            // now, whether the wheel or a Quick Pick tap set it last. Set in
+            // NumeralFontFamily (Space Grotesk) instead of the system font —
+            // the one deliberate typographic flourish on this whole screen,
+            // reserved for the number people actually stare at (design
+            // pass, "typography pass"). Flat AccentBlue regardless of
+            // duration now, not tier-colored — see [DurationTier] above for
+            // why this screen dropped per-tier hues.
             Text(
                 formatDuration(armedMinutes),
-                style      = MaterialTheme.typography.headlineMedium,
+                style      = MaterialTheme.typography.headlineMedium.copy(fontFamily = NumeralFontFamily),
                 fontWeight = FontWeight.SemiBold,
-                color      = tierForMinutes(armedMinutes).accent
+                color      = AccentBlue
             )
             Spacer(Modifier.height(22.dp))
 
             WheelDurationPicker(totalMinutes = armedMinutes, onTotalMinutesChange = onSelectPreset)
 
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = TextMuted.copy(alpha = 0.12f))
-            Spacer(Modifier.height(16.dp))
-
-            // No "Start" button here on purpose — this card only arms a
-            // duration. The orb above is the single trigger for actually
-            // starting a lockdown; this is just confirming what's armed
-            // and nudging people back up to it.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Filled.Lock, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(16.dp))
-                Text(
-                    "Ready when you are \u2014 hold the orb above to start your ${formatDuration(armedMinutes)} lockdown",
-                    style      = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color      = TextPrimary,
-                    textAlign  = TextAlign.Center
-                )
-            }
+            // No divider or closing sentence here anymore, and no "Start"
+            // button — this card only arms a duration. The orb above is the
+            // single trigger for actually starting a lockdown.
         }
     }
 }
@@ -1001,41 +1079,43 @@ private fun QuickPickSection(armedMinutes: Int, onSelectPreset: (Int) -> Unit) {
     }
 }
 
-// A single scrollable-row chip — icon + label + duration, colored by the
-// preset's tier (see [DurationTier]) so the "which kind of session is this"
-// read survives the move out of the old bigger 2-column cards.
+// A single scrollable-row chip — icon + label + duration. Design pass,
+// "shape" + "color": no border anymore — selection reads through fill +
+// weight alone, in the screen's single AccentBlue hue. fillAlpha grows with
+// the preset's tier (see [DurationTier]) so "this is a bigger commitment"
+// still comes through on the selected chip, without needing a second color
+// to carry it — the same read the old per-tier border colors gave, minus
+// the extra hues and the outlined-box look.
 @Composable
 private fun PresetChip(
     preset  : DurationPreset,
     selected: Boolean,
     onClick : () -> Unit
 ) {
-    val tierAccent  = preset.tier.accent
-    val bgColor     = if (selected) tierAccent.copy(alpha = 0.16f) else CardSurface.copy(alpha = 0.6f)
-    val borderColor = if (selected) tierAccent else tierAccent.copy(alpha = 0.28f)
+    val bgColor  = if (selected) AccentBlue.copy(alpha = preset.tier.fillAlpha) else CardSurface.copy(alpha = 0.5f)
+    val iconTint = if (selected) AccentBlue else TextTertiary
 
     Row(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(bgColor)
-            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(16.dp))
             .selectable(selected = selected, onClick = onClick, role = Role.RadioButton)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
-        Icon(preset.icon, contentDescription = null, tint = tierAccent, modifier = Modifier.size(16.dp))
+        Icon(preset.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(15.dp))
         Column {
             Text(
                 preset.label,
                 style      = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 color      = if (selected) TextPrimary else TextSecondary
             )
             Text(
                 formatDuration(preset.minutes),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (selected) tierAccent else TextTertiary
+                color = if (selected) AccentBlue else TextTertiary
             )
         }
     }
@@ -1057,14 +1137,29 @@ private fun ActiveLockdownPanel(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = MaterialTheme.shapes.extraLarge,
-        colors   = CardDefaults.cardColors(
-            containerColor = if (decision.onBreak) MaterialTheme.colorScheme.tertiaryContainer
-                             else MaterialTheme.colorScheme.errorContainer
-        ),
+        // Design pass: this used to borrow Material's auto-generated
+        // errorContainer (a coral/red wash) for an active lockdown, and
+        // tertiaryContainer for a break. A session doing exactly what you
+        // asked it to do is a GOOD state — "you're protected," not
+        // "something's wrong" — so the background is now the same calm,
+        // brand-owned CardSurfaceAlt either way (Theme.kt's "one hero card
+        // per screen" tier, which this panel genuinely earns: when it's
+        // showing, it's the only content on the tab). Color now lives only
+        // on the ring and the badge icon below, never the whole card.
+        colors    = CardDefaults.cardColors(containerColor = CardSurfaceAlt),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            val badgeTint = if (decision.onBreak) AccentTeal else AccentRed
+            // Break keeps its own established AccentTeal — already what the
+            // Emergency Break button below uses to trigger one, and
+            // Theme.kt's own doc calls Teal "active, good states," a
+            // genuine match for "you're on a sanctioned pause." A running
+            // LOCKDOWN moves off AccentRed onto this screen's single
+            // AccentBlue instead: Red is the same hue Material's error role
+            // already uses, so keeping it here would have quietly kept the
+            // "something's wrong" read alive on the ring/badge even after
+            // the card background stopped saying it.
+            val badgeTint = if (decision.onBreak) AccentTeal else AccentBlue
 
             Text(
                 if (decision.onBreak) "Emergency Break active" else "Lockdown is active",
@@ -1130,8 +1225,14 @@ private fun ActiveLockdownPanel(
             ) {
                 Text(
                     if (isFinite) formatCountdown(remainingSec) else "∞",
-                    style      = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                    // Same NumeralFontFamily as the duration readout on the
+                    // idle screen (design pass, "one typeface personality
+                    // for the numbers that matter") — and tabular digits
+                    // mean the countdown never jitters sideways as it ticks
+                    // over, e.g. "9:59" → "10:00", the way a proportional
+                    // font would let it.
+                    style      = MaterialTheme.typography.headlineSmall.copy(fontFamily = NumeralFontFamily),
+                    fontWeight = FontWeight.SemiBold,
                     color      = TextPrimary
                 )
             }
