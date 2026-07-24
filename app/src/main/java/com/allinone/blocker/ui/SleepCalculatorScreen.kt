@@ -1,7 +1,6 @@
 package com.allinone.blocker.ui
 
 import android.app.TimePickerDialog
-import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,6 +31,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -40,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +66,7 @@ import com.allinone.blocker.ui.theme.CardSurfaceAlt
 import com.allinone.blocker.ui.theme.TextPrimary
 import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
+import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Locale
 
@@ -101,10 +106,16 @@ private const val RECOMMENDED_CYCLES = 5
 //                                real alarm.
 //
 //   SleepInput.WAKE_UP_TIME  "I need to wake up at ___."
-//                             -> shows RECOMMENDED BEDTIMES. No alarm button
-//                                here — a bedtime isn't an alarm.
+//                             -> shows RECOMMENDED BEDTIMES (no alarm button
+//                                on those — a bedtime isn't an alarm), but
+//                                the INPUT card itself gets a "Set alarm"
+//                                button, because the wake-up time you just
+//                                typed in IS a real alarm time already.
 //
 // The input you collect always produces the OTHER kind of time as the result.
+// Every "Set alarm" button on this screen — whichever mode it's in — goes
+// through the one setAlarmFor() function below, so it always behaves the
+// same way: set immediately, confirmed with an undoable Snackbar.
 // ─────────────────────────────────────────────────────────────────────────────
 private enum class SleepInput { BEDTIME, WAKE_UP_TIME }
 
@@ -122,6 +133,8 @@ private data class SleepOption(
 @Composable
 fun SleepCalculatorScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val allAlarms by BlockerRepository.strictAlarms.collectAsState()
 
     // "The" alarm this screen seeds from / writes to: the soonest-firing
@@ -142,6 +155,35 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
             BlockerRepository.addStrictAlarmEntry(updated)
         }
         AlarmScheduler.schedule(context, updated)
+    }
+
+    // Sets (or moves) the alarm to hour:minute IMMEDIATELY — no extra screen,
+    // no extra confirmation dialog — then shows a Snackbar with "Undo" so a
+    // mis-tap is never permanent. This is used both by the results list below
+    // and by the "Wake-up time" input card's own Set Alarm button, so setting
+    // an alarm behaves exactly the same way everywhere on this screen.
+    fun setAlarmFor(hour: Int, minute: Int) {
+        val previousState = allAlarms.firstOrNull { it.id == seedAlarm.id }
+        val updated = seedAlarm.copy(enabled = true, hour = hour, minute = minute)
+        saveAlarm(updated)
+
+        scope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message = "Alarm set for ${formatClock(hour, minute)}",
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Long
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                if (previousState == null) {
+                    // It did not exist before this tap — undo means removing
+                    // it again, not "restoring" it to some earlier time.
+                    BlockerRepository.removeStrictAlarmEntry(updated.id)
+                    AlarmScheduler.cancel(context, updated.id)
+                } else {
+                    saveAlarm(previousState)
+                }
+            }
+        }
     }
 
     // Default to BEDTIME: opening the calculator immediately shows wake-up
@@ -168,7 +210,8 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { pad ->
         Column(
             modifier = Modifier
@@ -211,7 +254,9 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
                         caption = "I need to wake up at",
                         hour = wakeHour,
                         minute = wakeMinute,
-                        trailing = null,
+                        trailing = {
+                            SetAlarmChip(onClick = { setAlarmFor(wakeHour, wakeMinute) })
+                        },
                         onClick = {
                             TimePickerDialog(
                                 context,
@@ -265,19 +310,7 @@ fun SleepCalculatorScreen(onBack: () -> Unit) {
                         OptionCard(
                             option = option,
                             isWakeResult = sleepInput == SleepInput.BEDTIME,
-                            onSetAlarm = {
-                                val updated = seedAlarm.copy(
-                                    enabled = true,
-                                    hour = option.hour,
-                                    minute = option.minute
-                                )
-                                saveAlarm(updated)
-                                Toast.makeText(
-                                    context,
-                                    "Alarm set for ${formatClock(option.hour, option.minute)}",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
+                            onSetAlarm = { setAlarmFor(option.hour, option.minute) }
                         )
                     }
                 }
@@ -365,8 +398,9 @@ private fun SegmentButton(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TIME INPUT CARD — shared by both modes. Tap it to open a time picker; the
-// "Now" chip (bedtime mode only) jumps it straight to the current time.
+// TIME INPUT CARD — shared by both modes. Tap it to open a time picker.
+// The trailing slot holds whichever action makes sense for that mode: a
+// "Now" chip in Bedtime mode, a "Set alarm" chip in Wake-up-time mode.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -440,6 +474,32 @@ private fun NowChip(onClick: () -> Unit) {
     }
 }
 
+/**
+ * The one "Set alarm" button used everywhere on this screen — on the
+ * wake-up-time input card and on every wake-up result card below. Same
+ * look, same behaviour, wherever it appears.
+ */
+@Composable
+private fun SetAlarmChip(
+    accent: Color = AccentPurple,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(accent.copy(alpha = 0.16f))
+            .pressable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            "Set alarm",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = accent
+        )
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // OPTION CARD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -450,7 +510,6 @@ private fun OptionCard(
     isWakeResult: Boolean,
     onSetAlarm: () -> Unit
 ) {
-    val accent = if (option.recommended) AccentPurple else TextSecondary
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (option.recommended) CardSurfaceAlt else CardSurface
@@ -488,20 +547,10 @@ private fun OptionCard(
             }
 
             if (isWakeResult) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(accent.copy(alpha = 0.16f))
-                        .pressable(onClick = onSetAlarm)
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                ) {
-                    Text(
-                        "Set alarm",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (option.recommended) AccentPurple else TextSecondary
-                    )
-                }
+                SetAlarmChip(
+                    accent = if (option.recommended) AccentPurple else TextSecondary,
+                    onClick = onSetAlarm
+                )
             }
         }
     }
