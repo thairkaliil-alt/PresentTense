@@ -24,9 +24,14 @@ package com.allinone.blocker.ui.theme
 // ═══════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.allinone.blocker.R
 
 val BlockerTypography = Typography(
     // ── Display — for large hero numbers (timer countdowns, totals) ──
@@ -53,4 +58,39 @@ val BlockerTypography = Typography(
     labelLarge  = TextStyle(fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
     labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp),
     labelSmall  = TextStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp),
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NUMERAL FONT — a scoped, deliberate exception to "system font everywhere"
+//
+// BlockerTypography above is untouched — every Text() in the app still gets
+// the system font (Roboto) at the stock M3 scale, exactly as documented up
+// top. This one extra FontFamily exists ONLY for the Lockdown screen's
+// duration readout and countdown ring — "the two numbers people will
+// actually stare at" (design pass, "typography pass"). It's deliberately
+// kept OUTSIDE the Typography() scale so it can never silently leak into
+// body text or button labels somewhere else.
+//
+// Font: Space Grotesk (SIL Open Font License 1.1 — google/fonts repo,
+// ofl/spacegrotesk). Chosen for two concrete reasons, not just look:
+//   • Its numerals are genuinely distinct/geometric — not a system-font
+//     lookalike, which is the whole point of a "numeral typeface swap."
+//   • Its digits are TABULAR (fixed-width), so a countdown ticking over —
+//     "9:59" → "10:00" — never jitters sideways as digit count changes,
+//     something a proportional font (Roboto included) doesn't guarantee.
+//
+// It ships as ONE variable-font file (res/font/space_grotesk_variable.ttf)
+// rather than several static weight files, locked to a single fixed weight
+// via FontVariation so it always renders one considered, consistent look
+// rather than whatever weight happens to be requested at the call site.
+// Variable fonts need API 26+ (Android O) — this app's own minSdk is
+// already 26, so every supported device qualifies and no fallback font is
+// needed.
+@OptIn(ExperimentalTextApi::class)
+val NumeralFontFamily = FontFamily(
+    Font(
+        resId             = R.font.space_grotesk_variable,
+        weight            = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600))
+    )
 )
