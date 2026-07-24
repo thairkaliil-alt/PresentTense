@@ -550,7 +550,7 @@ fun AppDrawerContent(onSettingsClick: () -> Unit, onAlarmClick: () -> Unit, onPo
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
             Spacer(Modifier.height(20.dp))
-            DrawerItem(icon = Icons.Filled.AlarmOn, label = "Strict Alarm", onClick = onAlarmClick)
+            DrawerItem(icon = Icons.Filled.AlarmOn, label = "Alarm", onClick = onAlarmClick)
             Spacer(Modifier.height(8.dp))
             DrawerItem(icon = Icons.Filled.Timer, label = "Pomodoro", onClick = onPomodoroClick)
             Spacer(Modifier.height(8.dp))
