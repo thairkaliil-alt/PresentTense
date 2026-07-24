@@ -33,6 +33,14 @@
          recover from. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Strict Alarm's optional Shake challenge reads the accelerometer.
+         required="false" so the app still installs fine on the rare device
+         that doesn't have one — AlarmRingActivity.kt already falls back to
+         a tap-counter for that case, so nothing breaks either way. -->
+    <uses-feature
+        android:name="android.hardware.sensor.accelerometer"
+        android:required="false" />
+
     <application
         android:name=".BlockerApp"
         android:allowBackup="true"
