@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -54,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -62,11 +64,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.allinone.blocker.R
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownEngine
@@ -86,6 +94,7 @@ import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.TextMuted
 import com.allinone.blocker.ui.theme.TextPrimary
+import com.allinone.blocker.ui.theme.TextSecondary
 import com.allinone.blocker.ui.theme.TextTertiary
 import kotlinx.coroutines.delay
 
@@ -247,13 +256,13 @@ internal fun LockdownLauncherScreen(
 
     // A real, honest progress fraction — ONLY when both ends of the session
     // are genuinely known (a fixed end time AND a recorded start time). This
-    // is deliberately separate from LockdownFocusRing's breathing pulse: an
-    // indefinite manual lock ("until turned off") has no total duration to
+    // is deliberately separate from LockdownHeroInstrument's breathing pulse:
+    // an indefinite manual lock ("until turned off") has no total duration to
     // measure against, so faking a progress arc for it would be exactly the
     // misleading indicator Calm Technology practice says to avoid — see
-    // LockdownFocusRing's header comment. Null here means "unknown", not
-    // "zero" — LockdownFocusRing falls back to the breathing pulse whenever
-    // this is null, whatever the reason.
+    // LockdownHeroInstrument's header comment. Null here means "unknown", not
+    // "zero" — LockdownHeroInstrument falls back to the breathing pulse
+    // whenever this is null, whatever the reason.
     val target = decision.endsAtMillis
     val sessionProgress = remember(target, sessionStartedAtMillis, now) {
         val startedAt = sessionStartedAtMillis
@@ -332,70 +341,19 @@ internal fun LockdownLauncherScreen(
         ) {
             Spacer(Modifier.height(72.dp))
 
-            LockdownFocusRing(progress = sessionProgress, color = displayMoodColor)
-            Spacer(Modifier.height(24.dp))
-
-            // Countdown — deliberately STILL. This used to roll each new
-            // second in via AnimatedContent (slide + fade), which was the
-            // actual source of the "flickering, distracting" complaint: a
-            // large slide/fade transition firing once a second, for the
-            // entire length of a session that can run for hours or days, is
-            // exactly what Apple's Human Interface Guidelines warn against —
-            // "don't add motion for the sake of adding motion... avoid using
-            // movement or blinking as the only way to convey information" —
-            // and what Amber Case's Calm Technology describes as the
-            // opposite of the goal: technology should take "the smallest
-            // possible amount of attention" it can get away with. A lockdown
-            // screen exists so the user stops looking at their phone; a
-            // number that visibly moves every second works against that. So
-            // the digits below now just change value on each tick — the
-            // same way a native OS clock or a watch face updates — with
-            // zero added motion.
-            //
-            // The second, less obvious fix: fontFeatureSettings = "tnum"
-            // turns on the font's TABULAR numerals. Roboto's digits are
-            // proportional by default (a "1" is narrower than an "8"), so
-            // without this a perfectly still, unanimated countdown would
-            // still visibly drift left/right every second as its own width
-            // changes — the same jitter fixed by `tabular-nums` in CSS for
-            // stock tickers and stopwatches. With it, every digit occupies
-            // identical width and the number holds its position on its own.
-            //
-            // Sized down from displayLarge/Medium weight to displayMedium/
-            // Light — Type.kt's own usage guide already earmarks
-            // displayMedium for "hero numbers... e.g. lockdown panel";
-            // Light instead of Medium/Bold reads as calm status rather than
-            // an alarm, matching how the rest of this screen already treats
-            // ambient information (see the indefinite-lock branch below,
-            // which was already Light).
-            if (target in 1 until Long.MAX_VALUE) {
-                val remainingSec = ((target - now) / 1000L).coerceAtLeast(0)
-                Text(
-                    formatLockCountdown(remainingSec),
-                    style = MaterialTheme.typography.displayMedium.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 1.sp,
-                        fontFeatureSettings = "tnum"
-                    ),
-                    color = TextPrimary
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "REMAINING",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted,
-                    letterSpacing = 3.sp
-                )
+            val remainingSecForHero = if (target in 1 until Long.MAX_VALUE) {
+                ((target - now) / 1000L).coerceAtLeast(0)
             } else {
-                Text(
-                    decision.reason.ifBlank { "Locked down" },
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Light,
-                    color = TextPrimary
-                )
+                null
             }
+            LockdownHeroInstrument(
+                remainingSeconds = remainingSecForHero,
+                indefiniteLabel = decision.reason.ifBlank { "Locked down" },
+                progress = sessionProgress,
+                color = displayMoodColor
+            )
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(20.dp))
             AnimatedAppearance(delayMs = 260) {
                 Crossfade(
                     targetState = reflectionLine,
@@ -404,8 +362,8 @@ internal fun LockdownLauncherScreen(
                 ) { line ->
                     Text(
                         line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 32.dp)
                     )
@@ -433,15 +391,22 @@ internal fun LockdownLauncherScreen(
                     modifier = Modifier.padding(top = 40.dp)
                 )
             } else {
+                val gridColumns = apps.size.coerceIn(1, 4)
+                val tileSize = if (apps.size < 4) 68.dp else 56.dp
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
+                    columns = GridCells.Fixed(gridColumns),
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
                     items(apps, key = { it.packageName }) { app ->
-                        LauncherAppIcon(app = app, moodColor = moodColor, onClick = { onLaunchApp(app.packageName) })
+                        LauncherAppIcon(
+                            app = app,
+                            moodColor = moodColor,
+                            tileSize = tileSize,
+                            onClick = { onLaunchApp(app.packageName) }
+                        )
                     }
                 }
             }
@@ -482,7 +447,12 @@ internal fun LockdownLauncherScreen(
  * on purpose" rather than looking like every other locked-out surface.
  */
 @Composable
-private fun LauncherAppIcon(app: LauncherApp, moodColor: Color, onClick: () -> Unit) {
+private fun LauncherAppIcon(
+    app: LauncherApp,
+    moodColor: Color,
+    onClick: () -> Unit,
+    tileSize: Dp = 56.dp
+) {
     Column(
         modifier = Modifier
             .pressable(pressedScale = MotionTokens.PressScaleSmall, onClick = onClick)
@@ -491,7 +461,8 @@ private fun LauncherAppIcon(app: LauncherApp, moodColor: Color, onClick: () -> U
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(tileSize)
+                .shadow(elevation = 1.dp, shape = RoundedCornerShape(18.dp), clip = false)
                 .clip(RoundedCornerShape(18.dp))
                 .background(
                     Brush.verticalGradient(
@@ -628,42 +599,52 @@ private fun AmbientGlow(color: Color) {
     }
 }
 
+/** Diameter of the merged ring+countdown hero instrument (200-260dp brief). */
+private val HERO_INSTRUMENT_SIZE = 240.dp
+
 /**
- * The breathing/progress ring drawn around the countdown during an active
- * lockdown session.
+ * The same Space Grotesk numeral font already used for the countdown-style
+ * text on the Lockdown tab's status panel (see Type.kt's NumeralFontFamily).
+ * Deliberately a SEPARATE FontFamily rather than reusing NumeralFontFamily
+ * directly: that one is fixed to SemiBold (600), which reads as confident/
+ * assertive — right for an active status panel, but a mismatch for this
+ * screen's whole point, which is staying calm rather than drawing the eye.
+ * Same font file, same distinctive tabular-numeral character, just held at
+ * the Light (300) weight this screen has used throughout.
+ */
+@OptIn(ExperimentalTextApi::class)
+private val LockdownCountdownFontFamily = FontFamily(
+    Font(
+        resId = R.font.space_grotesk_variable,
+        weight = FontWeight.Light,
+        variationSettings = FontVariation.Settings(FontVariation.weight(300))
+    )
+)
+
+/**
+ * The screen's single hero instrument: the countdown (or, for an indefinite
+ * lock, the reason text) set inside the same ring that used to sit above it
+ * as a separate 88dp element. Two stacked circular-ish things reading as
+ * competing focal points was the actual problem being fixed here — merging
+ * them gives the screen one clear hero.
  *
- * TWO MODES, chosen by [progress]:
- *   - [progress] == null (indefinite locks, e.g. a manual "until turned off"
- *     session, or the brief window before the session tracker has recorded a
- *     start time): a slow, subtle breathing pulse — the same "still alive,
- *     still holding" cue premium focus apps use (Opal's orb, Endel's
- *     breathing visuals) instead of a hard mechanical timer. Deliberately
- *     NOT a literal progress ring here, because the app genuinely doesn't
- *     know a total duration to measure against — faking one would be
- *     exactly the misleading indicator Calm Technology practice warns
- *     against. Paired with a single barely-there haptic pulse once per
- *     breath cycle — reinforcing the same "still alive, still holding"
- *     idea through touch, not just sight. Only for this mode: a session
- *     with a real progress arc already has an unambiguous, purely visual
- *     "still going" signal, so doubling it with a repeating haptic there
- *     would just be noise.
- *   - [progress] in 0f..1f (any session with a known start AND a known end —
- *     a fixed-length schedule, or a manual lock with a set duration): a
- *     real, honest elapsed/total arc. This is intentionally a DIFFERENT
- *     visual — a filling arc, not a pulse — so it's never confused with the
- *     ambient "alive" cue above; it's making an actual claim about how much
- *     of the session is left, so it only ever appears when that claim is true.
+ * TWO MODES, chosen by [progress] — unchanged from the original ring:
+ *   - [progress] == null: breathing pulse for indefinite locks (no fabricated
+ *     progress claim when there's genuinely no total duration to measure).
+ *   - [progress] in 0f..1f: real, honest elapsed/total arc.
  *
- * [color] is the same mood color driving [AmbientGlow] (see that composable's
- * header comment) — cross-fades over ~1.2s on change, same as the glow, so
- * the ring and the ambient wash always agree with each other.
+ * [color] is the same mood color driving [AmbientGlow].
+ * [remainingSeconds] is the live countdown in seconds, or null for an
+ * indefinite lock. [indefiniteLabel] is only read when that's null.
  */
 @Composable
-private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue) {
+private fun LockdownHeroInstrument(
+    remainingSeconds: Long?,
+    indefiniteLabel: String,
+    progress: Float? = null,
+    color: Color = AccentBlue
+) {
     val infinite = rememberInfiniteTransition(label = "focusBreath")
-    // Slowed from a 3.2s to a 4.8s half-cycle and narrowed from 0.4–0.9 to
-    // 0.45–0.75 — still alive, but felt rather than noticed, so it doesn't
-    // compete with the now-still countdown digits below it.
     val breath by infinite.animateFloat(
         initialValue = 0.45f,
         targetValue = 0.75f,
@@ -680,18 +661,12 @@ private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue
         label = "ringColor"
     )
 
-    // Smooths the once-a-second jump from the caller's tick into a gentle
-    // glide, rather than the arc visibly snapping forward every second.
     val animatedProgress by animateFloatAsState(
         targetValue = progress ?: 0f,
         animationSpec = tween(durationMillis = 900, easing = LinearEasing),
         label = "lockdownProgress"
     )
 
-    // The breathing haptic — see the header comment above for why this is
-    // scoped to indefinite locks only. Fires once per full breath cycle
-    // (the ring's tween is 4.8s out, 4.8s back — a 9.6s round trip), timed
-    // to the moment the ring is fullest, matching what's on screen.
     if (progress == null) {
         val haptics = rememberHaptics()
         LaunchedEffect(Unit) {
@@ -703,18 +678,21 @@ private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue
         }
     }
 
-    Box(modifier = Modifier.size(88.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier
+            .size(HERO_INSTRUMENT_SIZE)
+            .shadow(elevation = 4.dp, shape = CircleShape, clip = false),
+        contentAlignment = Alignment.Center
+    ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // static outer ring — faint, structural
             drawCircle(
                 color = Color.White.copy(alpha = 0.07f),
                 radius = size.minDimension / 2f,
-                style = Stroke(width = 1.dp.toPx())
+                style = Stroke(width = 1.5.dp.toPx())
             )
 
             if (progress != null) {
-                // Real, honest progress arc — elapsed/total, nothing guessed.
-                val strokeWidthPx = 3.dp.toPx()
+                val strokeWidthPx = 4.dp.toPx()
                 val inset = strokeWidthPx / 2f
                 drawArc(
                     color = animatedColor.copy(alpha = 0.9f),
@@ -726,20 +704,52 @@ private fun LockdownFocusRing(progress: Float? = null, color: Color = AccentBlue
                     style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
                 )
             } else {
-                // breathing inner ring — the "alive" cue, for indefinite locks
                 drawCircle(
                     color = animatedColor.copy(alpha = 0.4f * breath),
-                    radius = size.minDimension / 2f - 10.dp.toPx(),
-                    style = Stroke(width = 1.2.dp.toPx())
+                    radius = size.minDimension / 2f - 26.dp.toPx(),
+                    style = Stroke(width = 1.5.dp.toPx())
                 )
             }
         }
-        Icon(
-            Icons.Filled.Lock,
-            contentDescription = null,
-            tint = TextPrimary.copy(alpha = 0.85f),
-            modifier = Modifier.size(22.dp)
-        )
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.Lock,
+                contentDescription = null,
+                tint = TextPrimary.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.height(10.dp))
+            if (remainingSeconds != null) {
+                Text(
+                    formatLockCountdown(remainingSeconds),
+                    style = MaterialTheme.typography.displaySmall.copy(
+                        fontFamily = LockdownCountdownFontFamily,
+                        fontWeight = FontWeight.Light,
+                        letterSpacing = 1.sp,
+                        fontFeatureSettings = "tnum"
+                    ),
+                    color = TextPrimary
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "REMAINING",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    letterSpacing = 3.sp
+                )
+            } else {
+                Text(
+                    indefiniteLabel,
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Light),
+                    color = TextPrimary,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 28.dp)
+                )
+            }
+        }
     }
 }
 
@@ -837,7 +847,7 @@ private fun EmergencyBreakControl(
 
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(48.dp)
                 .pointerInput(revealed) {
                     detectTapGestures(
                         onPress = {
@@ -854,27 +864,32 @@ private fun EmergencyBreakControl(
                 },
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.08f),
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
-                if (holdProgress > 0f) {
-                    drawArc(
-                        color = AccentTeal,
-                        startAngle = -90f,
-                        sweepAngle = 360f * holdProgress,
-                        useCenter = false,
-                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            Box(
+                modifier = Modifier.size(34.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.08f),
+                        style = Stroke(width = 1.5.dp.toPx())
                     )
+                    if (holdProgress > 0f) {
+                        drawArc(
+                            color = AccentTeal,
+                            startAngle = -90f,
+                            sweepAngle = 360f * holdProgress,
+                            useCenter = false,
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
                 }
+                Icon(
+                    Icons.Filled.Bolt,
+                    contentDescription = "Emergency break",
+                    tint = TextMuted.copy(alpha = if (revealed) 0.9f else 0.5f),
+                    modifier = Modifier.size(14.dp)
+                )
             }
-            Icon(
-                Icons.Filled.Bolt,
-                contentDescription = "Emergency break",
-                tint = TextMuted.copy(alpha = if (revealed) 0.9f else 0.5f),
-                modifier = Modifier.size(14.dp)
-            )
         }
     }
 }
