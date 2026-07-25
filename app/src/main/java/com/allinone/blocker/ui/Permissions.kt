@@ -136,6 +136,39 @@ object Permissions {
     }
 
     /**
+     * True once Android will actually let the Strict Alarm's ring screen pop
+     * itself over the lock screen on its own — Android 14+ only. On every
+     * version before that, holding the USE_FULL_SCREEN_INTENT permission
+     * declared in AndroidManifest.xml was enough by itself. From Android 14
+     * on, it became a separate, revocable permission that the system only
+     * auto-grants to apps it already trusts as a phone/alarm app — a
+     * freshly-installed or sideloaded app like this one often does NOT get
+     * it for free. When it's off, a ringing alarm quietly falls back to
+     * sitting as an ordinary notification instead of taking over the
+     * screen, which is exactly what AlarmRingingService's fullScreenIntent
+     * needs this permission for.
+     */
+    fun hasFullScreenIntentPermission(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
+        val nm = context.getSystemService(android.app.NotificationManager::class.java)
+        return nm?.canUseFullScreenIntent() ?: true
+    }
+
+    /**
+     * Opens the one Settings screen that can grant this on Android 14+ —
+     * same situation as Accessibility/Device Admin above, there's no in-app
+     * dialog for it.
+     */
+    fun openFullScreenIntentSettings(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        val intent = Intent(
+            Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+            Uri.parse("package:${context.packageName}")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+    }
+
+    /**
      * True once the user has made Present Tense an active Device
      * Administrator. This is what actually blocks uninstalling the app: on
      * stock Android, an app can't be uninstalled (from Settings or the Play
