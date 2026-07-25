@@ -89,8 +89,8 @@ class Haptics internal constructor(
 
     /**
      * Same barely-there feel again, this time repeated once per cycle of
-     * the lockdown screen's breathing focus ring (indefinite locks only —
-     * see LockdownFocusRing's header comment) — a touch echo of the visual
+     * the lockdown screen's breathing ring (indefinite locks only — see
+     * LockdownHeroInstrument's header comment) — a touch echo of the visual
      * "still alive, still holding" pulse, not a distinct alert of its own.
      */
     fun breathPulse() = pulse(durationMs = 8L, amplitude = 35)
