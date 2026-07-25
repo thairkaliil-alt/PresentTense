@@ -333,7 +333,7 @@ object LockdownOverlay {
             // this one silently falls back to software (CPU) rendering unless this
             // flag is set explicitly. Software rendering is fine for a static block
             // screen, but this window hosts a scrolling grid of app icons plus
-            // continuously-animated gradients/rings (AmbientGlow, LockdownFocusRing)
+            // continuously-animated gradients/rings (AmbientGlow, LockdownHeroInstrument)
             // — exactly the kind of content that's dramatically slower on the CPU,
             // which is what was showing up as severe scroll lag. This flag moves
             // the whole window onto the GPU, matching how every other (Activity-
