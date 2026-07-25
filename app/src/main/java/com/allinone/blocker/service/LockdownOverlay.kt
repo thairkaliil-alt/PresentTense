@@ -115,6 +115,22 @@ object LockdownOverlay {
         val appContext = context.applicationContext
         runOnMain {
             if (host != null) return@runOnMain
+            // BUGFIX (lockdown swallows the Strict Alarm ring screen): this
+            // window is a TYPE_APPLICATION_OVERLAY, deliberately painted on
+            // top of every activity — including our own AlarmRingActivity
+            // (see this object's header comment). Without this check, the
+            // instant that alarm's ring screen appeared underneath, this
+            // overlay — brought back by the accessibility corral, the 45s
+            // watchdog, MainActivity, or the lockdown screen's own "go home"
+            // button — would sit right back on top of it, so the ring
+            // screen (puzzle or not) was never actually visible or
+            // touchable. AlarmRingingService.onStartCommand() proactively
+            // hides this overlay the instant an alarm starts ringing, and
+            // shows it again itself once the alarm is dismissed or snoozed
+            // (see its onDestroy()) — this guard is what stops every OTHER
+            // caller from undoing that for as long as the alarm is still
+            // ringing.
+            if (AlarmRingingService.isAlarmCurrentlyRinging()) return@runOnMain
             if (isWithinLaunchGrace(foregroundPackage, isHomeOrSystemSurface)) return@runOnMain
             if (!Settings.canDrawOverlays(appContext)) return@runOnMain
             if (!BlockerRepository.isInitialized) BlockerRepository.init(appContext)
