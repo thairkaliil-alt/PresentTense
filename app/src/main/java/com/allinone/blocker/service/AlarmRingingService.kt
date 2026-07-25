@@ -17,6 +17,7 @@ import com.allinone.blocker.R
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.isOneTime
+import com.allinone.blocker.data.LockdownEngine
 import com.allinone.blocker.ui.AlarmRingActivity
 
 class AlarmRingingService : Service() {
@@ -26,6 +27,29 @@ class AlarmRingingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         activeInstance = this
+
+        // TOP-PRIORITY FIX ("lockdown swallows the Strict Alarm ring
+        // screen"): LockdownOverlay is a system overlay window painted on
+        // top of literally every activity — including our own — see its
+        // own header comment. With a lockdown session running (as it is for
+        // most of an overnight schedule), that overlay was sitting on top
+        // of AlarmRingActivity for the alarm's entire ring, which is why
+        // the ring screen — puzzle or not — was invisible and untouchable,
+        // and the only way in was digging out the alarm's notification (the
+        // one thing this overlay can't cover, since Android draws it, not
+        // us). Tearing the overlay down the instant the alarm starts fixes
+        // that at the source. Safe to call unconditionally — a no-op when
+        // no lockdown is running.
+        //
+        // This alone isn't quite enough, because several other places (the
+        // accessibility service's live corral loop, the 45s watchdog,
+        // MainActivity, the lockdown screen's own "go home" button) can all
+        // try to bring the overlay back up moments later. LockdownOverlay
+        // .show() and the corral's own decision function both now check
+        // isAlarmCurrentlyRinging() (see companion object below) and refuse
+        // to bring it back while this alarm is ringing, so none of them can
+        // undo this.
+        LockdownOverlay.hide()
 
         val alarmId = intent?.getStringExtra(AlarmScheduler.EXTRA_ALARM_ID)
 
@@ -119,6 +143,23 @@ class AlarmRingingService : Service() {
         runCatching { mediaPlayer?.stop() }
         runCatching { mediaPlayer?.release() }
         runCatching { vibrator?.cancel() }
+
+        // The alarm is done ringing (dismissed, snoozed, or the service was
+        // torn down some other way) — activeInstance is already cleared
+        // above, so LockdownOverlay.show() below is no longer blocked by
+        // isAlarmCurrentlyRinging(). If a lockdown session is still live,
+        // put the lockdown screen straight back up ourselves right now,
+        // instead of leaving a gap of up to ~3s (the accessibility
+        // service's live tick) or ~45s (the watchdog) before anything else
+        // notices and restores it on its own.
+        val decision = LockdownEngine.evaluate(
+            manualLockUntil = BlockerRepository.manualLockUntil.value,
+            schedules = BlockerRepository.schedules.value
+        )
+        if (decision.active || decision.onBreak) {
+            LockdownOverlay.show(applicationContext)
+        }
+
         super.onDestroy()
     }
 
@@ -169,5 +210,14 @@ class AlarmRingingService : Service() {
         const val NOTIF_ID = 2001
         private const val ALARM_CHANNEL_ID = "alarm_ringing"
         @Volatile var activeInstance: AlarmRingingService? = null
+
+        /**
+         * True whenever a Strict Alarm is actively ringing right now. This
+         * is the one signal every lockdown-enforcement code path checks so
+         * it knows to leave the ring screen alone instead of covering it —
+         * see [LockdownOverlay.show] and
+         * [AppBlockerAccessibilityService.shouldCorralDuringLockdown].
+         */
+        fun isAlarmCurrentlyRinging(): Boolean = activeInstance != null
     }
 }
