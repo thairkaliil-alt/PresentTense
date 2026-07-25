@@ -626,6 +626,19 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (!decision.active) return false
 
         if (pkg == packageName) {
+            // BUGFIX (lockdown swallows the Strict Alarm ring screen): a
+            // ringing alarm is one of our own windows too (AlarmRingActivity,
+            // same package) — and by design LockdownOverlay is hidden for as
+            // long as it's ringing (see AlarmRingingService.onStartCommand
+            // and LockdownOverlay.show()'s own guard). Without this check,
+            // the line below would read "overlay not showing" as "something
+            // of ours needs corralling" and call corralToLockdownLauncher(),
+            // which shows the overlay right back on top of the alarm it was
+            // just cleared off of. Checked first, ahead of the
+            // overlay-showing check, so it wins regardless of that window's
+            // current state.
+            if (AlarmRingingService.isAlarmCurrentlyRinging()) return false
+
             // Our own windows: the lockdown screen is now the LockdownOverlay
             // window (not an Activity with a recognizable class name), so
             // "showing" is the signal that the user is already corralled.
