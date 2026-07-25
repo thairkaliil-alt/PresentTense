@@ -27,6 +27,12 @@ object BlockerRepository {
     private const val KEY_BREAK_UNTIL = "lockdown_break_until"
     private const val KEY_BREAK_USES = "lockdown_break_uses_this_session"
     private const val KEY_BREAK_SESSION_ANCHOR = "lockdown_break_session_anchor"
+    // Snapshot of maxBreaksPerSession/breakDurationMinutes taken the instant a
+    // session starts — see maxBreaksPerSession()/breakDurationSeconds() below
+    // for why a session must never consult the live StrictModeConfig again
+    // after that moment.
+    private const val KEY_SESSION_MAX_BREAKS = "lockdown_session_max_breaks"
+    private const val KEY_SESSION_BREAK_DURATION_SECONDS = "lockdown_session_break_duration_seconds"
     private const val KEY_DAILY_GOAL_MINUTES = "daily_goal_minutes"
     private const val KEY_LOCKDOWN_HEARTBEAT_AT = "lockdown_heartbeat_at"
     // See markScheduleOccurrenceCancelled/isScheduleOccurrenceCancelled — a
@@ -70,6 +76,12 @@ object BlockerRepository {
     private val _breakUsesThisSession = MutableStateFlow(0)
     val breakUsesThisSession: StateFlow<Int> = _breakUsesThisSession
 
+    // -1 / -1L means "no session has ever taken a snapshot yet" — see
+    // maxBreaksPerSession()/breakDurationSeconds(), which fall back to the
+    // live StrictModeConfig only in that case.
+    private val _sessionMaxBreaks = MutableStateFlow(-1)
+    private val _sessionBreakDurationSeconds = MutableStateFlow(-1L)
+
     private val _strictMode = MutableStateFlow(StrictModeConfig())
     val strictMode: StateFlow<StrictModeConfig> = _strictMode
 
@@ -96,6 +108,8 @@ object BlockerRepository {
         _manualLockUntil.value = prefs.getLong(KEY_MANUAL_LOCK_UNTIL, 0L)
         _breakUntil.value = prefs.getLong(KEY_BREAK_UNTIL, 0L)
         _breakUsesThisSession.value = prefs.getInt(KEY_BREAK_USES, 0)
+        _sessionMaxBreaks.value = prefs.getInt(KEY_SESSION_MAX_BREAKS, -1)
+        _sessionBreakDurationSeconds.value = prefs.getLong(KEY_SESSION_BREAK_DURATION_SECONDS, -1L)
 
         val list = mutableListOf<BlockedApp>()
         prefs.getString(KEY_APPS, null)?.let { raw ->
@@ -371,10 +385,44 @@ object BlockerRepository {
     private fun occurrenceKey(scheduleId: String, startedAtMillis: Long) =
         "$scheduleId$OCCURRENCE_KEY_SEPARATOR$startedAtMillis"
 
-    // Break settings are now read from StrictModeConfig so the user can
-    // configure them from the Strict Mode settings screen.
-    fun maxBreaksPerSession(): Int = _strictMode.value.maxBreaksPerSession
-    fun breakDurationSeconds(): Long = _strictMode.value.breakDurationMinutes * 60L
+    // BUGFIX ("emergency breaks vanished overnight, mid-session, with no
+    // setting ever touched"): these two used to read straight from the live
+    // StrictModeConfig — _strictMode.value.maxBreaksPerSession /
+    // breakDurationMinutes — every single time, for as long as the session
+    // ran. setStrictMode() has its own guard that's SUPPOSED to stop that
+    // live value from changing while a session is running (see its
+    // comment), but that guard only works if it correctly notices a session
+    // is running at the exact instant something calls setStrictMode() —
+    // and across a many-hour session (phone asleep, the background process
+    // getting killed and restarted by the OS one or more times, a stray
+    // geofence transition, etc.) that's one more thing that has to go right
+    // every time, for hours on end, with zero margin: the moment it's wrong
+    // even once, the live value can slip, and because these two functions
+    // kept reading that same live value forever after, the session's break
+    // allotment silently — and permanently, for the rest of that session —
+    // followed it down. There was no way to recover once that happened.
+    //
+    // The fix: stop depending on catching every possible moment the live
+    // setting could change, and instead make the session immune to it.
+    // The instant a session starts, resetBreaksForNewSession() below writes
+    // down (freezes) this session's own max-breaks/duration. From then on,
+    // for the rest of THAT session, these two functions only ever consult
+    // that frozen snapshot — never the live StrictModeConfig again — so it
+    // no longer matters whether something nudges the live setting mid-
+    // session; this session simply isn't looking at it anymore. The next
+    // session takes a fresh snapshot from whatever the live setting says at
+    // the time it starts, so legitimate changes made BETWEEN sessions (the
+    // only time the settings screen allows changes anyway) still apply
+    // normally.
+    //
+    // Falls back to the live config only when no snapshot has ever been
+    // taken yet (a fresh install, or before this app update's first
+    // session) — see _sessionMaxBreaks/_sessionBreakDurationSeconds.
+    fun maxBreaksPerSession(): Int =
+        _sessionMaxBreaks.value.takeIf { it >= 0 } ?: _strictMode.value.maxBreaksPerSession
+
+    fun breakDurationSeconds(): Long =
+        _sessionBreakDurationSeconds.value.takeIf { it >= 0L } ?: (_strictMode.value.breakDurationMinutes * 60L)
 
     fun breaksRemaining(): Int =
         (maxBreaksPerSession() - _breakUsesThisSession.value).coerceAtLeast(0)
@@ -404,9 +452,19 @@ object BlockerRepository {
     fun resetBreaksForNewSession() {
         _breakUsesThisSession.value = 0
         _breakUntil.value = 0L
+        // Freeze THIS session's own break allotment from whatever the live
+        // setting says right now — see maxBreaksPerSession()/
+        // breakDurationSeconds() above for why the session must never
+        // consult the live StrictModeConfig again after this point.
+        val snapshotMaxBreaks = _strictMode.value.maxBreaksPerSession
+        val snapshotDurationSeconds = _strictMode.value.breakDurationMinutes * 60L
+        _sessionMaxBreaks.value = snapshotMaxBreaks
+        _sessionBreakDurationSeconds.value = snapshotDurationSeconds
         prefs.edit()
             .putInt(KEY_BREAK_USES, 0)
             .putLong(KEY_BREAK_UNTIL, 0L)
+            .putInt(KEY_SESSION_MAX_BREAKS, snapshotMaxBreaks)
+            .putLong(KEY_SESSION_BREAK_DURATION_SECONDS, snapshotDurationSeconds)
             .apply()
     }
 
