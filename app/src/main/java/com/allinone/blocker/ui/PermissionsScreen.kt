@@ -76,6 +76,7 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
     val hasDeviceAdmin   = remember(refreshKey) { Permissions.hasDeviceAdmin(context) }
     val hasDefaultHome   = remember(refreshKey) { Permissions.isDefaultHomeApp(context) }
     val hasBatteryExempt = remember(refreshKey) { Permissions.hasBatteryOptimizationExemption(context) }
+    val hasFullScreenIntent = remember(refreshKey) { Permissions.hasFullScreenIntentPermission(context) }
 
     // A local, throwaway counter used only to force a re-read of
     // Permissions.hasNotifications() right after the system dialog below
@@ -192,6 +193,16 @@ fun PermissionsScreen(refreshKey: Int, onBack: () -> Unit) {
                     "corrected. This closes the \"press Home and it rolls away\" gap.",
                 granted     = hasDefaultHome,
                 onGrant     = { Permissions.openHomeAppSettings(context) }
+            )
+            PermissionRow(
+                tier        = PermissionTier.RECOMMENDED,
+                title       = "Full-screen alarm",
+                description = "Lets a ringing Strict Alarm take over the screen on its own, " +
+                    "the same way the system Clock app's alarm does — instead of sitting as " +
+                    "a plain notification you have to go find and tap. Android 14+ only; " +
+                    "older phones already have this by default.",
+                granted     = hasFullScreenIntent,
+                onGrant     = { Permissions.openFullScreenIntentSettings(context) }
             )
             PermissionRow(
                 tier        = PermissionTier.RECOMMENDED,
