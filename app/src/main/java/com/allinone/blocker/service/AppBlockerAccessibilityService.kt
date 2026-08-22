@@ -362,7 +362,34 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             // decide "not currently on the Reels tab", and HIDE the full-block
             // overlay it has no business touching — silently unblocking a
             // fully-blocked app the moment anything changed on screen.
-            if (evaluateAppBlock(pkg)?.blocked == true) {
+            //
+            // BUGFIX (SESSION_LIMIT never actually blocking anything): the
+            // comment above only holds for rules that are ALREADY true the
+            // instant the app opens (PERMANENT, TIME_INTERVAL, an
+            // already-exhausted DAILY_LIMIT/OPEN_COUNT/COOLDOWN) — for those,
+            // yes, the overlay is already up from the opening check, and this
+            // branch used to just `return` on that assumption. But
+            // SESSION_LIMIT only turns true minutes INTO an already-open
+            // session — the opening check correctly said "not blocked yet"
+            // long before this point. So when this later check finally comes
+            // back blocked, the app was never actually put behind the block
+            // screen; this branch just silently returned and let the user
+            // keep using it. Now: if the overlay isn't already showing, show
+            // it right here, the first time this rule trips.
+            val ongoingBlock = evaluateAppBlock(pkg)
+            if (ongoingBlock?.blocked == true) {
+                if (lastOverlayShouldShow != true) {
+                    val blockedApp = BlockerRepository.appFor(pkg)
+                    ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
+                    overlay.show(
+                        packageName = pkg,
+                        appName = blockedApp?.appName ?: pkg,
+                        reason = ongoingBlock.reason,
+                        motivation = MOTIVATION,
+                        isLockdown = false
+                    )
+                    lastOverlayShouldShow = true
+                }
                 return
             }
             // ── Reels content-change detection ───────────────────────────────
