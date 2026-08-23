@@ -42,7 +42,19 @@ data class BlockRule(
     val endMinutes: Int = 18 * 60,
     val limitMinutes: Int = 30,
     val count: Int = 3,
-    val cooldownMinutes: Int = 45
+    val cooldownMinutes: Int = 45,
+    // Only used by SESSION_LIMIT. This is the length of the "session" that
+    // limitMinutes is measured against — e.g. limitMinutes=15 with
+    // sessionWindowMinutes=60 means "15 minutes of use, out of every 60-minute
+    // stretch". Usage accumulates across closes/reopens within that stretch
+    // (see BlockerRepository.addSessionStint/sessionWindowUsedMs) — only once
+    // the full window has passed does the count start over.
+    // BUGFIX ("close and reopen the app resets the session block"): before
+    // this field existed there was no window at all — a "session" was just
+    // "since the app was last brought to the foreground", so leaving and
+    // coming straight back always looked like a brand-new session. Always
+    // whole hours (adjustable in 1h steps in the UI), 60 minimum.
+    val sessionWindowMinutes: Int = 60
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("type", type.name)
@@ -51,6 +63,7 @@ data class BlockRule(
         put("limitMinutes", limitMinutes)
         put("count", count)
         put("cooldownMinutes", cooldownMinutes)
+        put("sessionWindowMinutes", sessionWindowMinutes)
     }
 
     companion object {
@@ -61,7 +74,12 @@ data class BlockRule(
             endMinutes = o.optInt("endMinutes", 18 * 60),
             limitMinutes = o.optInt("limitMinutes", 30),
             count = o.optInt("count", 3),
-            cooldownMinutes = o.optInt("cooldownMinutes", 45)
+            cooldownMinutes = o.optInt("cooldownMinutes", 45),
+            // Missing on every rule saved before this feature existed —
+            // optInt defaults those to 60 (1 hour), which matches the
+            // feature's own default, so old SESSION_LIMIT rules behave
+            // exactly the way a freshly-created one would.
+            sessionWindowMinutes = o.optInt("sessionWindowMinutes", 60)
         )
     }
 }
