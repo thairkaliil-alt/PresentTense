@@ -726,8 +726,15 @@ private fun RuleCard(
                 BlockRuleType.DAILY_LIMIT ->
                     RuleStepper("Minutes allowed per day", rule.limitMinutes, 5, 5) { onChange(rule.copy(limitMinutes = it)) }
 
-                BlockRuleType.SESSION_LIMIT ->
+                BlockRuleType.SESSION_LIMIT -> {
                     RuleStepper("Minutes per session", rule.limitMinutes, 5, 1) { onChange(rule.copy(limitMinutes = it)) }
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = CardSurfaceAlt, thickness = 0.5.dp)
+                    Spacer(Modifier.height(12.dp))
+                    SessionWindowSelector(rule.sessionWindowMinutes) {
+                        onChange(rule.copy(sessionWindowMinutes = it))
+                    }
+                }
 
                 BlockRuleType.OPEN_COUNT ->
                     RuleStepper("Opens allowed today", rule.count, 1, 1) { onChange(rule.copy(count = it)) }
@@ -758,6 +765,104 @@ private fun RuleStepper(label: String, value: Int, step: Int, min: Int, onChange
             shape = RoundedCornerShape(8.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
         ) { Text("+") }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION WINDOW SELECTOR (SESSION_LIMIT only)
+//
+// Lets the user set how long a "session" lasts — the stretch of time their
+// usage keeps adding up across closes/reopens before it clears itself out.
+// Deliberately its own small, pill-styled control (not another plain
+// RuleStepper) so it reads as a distinct, considered setting rather than
+// just a second number next to the first — this is the one place in the app
+// explaining WHY the block can't be dodged by closing and reopening.
+// Always whole hours: min 1h, +/- 1h per tap, matching the requirement that
+// this only ever moves in 1-hour increments with a 1-hour default.
+// ─────────────────────────────────────────────────────────────────────────────
+
+private const val MIN_SESSION_WINDOW_HOURS = 1
+
+@Composable
+private fun SessionWindowSelector(windowMinutes: Int, onChange: (Int) -> Unit) {
+    val hours = (windowMinutes / 60).coerceAtLeast(MIN_SESSION_WINDOW_HOURS)
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(AccentBlue.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AccessTime,
+                    contentDescription = null,
+                    tint = AccentBlue,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Session length",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = TextSecondary
+            )
+
+            SessionWindowStepButton(symbol = "−", enabled = hours > MIN_SESSION_WINDOW_HOURS) {
+                onChange((hours - 1).coerceAtLeast(MIN_SESSION_WINDOW_HOURS) * 60)
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(AccentBlue.copy(alpha = 0.14f))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "${hours}h",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = AccentBlue
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            SessionWindowStepButton(symbol = "+", enabled = true) {
+                onChange((hours + 1) * 60)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Time in this app adds up for $hours ${if (hours == 1) "hour" else "hours"} — closing and reopening it won't reset the clock, only waiting out the full $hours ${if (hours == 1) "hour" else "hours"} does.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextTertiary
+        )
+    }
+}
+
+@Composable
+private fun SessionWindowStepButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (enabled) CardSurfaceAlt else CardSurfaceAlt.copy(alpha = 0.4f))
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            symbol,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (enabled) TextPrimary else TextTertiary
+        )
     }
 }
 
@@ -811,7 +916,7 @@ private fun ruleTitle(type: BlockRuleType): String = when (type) {
 private fun ruleDescription(type: BlockRuleType): String = when (type) {
     BlockRuleType.TIME_INTERVAL -> "Blocked during a recurring daily window (e.g. 9 AM–5 PM)"
     BlockRuleType.DAILY_LIMIT   -> "Blocks after you've used the app for X minutes today"
-    BlockRuleType.SESSION_LIMIT -> "Blocks after you've had it open for X minutes in one go"
+    BlockRuleType.SESSION_LIMIT -> "Blocks after X minutes of use in a session — reopening the app won't reset it"
     BlockRuleType.OPEN_COUNT    -> "Blocks after you've opened it N times today"
     BlockRuleType.COOLDOWN      -> "Forces a wait between every time you open it"
     BlockRuleType.PERMANENT     -> "Blocked at all times with no exceptions"
