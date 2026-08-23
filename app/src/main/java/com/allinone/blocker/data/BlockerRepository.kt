@@ -41,6 +41,14 @@ object BlockerRepository {
     // this never touches the LockdownSchedule list itself.
     private const val KEY_CANCELLED_OCCURRENCES = "grace_cancelled_schedule_occurrences"
     private const val OCCURRENCE_KEY_SEPARATOR = "::"
+    // SESSION_LIMIT's session-window tracking (see sessionWindowUsedMs/
+    // addSessionStint below) — KEY_SESSION_WINDOW_START is when the current
+    // window began per package, KEY_SESSION_WINDOW_USED is how many ms of
+    // use have landed inside it so far. Persisted (not just in-memory) so a
+    // killed/restarted accessibility service doesn't quietly hand back a
+    // free reset.
+    private const val KEY_SESSION_WINDOW_START = "session_window_start"
+    private const val KEY_SESSION_WINDOW_USED = "session_window_used_ms"
 
     private lateinit var prefs: SharedPreferences
     // Kept only so context-requiring checks (like the Active Plan auto-lock
@@ -91,6 +99,8 @@ object BlockerRepository {
 
     private val opensToday = HashMap<String, Int>()
     private val lastUseAt = HashMap<String, Long>()
+    private val sessionWindowStartAt = HashMap<String, Long>()
+    private val sessionWindowUsedMs = HashMap<String, Long>()
 
     fun init(context: Context) {
         if (initialized) return
@@ -162,6 +172,8 @@ object BlockerRepository {
 
         loadCounter(KEY_OPENS, opensToday)
         loadLongCounter(KEY_LAST_USE, lastUseAt)
+        loadLongCounter(KEY_SESSION_WINDOW_START, sessionWindowStartAt)
+        loadLongCounter(KEY_SESSION_WINDOW_USED, sessionWindowUsedMs)
     }
 
     fun upsertApp(app: BlockedApp) {
@@ -622,6 +634,47 @@ fun nextAlarmRequestCode(): Int {
     fun recordUse(pkg: String, whenMillis: Long) {
         lastUseAt[pkg] = whenMillis
         saveLongCounter(KEY_LAST_USE, lastUseAt)
+    }
+
+    /**
+     * How many milliseconds of [pkg]'s SESSION_LIMIT allowance are already
+     * used up from stints EARLIER in the current session window — not
+     * counting whatever stint is live right now, which the caller (the
+     * accessibility service) tracks separately and adds on top. If more
+     * than [windowMinutes] has passed since the window began, it's rolled
+     * over to a fresh, empty one first — that rollover is what makes the
+     * window actually "reset" after that long.
+     */
+    fun sessionWindowUsedMs(pkg: String, windowMinutes: Int, nowMillis: Long = System.currentTimeMillis()): Long {
+        rolloverSessionWindowIfNeeded(pkg, windowMinutes, nowMillis)
+        return sessionWindowUsedMs[pkg] ?: 0L
+    }
+
+    /**
+     * Folds a just-finished stint of using [pkg] ([stintMs] long) into its
+     * running session-window total. Called the moment [pkg] leaves the
+     * foreground, so the next time it's opened, [sessionWindowUsedMs]
+     * already reflects this time — closing and immediately reopening the
+     * app can never hand back a clean slate; only actually stepping away
+     * for the full [windowMinutes] does.
+     */
+    fun addSessionStint(pkg: String, stintMs: Long, windowMinutes: Int, nowMillis: Long = System.currentTimeMillis()) {
+        if (stintMs <= 0) return
+        rolloverSessionWindowIfNeeded(pkg, windowMinutes, nowMillis)
+        sessionWindowUsedMs[pkg] = (sessionWindowUsedMs[pkg] ?: 0L) + stintMs
+        saveLongCounter(KEY_SESSION_WINDOW_START, sessionWindowStartAt)
+        saveLongCounter(KEY_SESSION_WINDOW_USED, sessionWindowUsedMs)
+    }
+
+    private fun rolloverSessionWindowIfNeeded(pkg: String, windowMinutes: Int, nowMillis: Long) {
+        val start = sessionWindowStartAt[pkg]
+        val windowMs = windowMinutes.coerceAtLeast(1) * 60_000L
+        if (start == null || nowMillis - start >= windowMs) {
+            sessionWindowStartAt[pkg] = nowMillis
+            sessionWindowUsedMs[pkg] = 0L
+            saveLongCounter(KEY_SESSION_WINDOW_START, sessionWindowStartAt)
+            saveLongCounter(KEY_SESSION_WINDOW_USED, sessionWindowUsedMs)
+        }
     }
 
     fun dailyGoalMinutes(): Int {
