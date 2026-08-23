@@ -13,6 +13,12 @@ object BlockEngine {
     /**
      * @param sessionStart epoch millis the app most recently entered the
      *        foreground (for SESSION_LIMIT), or 0 if not currently foreground.
+     *        The caller (AppBlockerAccessibilityService) may shift this
+     *        earlier than the real foreground-entry time to fold in usage
+     *        from earlier stints within the same session window — see its
+     *        effectiveSessionStart() — so the plain `now - sessionStart`
+     *        check below transparently ends up measuring cumulative session
+     *        usage, not just the current stint.
      */
     fun evaluate(
         context: Context,
