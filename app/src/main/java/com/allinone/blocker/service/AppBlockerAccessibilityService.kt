@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.allinone.blocker.data.BlockDecision
 import com.allinone.blocker.data.BlockEngine
+import com.allinone.blocker.data.BlockRuleType
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownEngine
@@ -265,6 +266,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (pkg == packageName) {
             if (className.contains("MainActivity")) {
                 overlay.hide()
+                commitLiveSessionStint()
                 currentForeground = pkg
                 lastOverlayShouldShow = false
             }
@@ -319,6 +321,14 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
         val appSwitched = pkg != currentForeground
         if (appSwitched) {
+            // BUGFIX ("close and reopen the app resets the session block"):
+            // fold whatever's left of the outgoing app's stint into its
+            // running session-window total BEFORE currentForeground/
+            // sessionStart get overwritten below — otherwise that time is
+            // simply lost the moment the user switches away, which is
+            // exactly what let a quick close+reopen look like a fresh
+            // session. See commitLiveSessionStint's doc for the full story.
+            commitLiveSessionStint()
             currentForeground = pkg
             sessionStart = System.currentTimeMillis()
             lastOverlayShouldShow = null
@@ -448,7 +458,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             val decision = BlockEngine.evaluate(
                 context = this,
                 app = app,
-                sessionStart = sessionStart
+                sessionStart = effectiveSessionStart(pkg)
             )
 
             if (decision.blocked) {
@@ -500,8 +510,56 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         return BlockEngine.evaluate(
             context = this,
             app = app,
-            sessionStart = sessionStart
+            sessionStart = effectiveSessionStart(pkg)
         )
+    }
+
+    /**
+     * The [sessionStart] value to feed into [BlockEngine.evaluate]/
+     * [BlockEngine.evaluateTimeBound] for [pkg]. For an app with a
+     * SESSION_LIMIT rule, this shifts the raw "when did this stint begin"
+     * timestamp backwards by however much of that rule's session window is
+     * already used up from EARLIER stints (see
+     * BlockerRepository.sessionWindowUsedMs) — so BlockEngine's plain
+     * `elapsed = now - sessionStart` math transparently ends up counting
+     * time from before the app was last reopened too, without BlockEngine
+     * itself needing to know anything about windows or prior stints.
+     *
+     * For every other rule type (or an app with no SESSION_LIMIT rule at
+     * all) this is a no-op passthrough — those rules never read
+     * [sessionStart] in the first place.
+     */
+    private fun effectiveSessionStart(pkg: String): Long {
+        if (sessionStart <= 0L || pkg != currentForeground) return sessionStart
+        val rule = BlockerRepository.appFor(pkg)?.rules
+            ?.firstOrNull { it.type == BlockRuleType.SESSION_LIMIT }
+            ?: return sessionStart
+        val priorUsedMs = BlockerRepository.sessionWindowUsedMs(pkg, rule.sessionWindowMinutes)
+        return sessionStart - priorUsedMs
+    }
+
+    /**
+     * Folds however much of the CURRENT live stint (currentForeground/
+     * sessionStart) has elapsed into that package's running session-window
+     * total, if it has a SESSION_LIMIT rule. Safe to call any time,
+     * including when there's nothing live to commit (no-ops in that case).
+     * Called right before currentForeground/sessionStart get overwritten by
+     * a foreground switch, and once more from [onDestroy] as a best-effort
+     * save in case the service is killed mid-stint — without that second
+     * call, a service restart mid-session would silently drop whatever time
+     * had accumulated since the last switch.
+     */
+    private fun commitLiveSessionStint() {
+        val pkg = currentForeground ?: return
+        val start = sessionStart
+        if (start <= 0L) return
+        val rule = BlockerRepository.appFor(pkg)?.rules
+            ?.firstOrNull { it.type == BlockRuleType.SESSION_LIMIT }
+            ?: return
+        val elapsed = System.currentTimeMillis() - start
+        if (elapsed > 0) {
+            BlockerRepository.addSessionStint(pkg, elapsed, rule.sessionWindowMinutes)
+        }
     }
 
     /**
@@ -944,6 +1002,11 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (this::overlay.isInitialized) overlay.hide()
+        // Best-effort save of whatever's left of the current session stint —
+        // without this, the service being killed mid-session (Android
+        // reclaiming memory, the user force-stopping the app, etc.) would
+        // silently drop that time instead of counting it toward the window.
+        commitLiveSessionStint()
         // Cancel our own loop, but deliberately leave LockdownGuard's
         // notification/watchdog alarm running — those are what protect a
         // live session if this service is the thing getting killed.
