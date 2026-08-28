@@ -4,12 +4,14 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.util.Log
+import com.allinone.blocker.data.AccessibilityWatchdog
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
 import com.allinone.blocker.data.LockdownCompletionRepository
 import com.allinone.blocker.data.LockdownScheduleAlarms
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.StreakRepository
+import com.allinone.blocker.service.AccessibilityWatchdogService
 import com.allinone.blocker.ui.InstalledApps
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +49,19 @@ class BlockerApp : Application() {
         StreakRepository.init(this)
 
         createNotificationChannel()
+
+        // Third protection layer: starts the always-on watchdog that
+        // notices the instant Accessibility gets switched off in Settings
+        // — independent of Lockdown mode and Strict Mode, see
+        // AccessibilityWatchdogService's own header comment for the full
+        // reasoning. checkForSilentDisable() also runs right here, so the
+        // case where Accessibility was switched off while this app's whole
+        // process was dead (force-stopped, or across a reboot before this
+        // line ran) gets caught the instant the process exists again, not
+        // just whenever the service itself gets around to its own check.
+        AccessibilityWatchdogService.start(this)
+        AccessibilityWatchdog.checkForSilentDisable(this)
+
         ScreenTimeSyncWorker.schedulePeriodic(this)
 
         // Geofences also get cleared if the OS kills the app's process to
