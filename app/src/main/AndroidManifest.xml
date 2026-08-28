@@ -101,6 +101,17 @@
             android:launchMode="singleInstance"
             android:theme="@style/Theme.Blocker" />
 
+        <!-- Third protection layer (Instant Off-Alarm): full-screen alert
+             shown the moment AccessibilityWatchdog notices Accessibility got
+             switched off in Settings. Same reasoning as AlarmRingActivity
+             above — over the lock screen, excludeFromRecents. -->
+        <activity
+            android:name=".ui.AccessibilityOffAlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.Blocker" />
+
         <!-- Accessibility service: detects foreground app and enforces blocks -->
         <service
             android:name=".service.AppBlockerAccessibilityService"
@@ -132,6 +143,34 @@
              same pattern as BlockerForegroundService above. -->
         <service
             android:name=".service.AlarmRingingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Alarm ringing playback" />
+        </service>
+
+        <!-- Third protection layer (Instant Off-Alarm): always-on watchdog
+             that watches Android's own accessibility-services system setting
+             so it notices the instant Accessibility gets switched off in
+             Settings — independent of Lockdown mode and Strict Mode, and
+             independent of the Accessibility Service itself (it has to be:
+             the whole point is noticing THAT one going off). See
+             AccessibilityWatchdogService's header comment for the full
+             reasoning. -->
+        <service
+            android:name=".service.AccessibilityWatchdogService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Watches for the Accessibility permission being disabled" />
+        </service>
+
+        <!-- Third protection layer: runs while the Instant Off-Alarm is
+             actively ringing — same pattern as AlarmRingingService above. -->
+        <service
+            android:name=".service.AccessibilityOffAlarmService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
