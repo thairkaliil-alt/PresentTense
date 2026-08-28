@@ -11,4 +11,10 @@
     <string name="alarm_channel_name">Strict Alarm</string>
     <string name="alarm_notif_title">Strict Alarm is ringing</string>
     <string name="alarm_notif_text">Solve the puzzle to turn it off.</string>
+    <!-- Instant Off-Alarm (third protection layer): see AccessibilityWatchdogService -->
+    <string name="accessibility_watchdog_notif_title">Present Tense</string>
+    <string name="accessibility_watchdog_notif_text">Keeping watch over your Accessibility permission.</string>
+    <string name="accessibility_alarm_channel_name">Protection Turned Off</string>
+    <string name="accessibility_alarm_notif_title">Present Tense protection just turned off</string>
+    <string name="accessibility_alarm_notif_text">You disabled the Accessibility permission. Tap to turn it back on.</string>
 </resources>
