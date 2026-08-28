@@ -1,113 +1,148 @@
-package com.allinone.blocker.data
+package com.allinone.blocker.service
 
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
-import android.content.SharedPreferences
-import com.allinone.blocker.service.AccessibilityOffAlarmService
-import com.allinone.blocker.ui.Permissions
+import android.content.Intent
+import android.database.ContentObserver
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.provider.Settings
+import androidx.core.app.NotificationCompat
+import com.allinone.blocker.BlockerApp
+import com.allinone.blocker.R
+import com.allinone.blocker.data.AccessibilityWatchdog
+import com.allinone.blocker.ui.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AccessibilityWatchdog.kt
-//
-// PLAIN-ENGLISH SUMMARY:
-// This is the "third layer" — separate from Lockdown mode and separate
-// from Strict Mode. Those two only catch you in specific situations
-// (Lockdown: only while a session is live. Strict Mode: only if you try
-// to disable something from inside Present Tense's own screens). Neither
-// one notices if you just walk straight into Android's Settings app on an
-// ordinary day and flip the Accessibility switch off — which is exactly
-// how that became a free, unaccounted-for habit.
-//
-// Android will not let ANY app actually block that switch (see the
-// README) — so this doesn't try to. Instead it watches for the moment the
-// switch gets flipped, and reacts to it immediately and loudly instead of
-// letting it pass silently:
-//   1. Marks today's streak broken — the same consequence you already get
-//      for completing Strict Mode's in-app disable challenge, so going
-//      around through Settings instead isn't a free pass.
-//   2. Fires the Instant Off-Alarm — a full-screen, hard-to-miss alert
-//      with sound and vibration (see AccessibilityOffAlarmService).
-//
-// The actual watching happens in AccessibilityWatchdogService (a
-// ContentObserver on Android's own "which accessibility services are
-// enabled" system setting). This file is just the small, testable piece
-// that decides WHAT COUNTS as "you just turned it off" and what to do
-// about it — kept separate so the detection plumbing and the decision
-// logic don't get tangled together.
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Third protection layer — runs independently of Lockdown mode and Strict
+ * Mode, and independently of the Accessibility Service itself (it has to:
+ * the whole point is noticing the moment THAT gets switched off).
+ *
+ * Lockdown mode already corrals you away from the Settings app entirely —
+ * but only while a lockdown session is live. Strict Mode's PIN/cooldown/
+ * etc. only guards actions taken inside Present Tense's own screens.
+ * Neither one sees you if you just walk into Android's own Settings app
+ * on an ordinary day and flip the Accessibility switch off — this service
+ * is what closes that gap.
+ *
+ * It does NOT try to block that switch — Android deliberately doesn't let
+ * any third-party app do that (see README 12). Instead it watches
+ * Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, the one system value
+ * Android itself updates the moment ANY accessibility service is turned
+ * on or off — via Settings, the accessibility shortcut, or ADB. Unlike
+ * watching AppBlockerAccessibilityService's own onDestroy() directly, this
+ * can't be fooled by Android simply killing that service's process for an
+ * ordinary reason (memory pressure, a swipe from Recents) — those never
+ * touch this setting, only a genuine enable/disable does.
+ *
+ * A slower 20s self-check loop runs alongside the observer as a second,
+ * independent check — the same "two independent checkers" approach
+ * BlockerForegroundService already uses for its own watchdog — so a
+ * missed or coalesced Settings-change notification on some OEM builds
+ * still gets caught within moments either way.
+ *
+ * Started from BlockerApp.onCreate() (so it's up whenever the app process
+ * exists for any reason) and re-armed from BootReceiver (Android doesn't
+ * auto-restart a plain foreground service across reboot the way it does
+ * an enabled Accessibility Service).
+ */
+class AccessibilityWatchdogService : Service() {
 
-object AccessibilityWatchdog {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(job)
+    private var observer: ContentObserver? = null
+    private var selfCheckLoopStarted = false
 
-    private const val PREFS = "accessibility_watchdog_prefs"
-    private const val KEY_LAST_KNOWN_ENABLED = "last_known_enabled"
+    override fun onCreate() {
+        super.onCreate()
+        registerObserver()
+    }
 
-    // In-memory only, on purpose — same reasoning as
-    // AlarmRingingService.activeInstance: this just needs to stop this
-    // process from launching a second alarm on top of one that's already
-    // showing, if the ContentObserver and the periodic self-check both
-    // notice the same disable within moments of each other.
-    @Volatile private var alarmCurrentlyShowing = false
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIF_ID, buildNotification())
+        // Catches anything that changed while this exact service instance
+        // wasn't alive yet to observe it live (e.g. the process was fully
+        // dead and this very call is what's starting it back up).
+        AccessibilityWatchdog.checkForSilentDisable(applicationContext)
+        startSelfCheckLoopOnce()
+        return START_STICKY
+    }
 
-    private fun prefs(context: Context): SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
-    /**
-     * Call this the moment Present Tense's Accessibility Service is
-     * confirmed connected — AppBlockerAccessibilityService.onServiceConnected()
-     * is the one reliable "it's genuinely on right now" signal Android
-     * gives us. This is what clears a running alarm the instant the
-     * permission is turned back on: the fastest way back to normal is
-     * just re-enabling it, and this is how that gets noticed right away
-     * instead of waiting for the next periodic check.
-     */
-    fun recordEnabled(context: Context) {
-        val appContext = context.applicationContext
-        prefs(appContext).edit().putBoolean(KEY_LAST_KNOWN_ENABLED, true).apply()
-        if (alarmCurrentlyShowing) {
-            alarmCurrentlyShowing = false
-            AccessibilityOffAlarmService.stop(appContext)
+    private fun registerObserver() {
+        val handler = Handler(Looper.getMainLooper())
+        val contentObserver = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                AccessibilityWatchdog.checkForSilentDisable(applicationContext)
+            }
+        }
+        observer = contentObserver
+        runCatching {
+            contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+                false,
+                contentObserver
+            )
         }
     }
 
-    /**
-     * The core check. Compares Android's current Accessibility state
-     * against what this last knew it to be:
-     *
-     *  - was ON, now OFF  → the user just switched it off in Settings.
-     *    This is the one transition this whole file exists to catch.
-     *  - was OFF, now ON  → re-enabled from outside our observation (e.g.
-     *    the accessibility shortcut fired before onServiceConnected did)
-     *    — resync silently, no alarm.
-     *  - unchanged        → no-op besides resyncing the stored value.
-     *
-     * Safe to call as often as you like from as many places as you like —
-     * the ContentObserver, the periodic self-check, app startup, boot —
-     * it only ever actually acts on the specific ON→OFF edge, and
-     * [alarmCurrentlyShowing] stops it from launching the alarm twice if
-     * two callers notice the same transition close together.
-     *
-     * The very first time this ever runs on a device (key not written
-     * yet), [wasEnabled] defaults to whatever [nowEnabled] already is —
-     * so a fresh install, or the first time onboarding grants the
-     * permission, can never itself look like a disable.
-     */
-    fun checkForSilentDisable(context: Context) {
-        val appContext = context.applicationContext
-        val nowEnabled = Permissions.hasAccessibility(appContext)
-        val wasEnabled = prefs(appContext).getBoolean(KEY_LAST_KNOWN_ENABLED, nowEnabled)
-
-        prefs(appContext).edit().putBoolean(KEY_LAST_KNOWN_ENABLED, nowEnabled).apply()
-
-        if (wasEnabled && !nowEnabled) {
-            if (!alarmCurrentlyShowing) {
-                alarmCurrentlyShowing = true
-                StreakRepository.recordSuccessfulDisable()
-                AccessibilityOffAlarmService.start(appContext)
+    private fun startSelfCheckLoopOnce() {
+        if (selfCheckLoopStarted) return
+        selfCheckLoopStarted = true
+        scope.launch {
+            while (true) {
+                delay(20_000L)
+                runCatching { AccessibilityWatchdog.checkForSilentDisable(applicationContext) }
             }
-        } else if (nowEnabled && alarmCurrentlyShowing) {
-            // Belt-and-braces: caught the re-enable here instead of via
-            // recordEnabled (e.g. a periodic check happened to run first).
-            alarmCurrentlyShowing = false
-            AccessibilityOffAlarmService.stop(appContext)
+        }
+    }
+
+    private fun buildNotification(): Notification {
+        val tapIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, BlockerApp.CHANNEL_ID)
+            .setContentTitle(getString(R.string.accessibility_watchdog_notif_title))
+            .setContentText(getString(R.string.accessibility_watchdog_notif_text))
+            .setSmallIcon(R.drawable.ic_block)
+            .setContentIntent(tapIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    override fun onDestroy() {
+        observer?.let { runCatching { contentResolver.unregisterContentObserver(it) } }
+        job.cancel()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        private const val NOTIF_ID = 4001
+
+        /** Starts (or is a harmless repeat call on) the watchdog. Safe to call anywhere, anytime. */
+        fun start(context: Context) {
+            val appContext = context.applicationContext
+            val intent = Intent(appContext, AccessibilityWatchdogService::class.java)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    appContext.startForegroundService(intent)
+                } else {
+                    appContext.startService(intent)
+                }
+            }
         }
     }
 }
