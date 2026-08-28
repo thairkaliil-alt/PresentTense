@@ -3,6 +3,7 @@ package com.allinone.blocker.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.allinone.blocker.data.AccessibilityWatchdog
 import com.allinone.blocker.data.AlarmScheduler
 import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.data.GeofenceManager
@@ -11,6 +12,7 @@ import com.allinone.blocker.data.LockdownGuard
 import com.allinone.blocker.data.LockdownScheduleAlarms
 import com.allinone.blocker.data.ScreenTimeSyncWorker
 import com.allinone.blocker.data.ScreenTimeTracker
+import com.allinone.blocker.service.AccessibilityWatchdogService
 import kotlin.concurrent.thread
 
 /** Re-arms the background service after a reboot (README 12: RECEIVE_BOOT_COMPLETED). */
@@ -54,5 +56,15 @@ class BootReceiver : BroadcastReceiver() {
         // BlockerApp's own startup observer, so a scheduled lockdown can
         // never silently go quiet after a reboot.
         LockdownScheduleAlarms.rearm(context.applicationContext)
+
+        // Third protection layer: BlockerApp.onCreate() already starts this
+        // (Application.onCreate() always runs before any receiver in a
+        // freshly-started process), so this is intentionally
+        // belt-and-braces — same idiom as the re-arms above — rather than
+        // strictly required. Explicit here anyway so the watchdog's
+        // re-arm-after-reboot story doesn't silently depend on that
+        // ordering guarantee never changing.
+        AccessibilityWatchdogService.start(context)
+        AccessibilityWatchdog.checkForSilentDisable(context)
     }
 }
