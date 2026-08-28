@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.allinone.blocker.data.AccessibilityWatchdog
 import com.allinone.blocker.data.BlockDecision
 import com.allinone.blocker.data.BlockEngine
 import com.allinone.blocker.data.BlockRuleType
@@ -88,6 +89,12 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
         if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
         overlay = OverlayManager(this)
+        // Third protection layer: this is Android's one reliable "the
+        // Accessibility permission is genuinely on right now" signal, so
+        // it's also what clears a running Instant Off-Alarm the moment the
+        // user turns the permission back on — see
+        // AccessibilityWatchdog.recordEnabled and its header comment.
+        AccessibilityWatchdog.recordEnabled(applicationContext)
         // All real-time blocking (app blocks, lockdown, strict mode, reels
         // kill switch) happens right here in this accessibility service,
         // which Android keeps running without requiring any notification.
