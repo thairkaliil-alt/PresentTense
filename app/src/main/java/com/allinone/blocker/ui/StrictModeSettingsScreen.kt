@@ -378,6 +378,11 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                 )
             }
 
+            // ── Ultra-Strict Layer ───────────────────────────────────────────
+            // A separate, optional fourth layer — off by default. See
+            // UltraStrictLayerCard.kt / UltraStrictMode.kt.
+            UltraStrictLayerSection()
+
             Spacer(Modifier.height(16.dp))
         }
     }
