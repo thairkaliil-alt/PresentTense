@@ -23,6 +23,7 @@ object BlockerRepository {
     private const val KEY_SCHEDULES = "lockdown_schedules"
     private const val KEY_MANUAL_LOCK_UNTIL = "manual_lock_until"
     private const val KEY_STRICT_MODE = "strict_mode"
+    private const val KEY_ULTRA_STRICT = "ultra_strict_mode"
     private const val KEY_STRICT_ALARMS_LIST = "strict_alarms_list"
     private const val KEY_BREAK_UNTIL = "lockdown_break_until"
     private const val KEY_BREAK_USES = "lockdown_break_uses_this_session"
@@ -93,6 +94,12 @@ object BlockerRepository {
     private val _strictMode = MutableStateFlow(StrictModeConfig())
     val strictMode: StateFlow<StrictModeConfig> = _strictMode
 
+    // The fourth, optional layer — see UltraStrictMode.kt. Off by default;
+    // AccessibilityWatchdog only reacts to a silent Accessibility disable
+    // while ultraStrict.value.enabled is true.
+    private val _ultraStrict = MutableStateFlow(UltraStrictConfig())
+    val ultraStrict: StateFlow<UltraStrictConfig> = _ultraStrict
+
     // The list of independent Strict Alarms — see StrictAlarmEntry.kt.
     private val _strictAlarms = MutableStateFlow<List<StrictAlarmEntry>>(emptyList())
     val strictAlarms: StateFlow<List<StrictAlarmEntry>> = _strictAlarms
@@ -159,6 +166,10 @@ object BlockerRepository {
 
         prefs.getString(KEY_STRICT_MODE, null)?.let { raw ->
             runCatching { _strictMode.value = StrictModeConfig.fromJson(JSONObject(raw)) }
+        }
+
+        prefs.getString(KEY_ULTRA_STRICT, null)?.let { raw ->
+            runCatching { _ultraStrict.value = UltraStrictConfig.fromJson(JSONObject(raw)) }
         }
 
         val alarmEntries = mutableListOf<StrictAlarmEntry>()
@@ -525,6 +536,11 @@ object BlockerRepository {
         }
         _strictMode.value = safeConfig
         prefs.edit().putString(KEY_STRICT_MODE, safeConfig.toJson().toString()).apply()
+    }
+
+    fun setUltraStrict(config: UltraStrictConfig) {
+        _ultraStrict.value = config
+        prefs.edit().putString(KEY_ULTRA_STRICT, config.toJson().toString()).apply()
     }
 
     /** One blocked app that is currently mid-block for a reason that has a built-in end time. */
