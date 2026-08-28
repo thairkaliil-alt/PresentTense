@@ -27,6 +27,12 @@ import com.allinone.blocker.ui.Permissions
 //   2. Fires the Instant Off-Alarm — a full-screen, hard-to-miss alert
 //      with sound and vibration (see AccessibilityOffAlarmService).
 //
+// This whole reaction is gated behind the "Ultra-Strict Layer" toggle (see
+// UltraStrictMode.kt) — OFF by default, since firing a full-screen alarm
+// every single time is too much for everyday use. checkForSilentDisable
+// below still runs constantly regardless (cheap, harmless), it just does
+// nothing while BlockerRepository.ultraStrict.value.enabled is false.
+//
 // The actual watching happens in AccessibilityWatchdogService (a
 // ContentObserver on Android's own "which accessibility services are
 // enabled" system setting). This file is just the small, testable piece
@@ -96,6 +102,20 @@ object AccessibilityWatchdog {
         val wasEnabled = prefs(appContext).getBoolean(KEY_LAST_KNOWN_ENABLED, nowEnabled)
 
         prefs(appContext).edit().putBoolean(KEY_LAST_KNOWN_ENABLED, nowEnabled).apply()
+
+        if (!BlockerRepository.ultraStrict.value.enabled) {
+            // Ultra-Strict Layer is off — this whole watcher is dormant.
+            // [KEY_LAST_KNOWN_ENABLED] still gets kept in sync above while
+            // it's off, so switching Ultra-Strict back ON later starts
+            // fresh from whatever Accessibility's state is AT THAT MOMENT,
+            // instead of treating everything that happened while it was
+            // off as a violation the instant it's switched back on.
+            if (alarmCurrentlyShowing) {
+                alarmCurrentlyShowing = false
+                AccessibilityOffAlarmService.stop(appContext)
+            }
+            return
+        }
 
         if (wasEnabled && !nowEnabled) {
             if (!alarmCurrentlyShowing) {
