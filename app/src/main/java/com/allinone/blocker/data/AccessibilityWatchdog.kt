@@ -3,6 +3,7 @@ package com.allinone.blocker.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.allinone.blocker.service.AccessibilityOffAlarmService
+import com.allinone.blocker.ui.AccessibilityOffAlarmActivity
 import com.allinone.blocker.ui.Permissions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,10 +61,14 @@ object AccessibilityWatchdog {
      * Call this the moment Present Tense's Accessibility Service is
      * confirmed connected — AppBlockerAccessibilityService.onServiceConnected()
      * is the one reliable "it's genuinely on right now" signal Android
-     * gives us. This is what clears a running alarm the instant the
+     * gives us. This is what clears a running alarm — sound, vibration,
+     * AND the full-screen Off-Alarm screen itself (see
+     * AccessibilityOffAlarmActivity.closeIfShowing) — the instant the
      * permission is turned back on: the fastest way back to normal is
      * just re-enabling it, and this is how that gets noticed right away
-     * instead of waiting for the next periodic check.
+     * instead of waiting for the next periodic check. Works even if that
+     * screen is currently backgrounded (e.g. the user is over in
+     * Settings right now flipping the switch).
      */
     fun recordEnabled(context: Context) {
         val appContext = context.applicationContext
@@ -71,6 +76,7 @@ object AccessibilityWatchdog {
         if (alarmCurrentlyShowing) {
             alarmCurrentlyShowing = false
             AccessibilityOffAlarmService.stop(appContext)
+            AccessibilityOffAlarmActivity.closeIfShowing()
         }
     }
 
@@ -113,6 +119,7 @@ object AccessibilityWatchdog {
             if (alarmCurrentlyShowing) {
                 alarmCurrentlyShowing = false
                 AccessibilityOffAlarmService.stop(appContext)
+                AccessibilityOffAlarmActivity.closeIfShowing()
             }
             return
         }
@@ -128,6 +135,7 @@ object AccessibilityWatchdog {
             // recordEnabled (e.g. a periodic check happened to run first).
             alarmCurrentlyShowing = false
             AccessibilityOffAlarmService.stop(appContext)
+            AccessibilityOffAlarmActivity.closeIfShowing()
         }
     }
 }
