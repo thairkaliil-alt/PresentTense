@@ -3,6 +3,8 @@ package com.allinone.blocker.ui
 import android.app.KeyguardManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -28,7 +30,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -53,18 +54,36 @@ import com.allinone.blocker.ui.theme.BlockerTheme
  * that switch from being flipped, so this doesn't try to. What it does
  * instead is make the moment impossible to quietly miss — full screen,
  * shows over the lock screen, sound + vibration (AccessibilityOffAlarmService)
- * — with one clear way back: turn it on again.
+ * — with exactly ONE way off this screen: turn Accessibility back on.
  *
- * Unlike AlarmRingActivity (Strict Alarm's ring screen), Back is allowed
- * here — it just does the same thing "Not now" does below. This screen's
- * job is to guarantee the moment gets SEEN, not to trap anyone on it.
+ * This screen only ever shows while the Ultra-Strict Layer is turned on
+ * (see AccessibilityWatchdog.checkForSilentDisable — the whole alarm is
+ * gated behind that toggle). So on purpose, unlike a plain notice, there is
+ * no "not now" / dismiss button here, and Back does nothing — same
+ * reasoning AlarmRingActivity already uses for Strict Alarm's ring screen:
+ * something meant to hold the line in a moment of temptation shouldn't
+ * ship with a one-tap way past itself. That's not a missing exit, either —
+ * Ultra-Strict Layer already has its own real one (the wait + password +
+ * written-pledge disable flow elsewhere in the app), so this screen
+ * doesn't need a second, looser one bolted on too.
+ *
+ * Tapping "Turn it back on" sends the user to Android's Accessibility
+ * settings but deliberately does NOT close this screen by itself — only
+ * Accessibility actually being back on does that. Closing happens two
+ * ways, belt-and-braces:
+ *  1. [AccessibilityWatchdog.recordEnabled] pushes the close the moment
+ *     Android confirms the service reconnected — works even while this
+ *     screen is backgrounded (the user is off in Settings right now).
+ *  2. [onResume] double-checks the same thing directly, in case this
+ *     screen happens to become visible again just ahead of that push.
  */
 class AccessibilityOffAlarmActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeInstance = this
         showOverLockScreen()
-        allowBackAsDismiss()
+        blockBackButton()
 
         setContent {
             BlockerTheme(darkTheme = true) {
@@ -72,15 +91,30 @@ class AccessibilityOffAlarmActivity : ComponentActivity() {
                     onTurnBackOn = {
                         AccessibilityOffAlarmService.activeInstance?.stopRinging()
                         Permissions.openAccessibilitySettings(this)
-                        finish()
-                    },
-                    onDismiss = {
-                        AccessibilityOffAlarmService.activeInstance?.stopRinging()
-                        finish()
                     }
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // See class doc, closing path 2/2. Cheap single settings read, and
+        // only ever actually does anything on the specific "came back here
+        // and it's genuinely on now" case.
+        if (Permissions.hasAccessibility(this)) {
+            finishBecauseAccessibilityIsOn()
+        }
+    }
+
+    override fun onDestroy() {
+        if (activeInstance === this) activeInstance = null
+        super.onDestroy()
+    }
+
+    private fun finishBecauseAccessibilityIsOn() {
+        AccessibilityOffAlarmService.activeInstance?.stopRinging()
+        finish()
     }
 
     private fun showOverLockScreen() {
@@ -100,13 +134,38 @@ class AccessibilityOffAlarmActivity : ComponentActivity() {
         }
     }
 
-    private fun allowBackAsDismiss() {
+    private fun blockBackButton() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                AccessibilityOffAlarmService.activeInstance?.stopRinging()
-                finish()
+                // Intentionally blocked — same reasoning as AlarmRingActivity:
+                // the only way off this screen is actually turning
+                // Accessibility back on, not an accidental Back press.
             }
         })
+    }
+
+    companion object {
+        // In-memory only, on purpose — same pattern as
+        // AccessibilityOffAlarmService.activeInstance right below this
+        // screen. Lets AccessibilityWatchdog.recordEnabled close this
+        // exact screen the instant Accessibility is confirmed back on,
+        // even while it's sitting backgrounded behind Android's own
+        // Settings app.
+        @Volatile private var activeInstance: AccessibilityOffAlarmActivity? = null
+
+        /**
+         * Closes this screen if it's currently showing (or backgrounded
+         * but still alive) — no-op otherwise. Safe to call from any
+         * thread, any time; hops to the main thread itself since some
+         * callers (AccessibilityWatchdogService's periodic self-check)
+         * run on a background thread.
+         */
+        fun closeIfShowing() {
+            val instance = activeInstance ?: return
+            Handler(Looper.getMainLooper()).post {
+                instance.finishBecauseAccessibilityIsOn()
+            }
+        }
     }
 }
 
@@ -120,12 +179,10 @@ private val WarnBg        = Color(0xFF1A0F0F)
 private val WarnAccent    = Color(0xFFE4895F)
 private val WarnTextPri   = Color(0xFFF5EFEC)
 private val WarnTextSec   = Color(0xFFC9B8B0)
-private val WarnTextMuted = Color(0xFF8A7570)
 
 @Composable
 private fun AccessibilityOffAlarmScreen(
-    onTurnBackOn: () -> Unit,
-    onDismiss: () -> Unit
+    onTurnBackOn: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = WarnBg) {
         Column(
@@ -157,6 +214,15 @@ private fun AccessibilityOffAlarmScreen(
                 textAlign = TextAlign.Center
             )
 
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = "This screen stays up until it's back on — that's the only way past it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = WarnTextSec,
+                textAlign = TextAlign.Center
+            )
+
             Spacer(Modifier.weight(1f))
 
             Button(
@@ -175,12 +241,6 @@ private fun AccessibilityOffAlarmScreen(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            TextButton(onClick = onDismiss) {
-                Text("Not now", color = WarnTextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             Spacer(Modifier.height(32.dp))
