@@ -1,7 +1,6 @@
 package com.allinone.blocker.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,14 +11,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -71,10 +68,15 @@ import kotlinx.coroutines.delay
 // switch on is instant.
 //
 // Turning OFF: the switch does NOT flip off directly. Tapping it while on
-// opens UltraStrictDisableDialog instead, which walks through, in order:
-// the 5-minute wait, the password, then the typed pledge. Nothing here
-// short-circuits that order — the password step only appears once the wait
-// is over, and the pledge step only appears once the password is verified.
+// opens UltraStrictDisableDialog instead, which walks through, in order,
+// in one sitting: a live 5-minute wait, the password, then the typed
+// pledge. The wait is NOT saved anywhere (see UltraStrictMode.kt) — close
+// this dialog before it hits zero and it's gone, no picking back up where
+// you left off. That's deliberate: this is supposed to be friction that
+// stops a casual "turn it off," not a delay you can start and forget
+// about. Nothing else here short-circuits the order either — the password
+// step only appears once the wait hits zero, and the pledge step only
+// appears once the password is verified.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -106,16 +108,7 @@ fun UltraStrictLayerSection() {
                 BlockerRepository.setUltraStrict(config.copy(enabled = true))
             }
         },
-        onOpenDisableFlow = {
-            // Starts the wait right here, synchronously, before the dialog
-            // ever composes — so UltraStrictDisableDialog's very first
-            // frame already sees the correct remaining time instead of
-            // briefly showing 0 while its own LaunchedEffect catches up.
-            // Covers both entry points (the switch and the banner), since
-            // both call this same lambda.
-            UltraStrictGate.requestDisable()
-            showDisableFlow = true
-        }
+        onOpenDisableFlow = { showDisableFlow = true }
     )
 
     if (showPasswordSetup) {
@@ -163,17 +156,6 @@ private fun UltraStrictToggleCard(
     onToggleOn: () -> Unit,
     onOpenDisableFlow: () -> Unit
 ) {
-    // Ticks once a second while a turn-off is pending, so the "ready in
-    // Xm" status below actually counts down instead of sitting frozen.
-    var remainingMs by remember { mutableStateOf(UltraStrictGate.disableRemainingMs(config)) }
-    LaunchedEffect(config.disableRequestedAt) {
-        while (true) {
-            remainingMs = UltraStrictGate.disableRemainingMs(config)
-            if (remainingMs <= 0L) break
-            delay(1000)
-        }
-    }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -186,89 +168,51 @@ private fun UltraStrictToggleCard(
         ),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (config.enabled) AccentRed.copy(alpha = 0.22f)
+                        else TextTertiary.copy(alpha = 0.10f)
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            if (config.enabled) AccentRed.copy(alpha = 0.22f)
-                            else TextTertiary.copy(alpha = 0.10f)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Filled.Warning,
-                        contentDescription = null,
-                        tint = if (config.enabled) AccentRed else TextMuted,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(
-                        "Ultra-Strict Layer",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Text(
-                        if (!config.enabled) "Off — turning off Accessibility in Settings won't trigger anything"
-                        else "On — turning off Accessibility in Settings instantly alarms and breaks your streak",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (config.enabled) AccentRed else TextTertiary,
-                        lineHeight = 17.sp
-                    )
-                }
-                Switch(
-                    checked = config.enabled,
-                    onCheckedChange = { wantsOn -> if (wantsOn) onToggleOn() else onOpenDisableFlow() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AccentRed
-                    )
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = if (config.enabled) AccentRed else TextMuted,
+                    modifier = Modifier.size(24.dp)
                 )
             }
-
-            // A turn-off request survives leaving this screen — this banner
-            // is how you find your way back to it, and shows live progress
-            // either way.
-            if (config.disableRequestedAt > 0L) {
-                HorizontalDivider(color = TextTertiary.copy(alpha = 0.10f))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onOpenDisableFlow)
-                        .padding(horizontal = 22.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            "Turning off in progress",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = AccentRed
-                        )
-                        Text(
-                            if (remainingMs > 0L) "Ready in ${(remainingMs / 60000L) + 1}m — tap to continue"
-                            else "Wait is over — tap to finish turning it off",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextTertiary
-                        )
-                    }
-                    Icon(
-                        Icons.Filled.ChevronRight,
-                        contentDescription = null,
-                        tint = TextTertiary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    "Ultra-Strict Layer",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Text(
+                    if (!config.enabled) "Off — turning off Accessibility in Settings won't trigger anything"
+                    else "On — turning off Accessibility in Settings instantly alarms and breaks your streak",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (config.enabled) AccentRed else TextTertiary,
+                    lineHeight = 17.sp
+                )
             }
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = { wantsOn -> if (wantsOn) onToggleOn() else onOpenDisableFlow() },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AccentRed
+                )
+            )
         }
     }
 }
@@ -339,20 +283,18 @@ private fun UltraStrictDisableDialog(
 ) {
     val config by BlockerRepository.ultraStrict.collectAsState()
 
-    // Defensive fallback only — the real trigger is onOpenDisableFlow in
-    // UltraStrictLayerSection, which already calls this synchronously
-    // before this dialog ever composes (so the very first frame already
-    // has the correct remaining time). Idempotent, so calling it again
-    // here is harmless — it just guards against this dialog somehow being
-    // opened some other way in the future without going through that path.
-    LaunchedEffect(Unit) { UltraStrictGate.requestDisable() }
-
-    var remainingMs by remember { mutableStateOf(UltraStrictGate.disableRemainingMs(config)) }
-    LaunchedEffect(config.disableRequestedAt) {
-        while (true) {
-            remainingMs = UltraStrictGate.disableRemainingMs(config)
-            if (remainingMs <= 0L) break
+    // A live, local-only countdown — nothing here is written to
+    // BlockerRepository. It starts at the full 5 minutes the instant this
+    // dialog composes, and if the dialog leaves composition for ANY reason
+    // before hitting zero (Cancel, tapping outside, back button, leaving
+    // the screen, closing the app), this state is simply forgotten.
+    // Reopening starts over at the full 5:00 — there is no way to bank
+    // progress. See the file header in UltraStrictMode.kt for why.
+    var remainingMs by remember { mutableStateOf(UltraStrictGate.DISABLE_WAIT_MS) }
+    LaunchedEffect(Unit) {
+        while (remainingMs > 0L) {
             delay(1000)
+            remainingMs = (remainingMs - 1000L).coerceAtLeast(0L)
         }
     }
 
@@ -373,11 +315,11 @@ private fun UltraStrictDisableDialog(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             "Ultra-Strict Layer can't be turned off instantly — that's the whole point. " +
-                                "${m}m ${s}s left before you can continue.",
+                                "${m}m ${s}s left.",
                             style = MaterialTheme.typography.bodySmall, color = TextTertiary
                         )
                         Text(
-                            "It's still fully on right now.",
+                            "Closing this or leaving the screen resets the wait back to 5:00. It's still fully on right now.",
                             style = MaterialTheme.typography.bodySmall,
                             color = AccentRed,
                             fontWeight = FontWeight.SemiBold
@@ -386,12 +328,7 @@ private fun UltraStrictDisableDialog(
                 },
                 confirmButton = {
                     Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)) {
-                        Text("OK, I'll wait", fontWeight = FontWeight.SemiBold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { UltraStrictGate.cancelDisableRequest(); onDismiss() }) {
-                        Text("Cancel — keep it on", color = TextMuted)
+                        Text("Cancel — keep it on", fontWeight = FontWeight.SemiBold)
                     }
                 }
             )
