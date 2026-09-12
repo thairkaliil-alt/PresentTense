@@ -1,6 +1,5 @@
 package com.allinone.blocker.service
 
-import android.app.KeyguardManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -9,7 +8,6 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.core.app.NotificationCompat
@@ -75,16 +73,32 @@ class AlarmRingingService : Service() {
             }
         }
 
-        // KEY FIX: if the screen is already on and unlocked (user is actively
-        // using the phone), the fullScreenIntent notification only shows as a
-        // heads-up banner. We must directly startActivity() to force the alarm
-        // screen to appear on top of whatever the user is doing.
-        val powerManager = getSystemService(PowerManager::class.java)
-        val keyguardManager = getSystemService(KeyguardManager::class.java)
-        val screenIsOn = powerManager?.isInteractive == true
-        val phoneIsUnlocked = keyguardManager?.isKeyguardLocked == false
-
-        if (screenIsOn && phoneIsUnlocked) {
+        // FIX ("sound plays but the ring screen never shows up"): this used
+        // to only run when the screen was already on and unlocked, on the
+        // theory that a locked/sleeping phone would get the ring screen
+        // from the notification's setFullScreenIntent() above instead.
+        // That's the system's documented way to show a full-screen alarm
+        // from the background — but in practice it isn't reliable on every
+        // phone: aggressive OEM battery managers (MIUI, One UI, ColorOS...),
+        // Android 14's separate "full screen notifications" toggle quietly
+        // being off, or plain bad luck can all make Android silently fall
+        // back to a normal heads-up notification instead of auto-launching
+        // the activity. When that happens with the phone locked, nothing
+        // was left to catch it — exactly the "alarm rings but no screen"
+        // report this fixes.
+        //
+        // So now this direct launch always runs, locked or not, as a second,
+        // independent attempt that doesn't depend on the full-screen-intent
+        // mechanism working at all. It's safe to do from the background here
+        // specifically because we're running inside the first moments after
+        // AlarmManager itself woke this service up — Android grants a short
+        // grace window right after that for starting an Activity, the same
+        // window that already made this call work in the screen-on case
+        // before. Wrapped in runCatching purely as a safety net: if some
+        // device blocks it anyway, the notification's own full-screen intent
+        // is still there as a second attempt, and either way the ringing
+        // sound/vibration above are completely unaffected.
+        runCatching {
             val activityIntent = Intent(this, AlarmRingActivity::class.java).apply {
                 putExtra(AlarmScheduler.EXTRA_ALARM_ID, alarmId)
                 addFlags(
