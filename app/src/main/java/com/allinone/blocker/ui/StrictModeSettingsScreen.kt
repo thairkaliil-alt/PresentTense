@@ -234,6 +234,19 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
         if (FrictionType.LOCATION_LOCK !in frictions) GeofenceManager.sync(context, emptyList())
     }
 
+    // BUGFIX: the entry point into "Build your own" / the layer picker,
+    // used by both the master switch and the "Build your own" row. If
+    // Strict Mode isn't currently on, it always wipes any previously saved
+    // layers first — so the picker that opens is guaranteed to start with
+    // nothing checked, every single time, instead of possibly showing
+    // layers left over from an earlier session.
+    fun openLayerPicker() {
+        if (!config.enabled) {
+            BlockerRepository.setStrictMode(config.copy(activeFrictions = emptySet()))
+        }
+        showCustom = true
+    }
+
     Scaffold(
         containerColor = BgDarkest,
         topBar = {
@@ -268,6 +281,18 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // ── Master toggle ────────────────────────────────────────────────
+            // BUGFIX (no more "random" Strict Mode / no more memory):
+            // flipping this switch used to jump straight to enabled = true
+            // using whatever activeFrictions happened to already be saved —
+            // which could be zero layers (nothing protected, silently) or a
+            // stale set left over from a previous session (layers coming
+            // back on without you choosing them again). Now the switch never
+            // enables Strict Mode directly: turning it ON opens the layer
+            // picker below (openLayerPicker), which always starts blank and
+            // only actually turns Strict Mode on once you've picked at
+            // least one layer and pressed Save. Turning it OFF also wipes
+            // the saved layers, so there is nothing left to silently reuse
+            // next time.
             MasterToggleCard(
                 enabled = config.enabled,
                 frictionCount = config.activeFrictions.size,
@@ -275,11 +300,11 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                     if (!wantsOn) {
                         if (!StrictModeGate.isSettingsLockedByPlan(config)) {
                             StrictModeGate.guard {
-                                BlockerRepository.setStrictMode(config.copy(enabled = false))
+                                BlockerRepository.setStrictMode(config.copy(enabled = false, activeFrictions = emptySet()))
                             }
                         }
                     } else {
-                        BlockerRepository.setStrictMode(config.copy(enabled = true))
+                        openLayerPicker()
                     }
                 }
             )
@@ -337,7 +362,7 @@ fun StrictModeSettingsScreen(onBack: () -> Unit) {
                     .background(CardSurface)
                     .clickable(
                         enabled = !StrictModeGate.isSettingsLockedByPlan(config),
-                        onClick = { showCustom = true }
+                        onClick = { openLayerPicker() }
                     )
                     .padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -722,6 +747,23 @@ private fun CustomFrictionSheet(
     var showPinRecovery by remember { mutableStateOf(false) }
     var showPledgeEdit by remember { mutableStateOf(false) }
 
+    // Strict Mode isn't on yet, so this sheet is acting as the "turn it on"
+    // flow rather than the "fine-tune an already-active setup" flow. In this
+    // mode, checking boxes only stages layers — nothing is actually
+    // protected until Save is pressed below.
+    val isEnabling = !config.enabled
+
+    // BUGFIX (no memory): if the sheet is closed in enabling mode without
+    // pressing Save, whatever got checked along the way is wiped instead of
+    // being left sitting in storage — so it can never quietly resurface the
+    // next time the layer picker is opened.
+    fun cancel() {
+        if (isEnabling) {
+            BlockerRepository.setStrictMode(config.copy(activeFrictions = emptySet()))
+        }
+        onDismiss()
+    }
+
     fun setFriction(type: FrictionType, on: Boolean) {
         if (!on && StrictModeGate.isSettingsLockedByPlan(config)) return
 
@@ -756,7 +798,7 @@ private fun CustomFrictionSheet(
     }
 
     androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { cancel() },
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false
@@ -766,14 +808,54 @@ private fun CustomFrictionSheet(
             containerColor = BgDarkest,
             topBar = {
                 TopAppBar(
-                    title = { Text("Build your own", fontWeight = FontWeight.Bold, color = TextPrimary) },
+                    title = { Text(if (isEnabling) "Choose your layers" else "Build your own", fontWeight = FontWeight.Bold, color = TextPrimary) },
                     navigationIcon = {
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = { cancel() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDarkest)
                 )
+            },
+            bottomBar = {
+                // Only shown while turning Strict Mode on — this is the one
+                // and only place that flips `enabled = true`, and it stays
+                // disabled until at least one layer is checked. That's the
+                // fix for Strict Mode being switchable on with zero layers.
+                if (isEnabling) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(BgDarkest)
+                            .navigationBarsPadding()
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
+                    ) {
+                        if (config.activeFrictions.isEmpty()) {
+                            Text(
+                                "Select at least one layer to continue.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextTertiary,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                BlockerRepository.setStrictMode(config.copy(enabled = true))
+                                onDismiss()
+                            },
+                            enabled = config.activeFrictions.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentBlue,
+                                disabledContainerColor = TextTertiary.copy(alpha = 0.15f),
+                                disabledContentColor = TextMuted
+                            )
+                        ) {
+                            Text("Save & Turn On Strict Mode", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         ) { innerPad ->
             Column(
@@ -786,7 +868,10 @@ private fun CustomFrictionSheet(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    "Mix and match any combination of layers. Each one runs in order before any block can be turned off.",
+                    if (isEnabling)
+                        "Pick at least one layer below, then tap Save. Nothing is protected until you save — this is never remembered from last time."
+                    else
+                        "Mix and match any combination of layers. Each one runs in order before any block can be turned off.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextTertiary,
                     lineHeight = 17.sp
