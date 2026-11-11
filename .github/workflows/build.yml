@@ -19,6 +19,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # By default this action asks for a package called "tools", which
+          # Google has removed - that made the whole build fail right here
+          # ("Failed to find package 'tools'"). An empty list skips it; the
+          # next step installs everything the build really needs.
+          packages: ''
 
       - name: Accept SDK licenses & install platform
         run: |
