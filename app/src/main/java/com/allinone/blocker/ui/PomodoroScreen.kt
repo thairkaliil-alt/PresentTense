@@ -212,6 +212,7 @@ fun PomodoroScreen(
                 TimerControls(
                     timerState = state.timerState,
                     modeColor = modeColor,
+                    locked = state.ultraSessionActive,
                     onStart = {
                         haptics.tap()
                         viewModel.startTimer()
@@ -237,6 +238,49 @@ fun PomodoroScreen(
                     }
                 )
             }
+
+            // After a break, with Ultra Focus on: the manual way to begin the
+            // next locked focus session (this is the default behaviour).
+            if (state.awaitingNextFocus &&
+                state.mode == PomodoroMode.FOCUS &&
+                state.timerState == TimerState.IDLE
+            ) {
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        haptics.confirm()
+                        viewModel.startTimer()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+                ) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Start next focus session", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            UltraFocusCard(
+                enabled = state.settings.ultraFocusEnabled,
+                autoStartNext = state.settings.ultraAutoStartNext,
+                sessionActive = state.ultraSessionActive,
+                // Can't be flipped in the middle of a running/paused focus session.
+                canToggle = !(state.mode == PomodoroMode.FOCUS && state.timerState != TimerState.IDLE),
+                notice = state.ultraNotice,
+                onToggle = {
+                    haptics.toggleTick()
+                    viewModel.setUltraFocusEnabled(it)
+                },
+                onAutoStartChange = {
+                    haptics.tap()
+                    viewModel.setUltraAutoStartNext(it)
+                }
+            )
 
             Spacer(Modifier.height(28.dp))
 
@@ -549,8 +593,12 @@ fun TimerControls(
     onStart: () -> Unit,
     onPause: () -> Unit,
     onReset: () -> Unit,
-    onSkip: () -> Unit
+    onSkip: () -> Unit,
+    // True during an Ultra Focus session: the phone is locked down, so
+    // reset / skip / pause are switched off (see PomodoroViewModel).
+    locked: Boolean = false
 ) {
+    val controlsEnabled = timerState != TimerState.IDLE && !locked
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
@@ -566,12 +614,12 @@ fun TimerControls(
                 .pressScale(resetInteraction, MotionTokens.PressScaleSmall)
                 .clip(CircleShape)
                 .background(CardSurface),
-            enabled = timerState != TimerState.IDLE
+            enabled = controlsEnabled
         ) {
             Icon(
                 Icons.Filled.Refresh,
                 contentDescription = "Reset",
-                tint = if (timerState != TimerState.IDLE) TextPrimary else TextTertiary,
+                tint = if (controlsEnabled) TextPrimary else TextTertiary,
                 modifier = Modifier.size(28.dp)
             )
         }
@@ -582,7 +630,7 @@ fun TimerControls(
             onClick = {
                 when (timerState) {
                     TimerState.IDLE, TimerState.PAUSED -> onStart()
-                    TimerState.RUNNING -> onPause()
+                    TimerState.RUNNING -> { if (!locked) onPause() }
                 }
             },
             interactionSource = playInteraction,
@@ -600,8 +648,16 @@ fun TimerControls(
                 label = "playPauseIcon"
             ) { running ->
                 Icon(
-                    imageVector = if (running) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (running) "Pause" else "Start",
+                    imageVector = when {
+                        running && locked -> Icons.Filled.Lock
+                        running -> Icons.Filled.Pause
+                        else -> Icons.Filled.PlayArrow
+                    },
+                    contentDescription = when {
+                        running && locked -> "Locked"
+                        running -> "Pause"
+                        else -> "Start"
+                    },
                     modifier = Modifier.size(36.dp)
                 )
             }
@@ -617,14 +673,143 @@ fun TimerControls(
                 .pressScale(skipInteraction, MotionTokens.PressScaleSmall)
                 .clip(CircleShape)
                 .background(CardSurface),
-            enabled = timerState != TimerState.IDLE
+            enabled = controlsEnabled
         ) {
             Icon(
                 Icons.Filled.SkipNext,
                 contentDescription = "Skip",
-                tint = if (timerState != TimerState.IDLE) TextPrimary else TextTertiary,
+                tint = if (controlsEnabled) TextPrimary else TextTertiary,
                 modifier = Modifier.size(28.dp)
             )
+        }
+    }
+}
+
+/**
+ * The Ultra Focus switch. When on, each FOCUS session also locks the phone
+ * (a normal Lockdown, for exactly the focus time) and the lock lifts by
+ * itself for every break. The two chips choose what happens when a break
+ * ends: wait for a "Start next focus session" tap (default) or start the
+ * next locked session automatically.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun UltraFocusCard(
+    enabled: Boolean,
+    autoStartNext: Boolean,
+    sessionActive: Boolean,
+    canToggle: Boolean,
+    notice: String?,
+    onToggle: (Boolean) -> Unit,
+    onAutoStartChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(AccentBlue.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = AccentBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Ultra Focus",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = if (sessionActive) {
+                            "Your phone is locked until this focus session ends."
+                        } else {
+                            "Locks your phone during focus time. Breaks stay free."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextTertiary
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onToggle,
+                    enabled = canToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AccentBlue,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = TextTertiary.copy(alpha = 0.3f)
+                    )
+                )
+            }
+
+            if (notice != null) {
+                Text(
+                    text = notice,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AccentAmber
+                )
+            }
+
+            if (enabled) {
+                HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
+
+                Text(
+                    text = "When a break ends",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextSecondary
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !autoStartNext,
+                        onClick = { onAutoStartChange(false) },
+                        label = { Text("I'll tap start") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AccentBlue.copy(alpha = 0.2f),
+                            selectedLabelColor = AccentBlue
+                        )
+                    )
+                    FilterChip(
+                        selected = autoStartNext,
+                        onClick = { onAutoStartChange(true) },
+                        label = { Text("Start automatically") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AccentBlue.copy(alpha = 0.2f),
+                            selectedLabelColor = AccentBlue
+                        )
+                    )
+                }
+
+                Text(
+                    text = if (autoStartNext) {
+                        "The next focus session locks your phone by itself as soon as the break ends."
+                    } else {
+                        "After each break, a \"Start next focus session\" button waits for you."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary
+                )
+            }
         }
     }
 }
@@ -927,7 +1112,9 @@ fun PomodoroSettingsDialog(
                 onClick = {
                     haptics.confirm()
                     onSave(
-                        PomodoroSettings(
+                        // .copy() keeps every setting this dialog doesn't show
+                        // (the Ultra Focus options) exactly as they were.
+                        settings.copy(
                             focusDuration = focusDuration,
                             shortBreakDuration = shortBreakDuration,
                             longBreakDuration = longBreakDuration,
