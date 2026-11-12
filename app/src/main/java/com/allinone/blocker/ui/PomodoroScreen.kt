@@ -34,11 +34,14 @@ package com.allinone.blocker.ui
 // ═══════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -61,6 +64,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextStyle
@@ -97,12 +101,24 @@ fun PomodoroScreen(
     // is a monotonically increasing counter, not a Boolean, so back-to-back
     // completions each get their own beat). Guarded at 0 so nothing fires
     // just from opening the screen.
+    //
+    // seenCelebrationTick starts at whatever the count already is when this
+    // screen opens, so a session that finished while you were elsewhere does
+    // NOT replay its confetti the next time you come in (the end-of-session
+    // chime and the hand-off card already covered that moment).
+    var seenCelebrationTick by remember { mutableStateOf(state.celebrationTick) }
     LaunchedEffect(state.celebrationTick) {
-        if (state.celebrationTick > 0) {
+        if (state.celebrationTick > seenCelebrationTick) {
+            seenCelebrationTick = state.celebrationTick
             haptics.confirm()
             showConfetti = true
         }
     }
+
+    // Keeps the hand-off card's text on screen while it fades out, after the
+    // ViewModel has already cleared handoffFrom.
+    val lastHandoffFrom = remember { arrayOfNulls<PomodoroMode>(1) }
+    if (state.handoffFrom != null) lastHandoffFrom[0] = state.handoffFrom
 
     Box(
         modifier = Modifier
@@ -239,9 +255,39 @@ fun PomodoroScreen(
                 )
             }
 
-            // After a break, with Ultra Focus on: the manual way to begin the
-            // next locked focus session (this is the default behaviour).
+            // The "Up next" hand-off: shown when a focus session or break has
+            // just ended on its own and the next one is waiting. Carries the
+            // big Start button and, if auto-start is on, the short countdown.
+            AnimatedVisibility(
+                visible = state.handoffFrom != null && state.timerState == TimerState.IDLE,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column {
+                    Spacer(Modifier.height(20.dp))
+                    HandoffCard(
+                        endedMode = state.handoffFrom ?: lastHandoffFrom[0] ?: PomodoroMode.FOCUS,
+                        nextMode = state.mode,
+                        nextMinutes = state.totalTime / 60,
+                        locksPhone = state.settings.ultraFocusEnabled && state.mode == PomodoroMode.FOCUS,
+                        autoStartInSeconds = state.autoStartInSeconds,
+                        onStart = {
+                            haptics.confirm()
+                            viewModel.startTimer()
+                        },
+                        onCancelAutoStart = {
+                            haptics.tap()
+                            viewModel.cancelAutoStart()
+                        }
+                    )
+                }
+            }
+
+            // After SKIPPING a break, with Ultra Focus on: the manual way to
+            // begin the next locked focus session. (When a break ends on its
+            // own, the hand-off card above does this job instead.)
             if (state.awaitingNextFocus &&
+                state.handoffFrom == null &&
                 state.mode == PomodoroMode.FOCUS &&
                 state.timerState == TimerState.IDLE
             ) {
@@ -463,9 +509,21 @@ fun TimerDisplay(
     // The ring used to jump a visible notch every single second. Animating
     // toward the new progress over the same ~1s window turns that into one
     // continuous sweep — small change, reads as far more "premium".
+    //
+    // When a session ends and the next one is loaded, the ring has to jump
+    // from empty back to full. A linear sweep looks mechanical for that, so a
+    // bigger jump upward gets a softer ease-out "refill" instead.
+    val previousProgress = remember { FloatArray(1) { rawProgress } }
+    val isRefill = rawProgress > previousProgress[0] + 0.05f
+    SideEffect { previousProgress[0] = rawProgress }
+
     val progress by animateFloatAsState(
         targetValue = rawProgress,
-        animationSpec = if (reduced) snap() else tween(durationMillis = 950, easing = LinearEasing),
+        animationSpec = when {
+            reduced -> snap()
+            isRefill -> tween(durationMillis = 800, easing = FastOutSlowInEasing)
+            else -> tween(durationMillis = 950, easing = LinearEasing)
+        },
         label = "ringProgress"
     )
 
@@ -681,6 +739,129 @@ fun TimerControls(
                 tint = if (controlsEnabled) TextPrimary else TextTertiary,
                 modifier = Modifier.size(28.dp)
             )
+        }
+    }
+}
+
+/**
+ * The "Up next" card shown right after a focus session or break ends on its
+ * own. It answers "what now?" at the exact moment someone is asking it: what
+ * just finished, what is waiting, and one big button to go. With auto-start
+ * on, it also shows the short countdown and a "Not yet" way out.
+ *
+ * It only DISPLAYS things and calls [onStart] / [onCancelAutoStart]; starting
+ * the session (including the Ultra Focus lockdown) is still done by
+ * PomodoroViewModel.startTimer(), exactly as before.
+ */
+@Composable
+fun HandoffCard(
+    endedMode: PomodoroMode,
+    nextMode: PomodoroMode,
+    nextMinutes: Int,
+    locksPhone: Boolean,
+    autoStartInSeconds: Int,
+    onStart: () -> Unit,
+    onCancelAutoStart: () -> Unit
+) {
+    val accent = when (nextMode) {
+        PomodoroMode.FOCUS -> AccentBlue
+        PomodoroMode.SHORT_BREAK -> AccentTeal
+        PomodoroMode.LONG_BREAK -> AccentAmber
+    }
+    val title = if (endedMode == PomodoroMode.FOCUS) "Focus complete" else "Break's over"
+    val nextName = when (nextMode) {
+        PomodoroMode.FOCUS -> "Focus"
+        PomodoroMode.SHORT_BREAK -> "Short break"
+        PomodoroMode.LONG_BREAK -> "Long break"
+    }
+    val buttonLabel = when (nextMode) {
+        PomodoroMode.FOCUS -> if (locksPhone) "Start locked focus session" else "Start focus session"
+        PomodoroMode.SHORT_BREAK -> "Start short break"
+        PomodoroMode.LONG_BREAK -> "Start long break"
+    }
+    val buttonInteraction = remember { MutableInteractionSource() }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (endedMode == PomodoroMode.FOCUS) {
+                            Icons.Filled.CheckCircle
+                        } else {
+                            Icons.Filled.PlayArrow
+                        },
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Up next: $nextName · $nextMinutes min",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextTertiary
+                    )
+                }
+            }
+
+            Button(
+                onClick = onStart,
+                interactionSource = buttonInteraction,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .pressScale(buttonInteraction),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = accent)
+            ) {
+                if (nextMode == PomodoroMode.FOCUS && locksPhone) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                }
+                Text(buttonLabel, fontWeight = FontWeight.SemiBold)
+            }
+
+            if (autoStartInSeconds > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Starting automatically in ${autoStartInSeconds}s",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    TextButton(onClick = onCancelAutoStart) {
+                        Text("Not yet", color = TextMuted)
+                    }
+                }
+            }
         }
     }
 }
@@ -973,7 +1154,10 @@ fun PomodoroSettingsDialog(
     var sessionsUntilLongBreak by remember { mutableStateOf(settings.sessionsUntilLongBreak) }
     var autoStartBreaks by remember { mutableStateOf(settings.autoStartBreaks) }
     var autoStartPomodoros by remember { mutableStateOf(settings.autoStartPomodoros) }
+    var soundEnabled by remember { mutableStateOf(settings.soundEnabled) }
+    var vibrationEnabled by remember { mutableStateOf(settings.vibrationEnabled) }
     val haptics = rememberHaptics()
+    val context = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1089,6 +1273,50 @@ fun PomodoroSettingsDialog(
 
                 HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
 
+                // End-of-session alerts
+                Text(
+                    "End-of-session alerts",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+
+                SwitchSetting(
+                    label = "Sound",
+                    checked = soundEnabled,
+                    onCheckedChange = { soundEnabled = it; haptics.toggleTick() }
+                )
+
+                SwitchSetting(
+                    label = "Vibration",
+                    checked = vibrationEnabled,
+                    onCheckedChange = { vibrationEnabled = it; haptics.toggleTick() }
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            PomodoroAlerts.preview(context, PomodoroMode.FOCUS, soundEnabled, vibrationEnabled)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Test focus end", color = AccentBlue, fontSize = 13.sp)
+                    }
+                    TextButton(
+                        onClick = {
+                            PomodoroAlerts.preview(context, PomodoroMode.SHORT_BREAK, soundEnabled, vibrationEnabled)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Test break end", color = AccentTeal, fontSize = 13.sp)
+                    }
+                }
+
+                HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
+
                 // Reset stats button
                 TextButton(
                     onClick = {
@@ -1120,7 +1348,9 @@ fun PomodoroSettingsDialog(
                             longBreakDuration = longBreakDuration,
                             sessionsUntilLongBreak = sessionsUntilLongBreak,
                             autoStartBreaks = autoStartBreaks,
-                            autoStartPomodoros = autoStartPomodoros
+                            autoStartPomodoros = autoStartPomodoros,
+                            soundEnabled = soundEnabled,
+                            vibrationEnabled = vibrationEnabled
                         )
                     )
                 },
