@@ -184,6 +184,12 @@
             android:name=".receiver.AlarmTriggerReceiver"
             android:exported="false" />
 
+        <!-- Pomodoro: plays the end-of-session chime/vibration/notification at the
+             exact end time, even if the screen is off (see PomodoroAlerts.kt). -->
+        <receiver
+            android:name=".receiver.PomodoroAlarmReceiver"
+            android:exported="false" />
+
         <!-- Device admin: prevents uninstall during locked sessions -->
         <receiver
             android:name=".admin.BlockerDeviceAdminReceiver"
