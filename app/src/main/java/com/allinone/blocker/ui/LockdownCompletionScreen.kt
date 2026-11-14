@@ -51,7 +51,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +69,7 @@ import com.allinone.blocker.ui.motion.MotionDurations
 import com.allinone.blocker.ui.motion.MotionEasing
 import com.allinone.blocker.ui.motion.MotionSpecs
 import com.allinone.blocker.ui.motion.rememberHaptics
+import com.allinone.blocker.ui.theme.AccentAmber
 import com.allinone.blocker.ui.theme.AccentTeal
 import com.allinone.blocker.ui.theme.BgDarkest
 import com.allinone.blocker.ui.theme.CardSurface
@@ -96,6 +99,27 @@ fun LockdownCompletionScreen(
     val haptics = rememberHaptics()
     var visible by remember { mutableStateOf(false) }
     var showConfetti by remember { mutableStateOf(false) }
+
+    // ── Ultra Focus hand-off ─────────────────────────────────────────────
+    // If this lockdown was a Pomodoro Ultra Focus session, the timer has
+    // pinned a "short break is up next" note (see PomodoroHandoff.kt). When
+    // we find one that belongs to this session, the single button below
+    // becomes "Start short break" so moving on is ONE tap, not Done + hunting
+    // for the timer's Start button. The note is remembered once seen, so the
+    // button never vanishes under your finger if auto-start kicks in.
+    val handoffNote by PomodoroHandoff.pending.collectAsState()
+    var nextStep by remember(session.startedAtMillis) {
+        mutableStateOf<PomodoroHandoff.Pending?>(null)
+    }
+    LaunchedEffect(handoffNote, session.startedAtMillis) {
+        val note = handoffNote
+        if (note != null &&
+            note.endedMode == PomodoroMode.FOCUS &&
+            note.createdAtMillis >= session.startedAtMillis
+        ) {
+            nextStep = note
+        }
+    }
 
     // Keyed on the session's own start time — a fresh, distinct value per
     // real completion, exactly like PomodoroScreen.kt's celebrationTick, so
@@ -227,21 +251,60 @@ fun LockdownCompletionScreen(
 
                 Spacer(Modifier.height(40.dp))
 
-                // Single dismiss action — no secondary CTA, no upsell, no
-                // "keep the streak going" pressure. One clean acknowledgment.
-                Button(
-                    onClick = {
-                        haptics.tap()
-                        visible = false
-                        onDismiss()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentTeal),
-                    shape = RoundedCornerShape(28.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                ) {
-                    Text("Done", fontWeight = FontWeight.SemiBold)
+                val next = nextStep
+                if (next != null) {
+                    // Ultra Focus: the one confirm button that moves you on.
+                    val nextName = when (next.nextMode) {
+                        PomodoroMode.LONG_BREAK -> "long break"
+                        PomodoroMode.SHORT_BREAK -> "short break"
+                        PomodoroMode.FOCUS -> "focus session"
+                    }
+                    val nextColor = if (next.nextMode == PomodoroMode.LONG_BREAK) AccentAmber else AccentTeal
+                    Button(
+                        onClick = {
+                            haptics.confirm()
+                            PomodoroHandoff.startNext()
+                            visible = false
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = nextColor),
+                        shape = RoundedCornerShape(28.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                    ) {
+                        Text(
+                            "Start $nextName · ${next.nextMinutes} min",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = {
+                            haptics.tap()
+                            visible = false
+                            onDismiss()
+                        }
+                    ) {
+                        Text("Not now", color = TextMuted)
+                    }
+                } else {
+                    // Single dismiss action — no secondary CTA, no upsell, no
+                    // "keep the streak going" pressure. One clean acknowledgment.
+                    Button(
+                        onClick = {
+                            haptics.tap()
+                            visible = false
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentTeal),
+                        shape = RoundedCornerShape(28.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                    ) {
+                        Text("Done", fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
