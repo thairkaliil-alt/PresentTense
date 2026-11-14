@@ -22,6 +22,10 @@ package com.allinone.blocker.ui
 // The timer logic is untouched in spirit: everything here only DISPLAYS state
 // and calls PomodoroViewModel. Starting the Ultra Focus lockdown is still
 // done by PomodoroViewModel.startTimer().
+//
+// STATS: the card at the bottom lives in PomodoroStatsCard.kt. It is fed by
+// the day-by-day logbook (PomodoroStats.kt), so it knows about today, the
+// week, all-time totals and streaks — not just "today".
 // ═══════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.animation.AnimatedContent
@@ -148,8 +152,11 @@ fun PomodoroScreen(
     viewModel: PomodoroViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    // The day-by-day logbook the stats card is drawn from.
+    val history by viewModel.history.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    var showClearStatsConfirm by remember { mutableStateOf(false) }
     var showConfetti by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
     val context = LocalContext.current
@@ -284,9 +291,9 @@ fun PomodoroScreen(
             // finished (so a long break shows all of them lit).
             val perCycle = state.settings.sessionsUntilLongBreak.coerceAtLeast(1)
             val filledDots = if (state.mode == PomodoroMode.FOCUS) {
-                state.completedSessions % perCycle
+                state.cycleCount % perCycle
             } else {
-                cycleProgress(state.completedSessions, perCycle)
+                cycleProgress(state.cycleCount, perCycle)
             }
             Text(
                 text = if (state.mode == PomodoroMode.FOCUS) {
@@ -357,10 +364,12 @@ fun PomodoroScreen(
             Spacer(Modifier.height(20.dp))
 
             AnimatedAppearance(delayMs = MotionTokens.StaggerStepMs) {
-                StatsCard(
-                    completedSessions = state.completedSessions,
-                    focusSecondsToday = state.focusSecondsToday,
-                    sessionsUntilLongBreak = state.settings.sessionsUntilLongBreak
+                PomodoroStatsCard(
+                    history = history,
+                    today = state.today,
+                    liveFocusSeconds = state.liveFocusSeconds,
+                    dailyGoal = state.settings.dailyGoalSessions,
+                    achievement = state.achievement
                 )
             }
 
@@ -381,7 +390,47 @@ fun PomodoroScreen(
                     viewModel.updateSettings(newSettings)
                     showSettings = false
                 },
-                onResetStats = { viewModel.resetStats() }
+                // Clearing wipes the whole history, so it asks first.
+                onResetStats = { showClearStatsConfirm = true }
+            )
+        }
+
+        // Clear-history confirmation — your streak and every past day live here now.
+        if (showClearStatsConfirm) {
+            AlertDialog(
+                onDismissRequest = { showClearStatsConfirm = false },
+                containerColor = CardSurface,
+                title = {
+                    Text(
+                        "Clear all stats?",
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                },
+                text = {
+                    Text(
+                        "This erases every day of Pomodoro history: your sessions, focus hours and streak. It can't be undone.",
+                        color = TextSecondary
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            haptics.error()
+                            viewModel.resetStats()
+                            showClearStatsConfirm = false
+                            showSettings = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
+                    ) {
+                        Text("Clear everything")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearStatsConfirm = false }) {
+                        Text("Keep my stats", color = TextMuted)
+                    }
+                }
             )
         }
 
@@ -429,12 +478,12 @@ fun PomodoroScreen(
 }
 
 /** How many dots (of [sessionsPerCycle]) should read as "filled" for the
- *  current [completedSessions] count. A just-finished full round counts as
+ *  current round counter [cycleCount]. A just-finished full round counts as
  *  completely filled (that's what you see during the long break). */
-private fun cycleProgress(completedSessions: Int, sessionsPerCycle: Int): Int {
+private fun cycleProgress(cycleCount: Int, sessionsPerCycle: Int): Int {
     val perCycle = sessionsPerCycle.coerceAtLeast(1)
-    val inCycle = completedSessions % perCycle
-    return if (inCycle == 0 && completedSessions > 0) perCycle else inCycle
+    val inCycle = cycleCount % perCycle
+    return if (inCycle == 0 && cycleCount > 0) perCycle else inCycle
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1077,152 +1126,6 @@ fun UltraFocusCard(
     }
 }
 
-/** Formats seconds as "1h 24m" (or just "45m" under an hour, "< 1m" for a
- *  handful of seconds) — the same "hero" shape Forest/Focus Keeper use for
- *  their headline focus-time stat. */
-private fun formatFocusDuration(totalSeconds: Int): String {
-    val totalMinutes = totalSeconds / 60
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return when {
-        totalSeconds < 60 -> "< 1m"
-        hours > 0 && minutes > 0 -> "${hours}h ${minutes}m"
-        hours > 0 -> "${hours}h"
-        else -> "${minutes}m"
-    }
-}
-
-@Composable
-fun StatsCard(
-    completedSessions: Int,
-    focusSecondsToday: Int,
-    sessionsUntilLongBreak: Int
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "Session Stats",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-
-            // Hero stat — the one number that matters most at a glance.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(AccentBlue.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Bolt,
-                        contentDescription = null,
-                        tint = AccentBlue,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                Column {
-                    val displaySeconds by animatedCountAsState(focusSecondsToday)
-                    Text(
-                        text = formatFocusDuration(displaySeconds),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Focused Today",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-            }
-
-            HorizontalDivider(color = TextTertiary.copy(alpha = 0.15f))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatItem(
-                    label = "Completed Today",
-                    value = completedSessions,
-                    icon = Icons.Filled.CheckCircle,
-                    color = AccentTeal
-                )
-
-                StatItem(
-                    // Kept as the original modulo formula on purpose (not the
-                    // new cycleProgress helper above) — that helper treats
-                    // "just finished a full cycle" as fully-filled dots,
-                    // which is right for the SessionDots visual but would
-                    // silently flip this particular stat to 0 right when a
-                    // long break starts, instead of counting down toward
-                    // the NEXT one. Same math the original screen used.
-                    label = "Until Long Break",
-                    value = sessionsUntilLongBreak - (completedSessions % sessionsUntilLongBreak.coerceAtLeast(1)),
-                    icon = Icons.Filled.Timer,
-                    color = AccentAmber
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun StatItem(
-    label: String,
-    value: Int,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = color,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-
-        Column {
-            AnimatedCount(
-                value = value,
-                style = MaterialTheme.typography.titleLarge,
-                color = TextPrimary
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-        }
-    }
-}
-
 @Composable
 fun PomodoroSettingsDialog(
     settings: PomodoroSettings,
@@ -1234,6 +1137,7 @@ fun PomodoroSettingsDialog(
     var shortBreakDuration by remember { mutableStateOf(settings.shortBreakDuration) }
     var longBreakDuration by remember { mutableStateOf(settings.longBreakDuration) }
     var sessionsUntilLongBreak by remember { mutableStateOf(settings.sessionsUntilLongBreak) }
+    var dailyGoal by remember { mutableStateOf(settings.dailyGoalSessions) }
     var autoStartBreaks by remember { mutableStateOf(settings.autoStartBreaks) }
     var autoStartPomodoros by remember { mutableStateOf(settings.autoStartPomodoros) }
     var soundEnabled by remember { mutableStateOf(settings.soundEnabled) }
@@ -1331,6 +1235,48 @@ fun PomodoroSettingsDialog(
                     }
                 }
 
+                // Daily goal — the target the goal ring on the stats card fills toward
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Daily goal (sessions)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                dailyGoal = (dailyGoal - 1).coerceAtLeast(1)
+                                haptics.tap()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Filled.Remove, null, tint = TextSecondary)
+                        }
+                        Text(
+                            "$dailyGoal",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        IconButton(
+                            onClick = {
+                                dailyGoal = (dailyGoal + 1).coerceAtMost(20)
+                                haptics.tap()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Filled.Add, null, tint = TextSecondary)
+                        }
+                    }
+                }
+
                 HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
 
                 // Auto-start options
@@ -1399,7 +1345,7 @@ fun PomodoroSettingsDialog(
 
                 HorizontalDivider(color = TextTertiary.copy(alpha = 0.2f))
 
-                // Reset stats button
+                // Clear stats history (asks for confirmation on the screen behind)
                 TextButton(
                     onClick = {
                         haptics.tap()
@@ -1412,7 +1358,7 @@ fun PomodoroSettingsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Filled.RestartAlt, null, tint = AccentRed)
-                        Text("Reset Session Stats", color = AccentRed)
+                        Text("Clear Stats History", color = AccentRed)
                     }
                 }
             }
@@ -1429,6 +1375,7 @@ fun PomodoroSettingsDialog(
                             shortBreakDuration = shortBreakDuration,
                             longBreakDuration = longBreakDuration,
                             sessionsUntilLongBreak = sessionsUntilLongBreak,
+                            dailyGoalSessions = dailyGoal,
                             autoStartBreaks = autoStartBreaks,
                             autoStartPomodoros = autoStartPomodoros,
                             soundEnabled = soundEnabled,
