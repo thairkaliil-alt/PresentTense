@@ -113,8 +113,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         private const val KEY_RUN_TOTAL = "run_total"
         private const val KEY_RUN_START_REMAINING = "run_start_remaining"
 
-        /** How long the "starting automatically…" countdown lasts. */
-        private const val AUTO_START_SECONDS = 5
+        /** How long the "starting automatically…" countdown lasts (the screen's button fill uses this too). */
+        const val AUTO_START_SECONDS = 5
     }
 
     init {
@@ -122,6 +122,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         loadState()
         restoreUltraSessionIfAny()
         restoreRunSessionIfAny()
+        // Lets the "Session complete" screen start the next phase in one tap.
+        PomodoroHandoff.register { startTimer() }
     }
 
     private fun loadSettings() {
@@ -213,6 +215,23 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     private fun nextModeAfter(mode: PomodoroMode, completedSessions: Int): PomodoroMode =
         if (mode == PomodoroMode.FOCUS) nextModeAfterFocus(completedSessions + 1) else PomodoroMode.FOCUS
 
+    /**
+     * Pins a "what's next" note for the Ultra Focus celebration screen (see
+     * PomodoroHandoff.kt). Only used after a LOCKED focus session, because
+     * that is the only time the celebration screen appears.
+     */
+    private fun publishHandoffNote(endedMode: PomodoroMode) {
+        val s = _state.value
+        PomodoroHandoff.publish(
+            PomodoroHandoff.Pending(
+                endedMode = endedMode,
+                nextMode = s.mode,
+                nextMinutes = s.totalTime / 60,
+                createdAtMillis = System.currentTimeMillis()
+            )
+        )
+    }
+
     /** Title + text for the end-of-session notification. */
     private fun alertCopy(ended: PomodoroMode, next: PomodoroMode): Pair<String, String> {
         val s = _state.value.settings
@@ -234,7 +253,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 s.ultraFocusEnabled && s.ultraAutoStartNext ->
                     "Your next Ultra Focus session ($nextMinutes min) is locking in now."
                 s.ultraFocusEnabled ->
-                    "Open Present Tense and tap Start next focus session when you're ready."
+                    "Open Present Tense and tap Start locked focus when you're ready."
                 s.autoStartPomodoros ->
                     "Your next $nextMinutes-min focus session is starting."
                 else ->
@@ -487,6 +506,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 )
                 switchMode(nextModeAfterFocus(newCompleted), newCompleted)
                 _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
+                publishHandoffNote(PomodoroMode.FOCUS)
             }
         }
     }
@@ -525,6 +545,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // "starting automatically…" countdown is no longer needed.
         autoStartJob?.cancel()
         autoStartJob = null
+        PomodoroHandoff.clear()
 
         val before = _state.value
         _state.value = before.copy(ultraNotice = null)
@@ -632,7 +653,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
      * skipped, so neither can the focus time that goes with it.
      */
     fun skipSession() {
-        if (_state.value.timerState == TimerState.IDLE) return
+        // Allowed while idle too, so "Skip break" works on the ready screen.
         if (_state.value.ultraSessionActive) return
         timerJob?.cancel()
         clearRunSession()
@@ -667,6 +688,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 // Focus session completed. If it was an Ultra Focus session
                 // its lockdown has reached its end time right now too, so we
                 // just forget it — there is nothing to switch off.
+                val wasLockedSession = currentState.ultraSessionActive
                 clearUltraSession()
 
                 val newCompletedSessions = currentState.completedSessions + 1
@@ -684,6 +706,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                     celebrationTick = _state.value.celebrationTick + 1,
                     handoffFrom = PomodoroMode.FOCUS
                 )
+                if (wasLockedSession) publishHandoffNote(PomodoroMode.FOCUS)
 
                 if (settings.autoStartBreaks) {
                     beginAutoStartCountdown()
@@ -754,6 +777,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         autoStartJob?.cancel()
         autoStartJob = null
+        PomodoroHandoff.clear()
 
         val settings = _state.value.settings
         val totalTime = durationSecondsFor(newMode, settings)
@@ -808,5 +832,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         autoStartJob?.cancel()
         persistFocusSecondsToday()
+        PomodoroHandoff.unregister()
+        PomodoroHandoff.clear()
     }
 }
