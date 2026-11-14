@@ -4,13 +4,17 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.allinone.blocker.data.Achievement
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.DayStats
+import com.allinone.blocker.data.PomodoroStatsMath
+import com.allinone.blocker.data.PomodoroStatsRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import java.util.Calendar
+import java.time.LocalDate
 
 enum class PomodoroMode {
     FOCUS, SHORT_BREAK, LONG_BREAK
@@ -25,6 +29,9 @@ data class PomodoroSettings(
     val shortBreakDuration: Int = 5,    // minutes
     val longBreakDuration: Int = 15,    // minutes
     val sessionsUntilLongBreak: Int = 4,
+    // How many focus sessions you want to finish per day. Drives the goal
+    // ring and the "Daily goal reached" celebration on the stats card.
+    val dailyGoalSessions: Int = 4,
     val autoStartBreaks: Boolean = false,
     val autoStartPomodoros: Boolean = false,
     // ── Ultra Focus ──────────────────────────────────────────────────────
@@ -48,8 +55,20 @@ data class PomodoroState(
     val timerState: TimerState = TimerState.IDLE,
     val timeRemaining: Int = 25 * 60,   // seconds
     val totalTime: Int = 25 * 60,       // seconds
-    val completedSessions: Int = 0,     // focus sessions finished today
-    val focusSecondsToday: Int = 0,     // total real focused time today, in seconds
+    // Where you are in the current round (0..sessionsUntilLongBreak). It ONLY
+    // drives the little dots and when the long break comes. It is NOT the
+    // "sessions today" stat — that comes from the logbook (PomodoroStats.kt).
+    val cycleCount: Int = 0,
+    // Seconds of the focus countdown that is running RIGHT NOW and are not in
+    // the logbook yet (they are saved when it pauses / ends). The stats card
+    // adds this on top of the logbook so the numbers tick up live.
+    val liveFocusSeconds: Int = 0,
+    // The calendar day the stats card treats as "today". Updated by itself
+    // when midnight passes, even if the app stays open.
+    val today: LocalDate = LocalDate.now(),
+    // The "well done!" message earned by the last finished session (goal
+    // reached, new record, streak…). Cleared when the next focus starts.
+    val achievement: Achievement? = null,
     val settings: PomodoroSettings = PomodoroSettings(),
     // Bumped by +1 every time a focus session completes. The screen watches
     // this (not a plain Boolean) so a LaunchedEffect can fire a celebration
@@ -86,6 +105,11 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(PomodoroState())
     val state: StateFlow<PomodoroState> = _state
 
+    // The logbook: one line per calendar day (see PomodoroStats.kt). The stats
+    // card draws today / week / all-time / streak straight from this.
+    private val stats = PomodoroStatsRepository.get(application)
+    val history: StateFlow<Map<LocalDate, DayStats>> = stats.days
+
     private var timerJob: Job? = null
     private var autoStartJob: Job? = null
     private val prefs = application.getSharedPreferences(PomodoroAlerts.PREFS_NAME, Context.MODE_PRIVATE)
@@ -100,6 +124,18 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     // play the chime for the same session.
     private var alarmEndsAt: Long = 0L
 
+    // ── Bookkeeping for the focus countdown that is running right now ────
+    // A focus session can be run in several pieces (start, pause, resume…).
+    // Each piece gets a unique id and remembers how many seconds were left
+    // when it began. When the piece ends, exactly the seconds that really
+    // ran go into the logbook — once. (0 = no focus piece is running.)
+    private var segRunId: Long = 0L
+    private var segStartRemaining: Int = 0
+
+    // The day (as a day number) the round counter was last used on. A new day
+    // starts a fresh round, but only at a clean "ready to focus" moment.
+    private var cycleDayEpoch: Long = 0L
+
     companion object {
         // Remembered across app restarts so an Ultra Focus session that is
         // in progress can be picked back up if Android clears this screen.
@@ -112,6 +148,14 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         private const val KEY_RUN_ENDS_AT = "run_ends_at"
         private const val KEY_RUN_TOTAL = "run_total"
         private const val KEY_RUN_START_REMAINING = "run_start_remaining"
+        private const val KEY_RUN_ID = "run_id"
+
+        // The round counter (dots + long break) and the day it was last used.
+        private const val KEY_CYCLE = "cycle_count"
+        private const val KEY_CYCLE_DAY = "cycle_day"
+
+        // Set once the numbers from the OLD counter system were moved into the logbook.
+        private const val KEY_STATS_MIGRATED = "stats_migrated_v2"
 
         /** How long the "starting automatically…" countdown lasts (the screen's button fill uses this too). */
         const val AUTO_START_SECONDS = 5
@@ -119,11 +163,14 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
 
     init {
         loadSettings()
-        loadState()
+        migrateOldStatsIfNeeded()
+        loadCycle()
         restoreUltraSessionIfAny()
         restoreRunSessionIfAny()
+        syncDay()
         // Lets the "Session complete" screen start the next phase in one tap.
         PomodoroHandoff.register { startTimer() }
+        startDayWatcher()
     }
 
     private fun loadSettings() {
@@ -132,6 +179,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             shortBreakDuration = prefs.getInt("short_break_duration", 5),
             longBreakDuration = prefs.getInt("long_break_duration", 15),
             sessionsUntilLongBreak = prefs.getInt("sessions_until_long_break", 4),
+            dailyGoalSessions = prefs.getInt("daily_goal_sessions", 4).coerceIn(1, 20),
             autoStartBreaks = prefs.getBoolean("auto_start_breaks", false),
             autoStartPomodoros = prefs.getBoolean("auto_start_pomodoros", false),
             ultraFocusEnabled = prefs.getBoolean("ultra_focus_enabled", false),
@@ -157,50 +205,145 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         }
 
     // ─────────────────────────────────────────────────────────────────────
-    // DAILY STATS
+    // LOGBOOK + ROUND COUNTER
     //
-    // "Completed Today" and "Focused Today" only mean something if they
-    // actually reset at midnight. The old version persisted completed
-    // session count forever, so it silently drifted into "completed ever" —
-    // technically wrong and, worse, it made the stat feel meaningless over
-    // time. Both counters now live alongside a day key (year*1000+dayOfYear,
-    // same scheme StreakRepository already uses elsewhere in the app) and
-    // get zeroed the first time they're touched on a new day.
+    // The old version kept two running counters that were wiped at midnight,
+    // and one of them ("completed sessions") also decided when the long break
+    // came. That mixed two jobs into one number, so it could drift, and the
+    // app never knew anything about yesterday.
+    //
+    // Now there are two separate things:
+    //   • The LOGBOOK (PomodoroStats.kt): every piece of real focus time is
+    //     written into the line for the day it ended on. All statistics are
+    //     calculated from it.
+    //   • The ROUND COUNTER (cycleCount): only "how many sessions into this
+    //     round am I?" — used for the dots and the long break, nothing else.
     // ─────────────────────────────────────────────────────────────────────
 
-    private fun todayKey(): Int = dayKeyOf(System.currentTimeMillis())
+    /**
+     * One-time move of the numbers the OLD system had saved ("completed
+     * sessions" + "focus seconds today") into the new logbook, so nothing you
+     * already earned today disappears when you install this update.
+     */
+    private fun migrateOldStatsIfNeeded() {
+        if (prefs.getBoolean(KEY_STATS_MIGRATED, false)) return
 
-    private fun dayKeyOf(millis: Long): Int {
-        val c = Calendar.getInstance()
-        c.timeInMillis = millis
-        return c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR)
+        val oldSessions = prefs.getInt("completed_sessions", 0)
+        val oldSeconds = prefs.getInt("focus_seconds_today", 0)
+        val oldDayKey = prefs.getInt("stats_day_key", 0)   // old scheme: year*1000 + dayOfYear
+        val today = LocalDate.now()
+        val oldDate = runCatching {
+            if (oldDayKey > 0) LocalDate.ofYearDay(oldDayKey / 1000, oldDayKey % 1000) else today
+        }.getOrDefault(today)
+
+        stats.addLegacyDay(oldDate, oldSessions, oldSeconds)
+
+        // The old counter also served as the round counter, so keep that too.
+        val cycle = if (oldDate == today) oldSessions else 0
+        prefs.edit()
+            .putInt(KEY_CYCLE, cycle)
+            .putLong(KEY_CYCLE_DAY, today.toEpochDay())
+            .putBoolean(KEY_STATS_MIGRATED, true)
+            .remove("completed_sessions")
+            .remove("focus_seconds_today")
+            .remove("stats_day_key")
+            .commit()
     }
 
-    private fun rolloverStatsIfNewDay() {
-        val today = todayKey()
-        val savedDay = prefs.getInt("stats_day_key", today)
-        if (savedDay != today) {
-            prefs.edit()
-                .putInt("stats_day_key", today)
-                .putInt("completed_sessions", 0)
-                .putInt("focus_seconds_today", 0)
-                .apply()
-        }
-    }
-
-    private fun loadState() {
-        rolloverStatsIfNewDay()
-        val completedSessions = prefs.getInt("completed_sessions", 0)
-        val focusSecondsToday = prefs.getInt("focus_seconds_today", 0)
+    private fun loadCycle() {
+        val today = LocalDate.now()
+        cycleDayEpoch = prefs.getLong(KEY_CYCLE_DAY, today.toEpochDay())
         _state.value = _state.value.copy(
-            completedSessions = completedSessions,
-            focusSecondsToday = focusSecondsToday
+            cycleCount = prefs.getInt(KEY_CYCLE, 0).coerceAtLeast(0),
+            today = today
         )
     }
 
-    private fun persistFocusSecondsToday() {
-        prefs.edit().putInt("focus_seconds_today", _state.value.focusSecondsToday).apply()
+    private fun saveCycle(count: Int) {
+        cycleDayEpoch = LocalDate.now().toEpochDay()
+        prefs.edit()
+            .putInt(KEY_CYCLE, count)
+            .putLong(KEY_CYCLE_DAY, cycleDayEpoch)
+            .apply()
     }
+
+    /**
+     * Keeps "today" correct. Called when the app starts, whenever a session
+     * starts, and every 30 seconds in the background — so the stats card flips
+     * to the new day by itself right after midnight, even if the app was left
+     * open. A new day also starts a fresh round, but only when you are sitting
+     * at a clean "ready to focus" moment (never in the middle of a session or
+     * while a break is waiting).
+     */
+    private fun syncDay() {
+        val today = LocalDate.now()
+        var s = _state.value
+        if (s.today != today) {
+            s = s.copy(today = today, achievement = null)
+        }
+        val cleanFocusIdle = s.mode == PomodoroMode.FOCUS &&
+            s.timerState == TimerState.IDLE &&
+            !s.ultraSessionActive
+        if (cleanFocusIdle && cycleDayEpoch != today.toEpochDay()) {
+            saveCycle(0)
+            s = s.copy(cycleCount = 0)
+        }
+        _state.value = s
+    }
+
+    private fun startDayWatcher() {
+        viewModelScope.launch {
+            while (true) {
+                delay(30_000L)
+                syncDay()
+            }
+        }
+    }
+
+    /**
+     * Writes the focus time of the piece that is ending RIGHT NOW into the
+     * logbook, then forgets the piece.
+     *
+     *  • [remaining]  seconds left on the clock at this moment.
+     *  • [completed]  true only when the countdown really reached zero —
+     *                 that is the one case that adds +1 session.
+     *
+     * Returns the "well done!" message this earned, if any. A piece is saved
+     * at most once (the logbook refuses repeats), so a restart can never
+     * double count it.
+     */
+    private fun closeFocusSegment(remaining: Int, completed: Boolean): Achievement? {
+        val hadRun = segRunId > 0L
+        // Nothing was running and nothing finished: nothing to save.
+        if (!hadRun && !completed) return null
+
+        // Safety net: a finished session must never be lost, even if its
+        // bookkeeping is somehow missing. It is then counted with 0 seconds.
+        val runId = if (hadRun) segRunId else System.currentTimeMillis()
+        val seconds = when {
+            !hadRun -> 0
+            completed -> segStartRemaining
+            else -> (segStartRemaining - remaining).coerceIn(0, segStartRemaining)
+        }
+        segRunId = 0L
+        segStartRemaining = 0
+
+        val now = System.currentTimeMillis()
+        val before = stats.days.value
+        val saved = stats.recordFocusSegment(runId, now, seconds, completed)
+        if (!saved || !completed) return null
+
+        return PomodoroStatsMath.detectAchievement(
+            before = before,
+            after = stats.days.value,
+            today = PomodoroStatsMath.dateOf(now),
+            goal = _state.value.settings.dailyGoalSessions
+        )
+    }
+
+    /** Seconds left on the running clock right now (exact, from the real end time). */
+    private fun remainingNow(): Int =
+        if (runEndsAtMillis > 0L) secondsUntil(runEndsAtMillis) else _state.value.timeRemaining
 
     // ─────────────────────────────────────────────────────────────────────
     // WHAT COMES NEXT, AND WHAT THE ALERT SAYS
@@ -212,8 +355,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         return if (completedAfter % perCycle == 0) PomodoroMode.LONG_BREAK else PomodoroMode.SHORT_BREAK
     }
 
-    private fun nextModeAfter(mode: PomodoroMode, completedSessions: Int): PomodoroMode =
-        if (mode == PomodoroMode.FOCUS) nextModeAfterFocus(completedSessions + 1) else PomodoroMode.FOCUS
+    private fun nextModeAfter(mode: PomodoroMode, cycleCount: Int): PomodoroMode =
+        if (mode == PomodoroMode.FOCUS) nextModeAfterFocus(cycleCount + 1) else PomodoroMode.FOCUS
 
     /**
      * Pins a "what's next" note for the Ultra Focus celebration screen (see
@@ -272,7 +415,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         if (endsAt <= System.currentTimeMillis()) return
         alarmEndsAt = endsAt
         val s = _state.value
-        val next = nextModeAfter(s.mode, s.completedSessions)
+        val next = nextModeAfter(s.mode, s.cycleCount)
         val copy = alertCopy(s.mode, next)
         PomodoroAlerts.scheduleEnd(getApplication<Application>(), endsAt, s.mode, copy.first, copy.second)
     }
@@ -287,12 +430,19 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     /** Called when a session (re)starts running: fixes its end time, remembers it, sets the alarm. */
     private fun beginRunSession() {
         val s = _state.value
-        runEndsAtMillis = System.currentTimeMillis() + s.timeRemaining * 1000L
+        val now = System.currentTimeMillis()
+        runEndsAtMillis = now + s.timeRemaining * 1000L
+
+        // Start the bookkeeping for this piece of focus time (breaks need none).
+        segRunId = if (s.mode == PomodoroMode.FOCUS) now else 0L
+        segStartRemaining = s.timeRemaining
+
         prefs.edit()
             .putString(KEY_RUN_MODE, s.mode.name)
             .putLong(KEY_RUN_ENDS_AT, runEndsAtMillis)
             .putInt(KEY_RUN_TOTAL, s.totalTime)
             .putInt(KEY_RUN_START_REMAINING, s.timeRemaining)
+            .putLong(KEY_RUN_ID, now)
             .apply()
         scheduleEndAlarm(if (s.ultraSessionActive) s.ultraEndsAtMillis else runEndsAtMillis)
     }
@@ -301,21 +451,60 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     private fun clearRunSession() {
         runEndsAtMillis = 0L
         alarmEndsAt = 0L
+        segRunId = 0L
+        segStartRemaining = 0
         prefs.edit()
             .remove(KEY_RUN_MODE)
             .remove(KEY_RUN_ENDS_AT)
             .remove(KEY_RUN_TOTAL)
             .remove(KEY_RUN_START_REMAINING)
+            .remove(KEY_RUN_ID)
             .apply()
         PomodoroAlerts.cancelEnd(getApplication<Application>())
     }
 
     /**
+     * A focus session reached its end while the app was closed. It is written
+     * into the logbook on the day it REALLY ended (so a session that finished
+     * yesterday counts for yesterday instead of being lost), and — if it ended
+     * today — the break hand-off is shown. The alarm has already played the
+     * chime, so nothing is announced again here.
+     */
+    private fun finishFocusWhileAway(endsAt: Long, runId: Long, seconds: Int, locked: Boolean) {
+        stats.recordFocusSegment(runId, endsAt, seconds, completed = true)
+
+        if (PomodoroStatsMath.dateOf(endsAt) != LocalDate.now()) {
+            // It ended on an earlier day: it is counted there. Today starts fresh.
+            saveCycle(0)
+            switchMode(PomodoroMode.FOCUS, 0)
+            return
+        }
+
+        val newCycle = _state.value.cycleCount + 1
+        saveCycle(newCycle)
+        switchMode(nextModeAfterFocus(newCycle), newCycle)
+        _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
+        if (locked) publishHandoffNote(PomodoroMode.FOCUS)
+    }
+
+    /** A break reached its end while the app was closed: get the next focus session ready. */
+    private fun finishBreakWhileAway(mode: PomodoroMode, endsAt: Long) {
+        if (PomodoroStatsMath.dateOf(endsAt) != LocalDate.now()) return
+        switchMode(PomodoroMode.FOCUS, _state.value.cycleCount)
+        _state.value = _state.value.copy(
+            handoffFrom = mode,
+            awaitingNextFocus = _state.value.settings.ultraFocusEnabled
+        )
+    }
+
+    /**
      * If Android cleared the app while a focus session or break was running
      * (screen off, phone low on memory), pick it back up — or, if it already
-     * ended while we were gone, credit it and show the hand-off. The alarm
-     * has already played the chime in that case, so nothing is announced
-     * again here.
+     * ended while we were gone, credit it and show the hand-off.
+     *
+     * Important: the seconds of a run that is STILL going are never saved at
+     * this point. They are only saved when that run ends (pause / finish), so
+     * restarting the app can never count the same seconds twice.
      */
     private fun restoreRunSessionIfAny() {
         // The Ultra Focus restore above already took over this session.
@@ -336,47 +525,36 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             if (it > 0) it else durationSecondsFor(mode, settings)
         }
         val startRemaining = prefs.getInt(KEY_RUN_START_REMAINING, total).coerceIn(0, total)
+        // Runs saved by an older version have no id: their end time is unique too.
+        val runId = prefs.getLong(KEY_RUN_ID, 0L).let { if (it > 0L) it else endsAt }
         val now = System.currentTimeMillis()
 
         if (now < endsAt) {
             val remaining = secondsUntil(endsAt)
-            val elapsed = (startRemaining - remaining).coerceAtLeast(0)
             runEndsAtMillis = endsAt
+            if (mode == PomodoroMode.FOCUS) {
+                segRunId = runId
+                segStartRemaining = startRemaining
+            }
             _state.value = _state.value.copy(
                 mode = mode,
                 timerState = TimerState.RUNNING,
                 timeRemaining = remaining,
                 totalTime = total.coerceAtLeast(remaining),
-                focusSecondsToday = if (mode == PomodoroMode.FOCUS) {
-                    _state.value.focusSecondsToday + elapsed
+                liveFocusSeconds = if (mode == PomodoroMode.FOCUS) {
+                    (startRemaining - remaining).coerceAtLeast(0)
                 } else {
-                    _state.value.focusSecondsToday
+                    0
                 }
             )
             scheduleEndAlarm(endsAt)
             launchTickLoop()
         } else {
             clearRunSession()
-            if (dayKeyOf(endsAt) != todayKey()) return
             if (mode == PomodoroMode.FOCUS) {
-                val newCompleted = _state.value.completedSessions + 1
-                val newFocusSeconds = _state.value.focusSecondsToday + startRemaining
-                prefs.edit()
-                    .putInt("completed_sessions", newCompleted)
-                    .putInt("focus_seconds_today", newFocusSeconds)
-                    .apply()
-                _state.value = _state.value.copy(
-                    completedSessions = newCompleted,
-                    focusSecondsToday = newFocusSeconds
-                )
-                switchMode(nextModeAfterFocus(newCompleted), newCompleted)
-                _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
+                finishFocusWhileAway(endsAt, runId, startRemaining, locked = false)
             } else {
-                switchMode(PomodoroMode.FOCUS, _state.value.completedSessions)
-                _state.value = _state.value.copy(
-                    handoffFrom = mode,
-                    awaitingNextFocus = settings.ultraFocusEnabled
-                )
+                finishBreakWhileAway(mode, endsAt)
             }
         }
     }
@@ -472,17 +650,29 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             settings.focusDuration * 60
         }
 
+        // The details saved when this run began (older versions saved fewer).
+        val savedRunId = prefs.getLong(KEY_RUN_ID, 0L)
+        val runId = when {
+            savedRunId > 0L -> savedRunId
+            startedAt > 0L -> startedAt
+            else -> endsAt
+        }
+        val startRemaining = prefs.getInt(KEY_RUN_START_REMAINING, 0).let {
+            if (it > 0) it else sessionSeconds
+        }
+
         if (now < endsAt) {
             // Still in progress — resume the countdown where it really is.
             val remaining = secondsUntil(endsAt)
-            val elapsed = (sessionSeconds - remaining).coerceAtLeast(0)
             runEndsAtMillis = endsAt
+            segRunId = runId
+            segStartRemaining = startRemaining
             _state.value = _state.value.copy(
                 mode = PomodoroMode.FOCUS,
                 timerState = TimerState.RUNNING,
                 timeRemaining = remaining,
                 totalTime = sessionSeconds.coerceAtLeast(remaining),
-                focusSecondsToday = _state.value.focusSecondsToday + elapsed,
+                liveFocusSeconds = (startRemaining - remaining).coerceAtLeast(0),
                 ultraSessionActive = true,
                 ultraEndsAtMillis = endsAt
             )
@@ -490,24 +680,10 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             launchTickLoop()
         } else {
             // It finished while we weren't here. It ran its full course under
-            // lockdown, so it counts — but only if it ended today.
+            // lockdown, so it counts — on the day it ended.
             clearUltraSession()
             clearRunSession()
-            if (dayKeyOf(endsAt) == todayKey()) {
-                val newCompleted = _state.value.completedSessions + 1
-                val newFocusSeconds = _state.value.focusSecondsToday + sessionSeconds
-                prefs.edit()
-                    .putInt("completed_sessions", newCompleted)
-                    .putInt("focus_seconds_today", newFocusSeconds)
-                    .apply()
-                _state.value = _state.value.copy(
-                    completedSessions = newCompleted,
-                    focusSecondsToday = newFocusSeconds
-                )
-                switchMode(nextModeAfterFocus(newCompleted), newCompleted)
-                _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
-                publishHandoffNote(PomodoroMode.FOCUS)
-            }
+            finishFocusWhileAway(endsAt, runId, startRemaining, locked = true)
         }
     }
 
@@ -547,8 +723,16 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         autoStartJob = null
         PomodoroHandoff.clear()
 
+        // Make sure "today" and the round counter are right before we begin.
+        syncDay()
+
         val before = _state.value
-        _state.value = before.copy(ultraNotice = null)
+        _state.value = before.copy(
+            ultraNotice = null,
+            // The celebration from the last session stays on screen through
+            // the break, and goes away when the next focus session begins.
+            achievement = if (before.mode == PomodoroMode.FOCUS) null else before.achievement
+        )
 
         // A brand-new focus session (not resuming a paused one) with Ultra
         // Focus switched on: lock the phone for exactly the focus time.
@@ -600,13 +784,19 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                     runEndsAtMillis > 0L -> secondsUntil(runEndsAtMillis)
                     else -> (s.timeRemaining - 1).coerceAtLeast(0)
                 }
-                // Normally 1 second; more if the phone slept and we are catching up.
-                val elapsed = (s.timeRemaining - newRemaining).coerceAtLeast(0)
+
+                // Focus seconds of this run so far (shown live on the stats
+                // card; they go into the logbook when this run ends).
+                val live = if (tickingFocus && segRunId > 0L) {
+                    (segStartRemaining - newRemaining).coerceIn(0, segStartRemaining)
+                } else {
+                    0
+                }
 
                 _state.value = s.copy(
                     timeRemaining = newRemaining,
                     ultraSessionActive = ultra,
-                    focusSecondsToday = if (tickingFocus) s.focusSecondsToday + elapsed else s.focusSecondsToday
+                    liveFocusSeconds = live
                 )
             }
 
@@ -621,24 +811,36 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // counting down whether the timer does or not.
         if (_state.value.ultraSessionActive) return
         val s = _state.value
+        if (s.timerState != TimerState.RUNNING) return
+
         // Freeze the exact time left, then stop the clock and the alarm.
-        val exact = if (runEndsAtMillis > 0L) secondsUntil(runEndsAtMillis) else s.timeRemaining
-        _state.value = s.copy(timerState = TimerState.PAUSED, timeRemaining = exact)
+        val exact = remainingNow()
+        if (exact <= 0) return   // it is ending this very moment; let it finish
         timerJob?.cancel()
+
+        // The focus time so far goes into the logbook now; resuming starts a new piece.
+        if (s.mode == PomodoroMode.FOCUS) closeFocusSegment(exact, completed = false)
         clearRunSession()
-        persistFocusSecondsToday()
+        _state.value = s.copy(
+            timerState = TimerState.PAUSED,
+            timeRemaining = exact,
+            liveFocusSeconds = 0
+        )
     }
 
     fun resetTimer() {
         if (_state.value.ultraSessionActive) return
         timerJob?.cancel()
+        val s = _state.value
+        // Giving up a running focus session still keeps the time you really focused.
+        if (s.mode == PomodoroMode.FOCUS) closeFocusSegment(remainingNow(), completed = false)
         clearRunSession()
-        persistFocusSecondsToday()
-        val totalTime = durationSecondsFor(_state.value.mode, _state.value.settings)
-        _state.value = _state.value.copy(
+        val totalTime = durationSecondsFor(s.mode, s.settings)
+        _state.value = s.copy(
             timerState = TimerState.IDLE,
             timeRemaining = totalTime,
-            totalTime = totalTime
+            totalTime = totalTime,
+            liveFocusSeconds = 0
         )
     }
 
@@ -646,8 +848,9 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
      * Jumps straight to the next mode without finishing the countdown.
      * Skipping a FOCUS session deliberately does NOT award a completed
      * session credit — that stat should mean "actually focused for the
-     * full duration", not "tapped skip". Skipping a break never needed
-     * that protection, so it's a plain, immediate switch either way.
+     * full duration", not "tapped skip". The seconds you really focused
+     * before skipping still count as focus time. Skipping a break never
+     * needed that protection, so it's a plain, immediate switch either way.
      *
      * Not possible during an Ultra Focus session: the lockdown can't be
      * skipped, so neither can the focus time that goes with it.
@@ -656,15 +859,15 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // Allowed while idle too, so "Skip break" works on the ready screen.
         if (_state.value.ultraSessionActive) return
         timerJob?.cancel()
-        clearRunSession()
-        persistFocusSecondsToday()
         val currentState = _state.value
+        if (currentState.mode == PomodoroMode.FOCUS) closeFocusSegment(remainingNow(), completed = false)
+        clearRunSession()
         val nextMode = if (currentState.mode == PomodoroMode.FOCUS) {
             PomodoroMode.SHORT_BREAK
         } else {
             PomodoroMode.FOCUS
         }
-        switchMode(nextMode, currentState.completedSessions)
+        switchMode(nextMode, currentState.cycleCount)
         // Skipping a break with Ultra Focus on: offer the manual start button.
         if (nextMode == PomodoroMode.FOCUS && currentState.settings.ultraFocusEnabled) {
             _state.value = _state.value.copy(awaitingNextFocus = true)
@@ -672,8 +875,6 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun onTimerComplete() {
-        rolloverStatsIfNewDay()
-        persistFocusSecondsToday()
         val currentState = _state.value
         val ended = currentState.mode
         val settings = currentState.settings
@@ -681,6 +882,14 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // Remember which end time the alarm was set for, then retire the
         // alarm: we are announcing this ending ourselves right now.
         val finishedAt = alarmEndsAt
+
+        // A finished focus session goes into the logbook BEFORE the run
+        // memory is cleared (the logbook needs that memory to save it once).
+        val achievement = if (ended == PomodoroMode.FOCUS) {
+            closeFocusSegment(0, completed = true)
+        } else {
+            null
+        }
         clearRunSession()
 
         when (ended) {
@@ -691,20 +900,22 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 val wasLockedSession = currentState.ultraSessionActive
                 clearUltraSession()
 
-                val newCompletedSessions = currentState.completedSessions + 1
-                prefs.edit().putInt("completed_sessions", newCompletedSessions).apply()
+                val newCycleCount = currentState.cycleCount + 1
+                saveCycle(newCycleCount)
 
-                val nextMode = nextModeAfterFocus(newCompletedSessions)
+                val nextMode = nextModeAfterFocus(newCycleCount)
 
                 // Chime + vibration + notification (skipped automatically if
                 // the background alarm already played them for this end time).
                 val copy = alertCopy(ended, nextMode)
                 PomodoroAlerts.fire(getApplication<Application>(), ended, copy.first, copy.second, finishedAt)
 
-                switchMode(nextMode, newCompletedSessions)
+                switchMode(nextMode, newCycleCount)
                 _state.value = _state.value.copy(
                     celebrationTick = _state.value.celebrationTick + 1,
-                    handoffFrom = PomodoroMode.FOCUS
+                    handoffFrom = PomodoroMode.FOCUS,
+                    achievement = achievement,
+                    liveFocusSeconds = 0
                 )
                 if (wasLockedSession) publishHandoffNote(PomodoroMode.FOCUS)
 
@@ -717,7 +928,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 val copy = alertCopy(ended, PomodoroMode.FOCUS)
                 PomodoroAlerts.fire(getApplication<Application>(), ended, copy.first, copy.second, finishedAt)
 
-                switchMode(PomodoroMode.FOCUS, currentState.completedSessions)
+                switchMode(PomodoroMode.FOCUS, currentState.cycleCount)
                 _state.value = _state.value.copy(
                     handoffFrom = ended,
                     // Ultra Focus has its own "what happens next" choice:
@@ -773,7 +984,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         _state.value = _state.value.copy(autoStartInSeconds = 0)
     }
 
-    fun switchMode(newMode: PomodoroMode, completedSessions: Int = _state.value.completedSessions) {
+    fun switchMode(newMode: PomodoroMode, cycleCount: Int = _state.value.cycleCount) {
         timerJob?.cancel()
         autoStartJob?.cancel()
         autoStartJob = null
@@ -787,7 +998,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             timerState = TimerState.IDLE,
             timeRemaining = totalTime,
             totalTime = totalTime,
-            completedSessions = completedSessions,
+            cycleCount = cycleCount,
+            liveFocusSeconds = 0,
             awaitingNextFocus = false,
             handoffFrom = null,
             autoStartInSeconds = 0
@@ -795,21 +1007,23 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateSettings(newSettings: PomodoroSettings) {
+        val settings = newSettings.copy(dailyGoalSessions = newSettings.dailyGoalSessions.coerceIn(1, 20))
         prefs.edit().apply {
-            putInt("focus_duration", newSettings.focusDuration)
-            putInt("short_break_duration", newSettings.shortBreakDuration)
-            putInt("long_break_duration", newSettings.longBreakDuration)
-            putInt("sessions_until_long_break", newSettings.sessionsUntilLongBreak)
-            putBoolean("auto_start_breaks", newSettings.autoStartBreaks)
-            putBoolean("auto_start_pomodoros", newSettings.autoStartPomodoros)
-            putBoolean("ultra_focus_enabled", newSettings.ultraFocusEnabled)
-            putBoolean("ultra_auto_start_next", newSettings.ultraAutoStartNext)
-            putBoolean(PomodoroAlerts.KEY_SOUND, newSettings.soundEnabled)
-            putBoolean(PomodoroAlerts.KEY_VIBRATION, newSettings.vibrationEnabled)
+            putInt("focus_duration", settings.focusDuration)
+            putInt("short_break_duration", settings.shortBreakDuration)
+            putInt("long_break_duration", settings.longBreakDuration)
+            putInt("sessions_until_long_break", settings.sessionsUntilLongBreak)
+            putInt("daily_goal_sessions", settings.dailyGoalSessions)
+            putBoolean("auto_start_breaks", settings.autoStartBreaks)
+            putBoolean("auto_start_pomodoros", settings.autoStartPomodoros)
+            putBoolean("ultra_focus_enabled", settings.ultraFocusEnabled)
+            putBoolean("ultra_auto_start_next", settings.ultraAutoStartNext)
+            putBoolean(PomodoroAlerts.KEY_SOUND, settings.soundEnabled)
+            putBoolean(PomodoroAlerts.KEY_VIBRATION, settings.vibrationEnabled)
             apply()
         }
 
-        _state.value = _state.value.copy(settings = newSettings)
+        _state.value = _state.value.copy(settings = settings)
 
         // Update current timer duration if idle
         if (_state.value.timerState == TimerState.IDLE) {
@@ -819,19 +1033,33 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * The "Clear Stats History" button: wipes the whole logbook and starts a
+     * fresh round. If a focus countdown is running right now, only the time
+     * from this moment on is counted afterwards.
+     */
     fun resetStats() {
-        prefs.edit()
-            .putInt("completed_sessions", 0)
-            .putInt("focus_seconds_today", 0)
-            .apply()
-        _state.value = _state.value.copy(completedSessions = 0, focusSecondsToday = 0)
+        stats.clearAll()
+        saveCycle(0)
+        if (segRunId > 0L) {
+            segStartRemaining = _state.value.timeRemaining
+            prefs.edit().putInt(KEY_RUN_START_REMAINING, segStartRemaining).apply()
+        }
+        _state.value = _state.value.copy(
+            cycleCount = 0,
+            liveFocusSeconds = 0,
+            achievement = null
+        )
     }
 
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
         autoStartJob?.cancel()
-        persistFocusSecondsToday()
+        // Nothing to save here on purpose: a focus run that is still going is
+        // remembered by its start/end times and picked up again on the next
+        // start (see restoreRunSessionIfAny). Saving partial seconds here is
+        // what used to cause double counting.
         PomodoroHandoff.unregister()
         PomodoroHandoff.clear()
     }
