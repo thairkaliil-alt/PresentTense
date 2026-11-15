@@ -157,6 +157,20 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // Set once the numbers from the OLD counter system were moved into the logbook.
         private const val KEY_STATS_MIGRATED = "stats_migrated_v2"
 
+        // The "a session just finished and the next one is waiting" note.
+        // Saved to the phone so it survives the main screen being rebuilt
+        // (which happens every time a lockdown ends and the app is re-opened)
+        // — otherwise the overlay would flash and then vanish.
+        private const val KEY_HANDOFF_FROM = "handoff_from"
+        private const val KEY_HANDOFF_AT = "handoff_at"
+        private const val KEY_HANDOFF_LOCKED = "handoff_locked"
+
+        // The newest timer. When the main screen is rebuilt, the OLD timer is
+        // cleaned up AFTER the new one has started, and must not wipe out
+        // the new one's shared hand-off note.
+        @Volatile
+        private var latestInstance: PomodoroViewModel? = null
+
         /** How long the "starting automatically…" countdown lasts (the screen's button fill uses this too). */
         const val AUTO_START_SECONDS = 5
     }
@@ -167,8 +181,10 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         loadCycle()
         restoreUltraSessionIfAny()
         restoreRunSessionIfAny()
+        restoreHandoffIfAny()
         syncDay()
         // Lets the "Session complete" screen start the next phase in one tap.
+        latestInstance = this
         PomodoroHandoff.register { startTimer() }
         startDayWatcher()
     }
@@ -375,6 +391,69 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    /** Writes the "next session is waiting" note to the phone's storage. */
+    private fun saveHandoff(from: PomodoroMode, locked: Boolean, at: Long = System.currentTimeMillis()) {
+        prefs.edit()
+            .putString(KEY_HANDOFF_FROM, from.name)
+            .putLong(KEY_HANDOFF_AT, at)
+            .putBoolean(KEY_HANDOFF_LOCKED, locked)
+            .apply()
+    }
+
+    private fun clearSavedHandoff() {
+        prefs.edit()
+            .remove(KEY_HANDOFF_FROM)
+            .remove(KEY_HANDOFF_AT)
+            .remove(KEY_HANDOFF_LOCKED)
+            .apply()
+    }
+
+    /**
+     * Puts the "session finished, next one waiting" state back after the main
+     * screen was rebuilt. Without this the finished-session overlay flashes
+     * for a moment and then disappears, because the in-memory note is lost
+     * with the old screen.
+     *
+     * Only applies when the timer is sitting idle: a session that is running
+     * again, or a hand-off that was just worked out, always wins over it.
+     */
+    private fun restoreHandoffIfAny() {
+        val raw = prefs.getString(KEY_HANDOFF_FROM, null) ?: return
+        val s = _state.value
+        if (s.handoffFrom != null) return   // already set up by a finish-while-away above
+
+        val from = runCatching { PomodoroMode.valueOf(raw) }.getOrNull()
+        val at = prefs.getLong(KEY_HANDOFF_AT, 0L)
+        val locked = prefs.getBoolean(KEY_HANDOFF_LOCKED, false)
+        if (from == null || at <= 0L ||
+            s.timerState != TimerState.IDLE ||
+            PomodoroStatsMath.dateOf(at) != LocalDate.now()
+        ) {
+            clearSavedHandoff()
+            return
+        }
+
+        // Same result the timer reached when the session first ended. The
+        // round counter already includes the session that just finished.
+        val next = if (from == PomodoroMode.FOCUS) nextModeAfterFocus(s.cycleCount) else PomodoroMode.FOCUS
+        switchMode(next, s.cycleCount)        // (this also clears the saved note...)
+        saveHandoff(from, locked, at)         // ...so keep it saved, with its original time
+        _state.value = _state.value.copy(
+            handoffFrom = from,
+            awaitingNextFocus = from != PomodoroMode.FOCUS && _state.value.settings.ultraFocusEnabled
+        )
+        if (locked && from == PomodoroMode.FOCUS) {
+            PomodoroHandoff.publish(
+                PomodoroHandoff.Pending(
+                    endedMode = from,
+                    nextMode = next,
+                    nextMinutes = _state.value.totalTime / 60,
+                    createdAtMillis = at
+                )
+            )
+        }
+    }
+
     /** Title + text for the end-of-session notification. */
     private fun alertCopy(ended: PomodoroMode, next: PomodoroMode): Pair<String, String> {
         val s = _state.value.settings
@@ -485,6 +564,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         switchMode(nextModeAfterFocus(newCycle), newCycle)
         _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
         if (locked) publishHandoffNote(PomodoroMode.FOCUS)
+        saveHandoff(PomodoroMode.FOCUS, locked)
     }
 
     /** A break reached its end while the app was closed: get the next focus session ready. */
@@ -495,6 +575,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             handoffFrom = mode,
             awaitingNextFocus = _state.value.settings.ultraFocusEnabled
         )
+        saveHandoff(mode, locked = false)
     }
 
     /**
@@ -722,6 +803,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         autoStartJob?.cancel()
         autoStartJob = null
         PomodoroHandoff.clear()
+        clearSavedHandoff()
 
         // Make sure "today" and the round counter are right before we begin.
         syncDay()
@@ -918,6 +1000,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                     liveFocusSeconds = 0
                 )
                 if (wasLockedSession) publishHandoffNote(PomodoroMode.FOCUS)
+                saveHandoff(PomodoroMode.FOCUS, wasLockedSession)
 
                 if (settings.autoStartBreaks) {
                     beginAutoStartCountdown()
@@ -935,6 +1018,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                     // manual button (default) or start automatically.
                     awaitingNextFocus = settings.ultraFocusEnabled
                 )
+                saveHandoff(ended, locked = false)
 
                 val autoStart = if (settings.ultraFocusEnabled) {
                     settings.ultraAutoStartNext
@@ -1011,6 +1095,7 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         autoStartJob?.cancel()
         autoStartJob = null
         PomodoroHandoff.clear()
+        clearSavedHandoff()
 
         val settings = _state.value.settings
         val totalTime = durationSecondsFor(newMode, settings)
@@ -1082,7 +1167,13 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // remembered by its start/end times and picked up again on the next
         // start (see restoreRunSessionIfAny). Saving partial seconds here is
         // what used to cause double counting.
-        PomodoroHandoff.unregister()
-        PomodoroHandoff.clear()
+        // When the main screen is rebuilt, this OLD timer is cleaned up after
+        // the NEW one has already started. Only the newest timer may take
+        // down the shared hand-off note, or it would wipe the new one's.
+        if (latestInstance === this) {
+            latestInstance = null
+            PomodoroHandoff.unregister()
+            PomodoroHandoff.clear()
+        }
     }
 }
