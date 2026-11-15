@@ -984,6 +984,28 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         _state.value = _state.value.copy(autoStartInSeconds = 0)
     }
 
+    /**
+     * The "Stop for now" button on the session-finished overlay: nothing else
+     * starts by itself. Any waiting break is dropped and the timer goes back
+     * to a calm "ready to focus" state. The round dots and today's stats are
+     * left exactly as they were.
+     *
+     * Does nothing if a session is already running (e.g. the auto-start
+     * countdown reached zero a split second before the tap): a running
+     * session — especially a locked Ultra Focus one — must never be
+     * cut loose from its timer.
+     */
+    fun stopAfterSession() {
+        autoStartJob?.cancel()
+        autoStartJob = null
+        val s = _state.value
+        if (s.timerState != TimerState.IDLE) {
+            _state.value = s.copy(autoStartInSeconds = 0)
+            return
+        }
+        switchMode(PomodoroMode.FOCUS, s.cycleCount)
+    }
+
     fun switchMode(newMode: PomodoroMode, cycleCount: Int = _state.value.cycleCount) {
         timerJob?.cancel()
         autoStartJob?.cancel()
