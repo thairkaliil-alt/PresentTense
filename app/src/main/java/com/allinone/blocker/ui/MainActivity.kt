@@ -226,6 +226,31 @@ fun AppRoot(
     onThemeToggle: (Boolean) -> Unit,
     onboardingCompleteState: androidx.compose.runtime.MutableState<Boolean>
 ) {
+    // The Pomodoro "session finished, what's next?" overlay is drawn ON TOP of
+    // whatever screen is showing (see PomodoroCompleteOverlay.kt). The layer
+    // also tells the app below whether to hide the old lockdown-complete
+    // screen, because for an Ultra Focus session the overlay replaces it.
+    PomodoroCompleteLayer(overlayAllowed = onboardingCompleteState.value) { suppressLockdownCelebration ->
+        AppRootContent(
+            screenState = screenState,
+            refreshKey = refreshKey,
+            isDarkTheme = isDarkTheme,
+            onThemeToggle = onThemeToggle,
+            onboardingCompleteState = onboardingCompleteState,
+            suppressLockdownCelebration = suppressLockdownCelebration
+        )
+    }
+}
+
+@Composable
+private fun AppRootContent(
+    screenState: androidx.compose.runtime.MutableState<Screen>,
+    refreshKey: Int,
+    isDarkTheme: Boolean,
+    onThemeToggle: (Boolean) -> Unit,
+    onboardingCompleteState: androidx.compose.runtime.MutableState<Boolean>,
+    suppressLockdownCelebration: Boolean
+) {
     var screen by screenState
     var selectedPackage by remember { mutableStateOf<String?>(null) }
     var isNewApp        by remember { mutableStateOf(false) }
@@ -323,12 +348,18 @@ fun AppRoot(
     // showing. Checked before routing so it intercepts regardless of which
     // screen/sub-screen was about to be shown.
     val pendingCelebration by LockdownCompletionRepository.pendingCelebration.collectAsState()
+    //
+    // Exception: when that lockdown was really a Pomodoro Ultra Focus session,
+    // the Pomodoro overlay (PomodoroCompleteOverlay.kt) takes this moment
+    // instead, so we skip this screen and you only ever see one.
     pendingCelebration?.let { session ->
-        LockdownCompletionScreen(
-            session = session,
-            onDismiss = { LockdownCompletionRepository.consumePendingCelebration() }
-        )
-        return
+        if (!suppressLockdownCelebration) {
+            LockdownCompletionScreen(
+                session = session,
+                onDismiss = { LockdownCompletionRepository.consumePendingCelebration() }
+            )
+            return
+        }
     }
 
     // Sub-screens are full-screen "pushed" destinations (no bottom nav). Routing
