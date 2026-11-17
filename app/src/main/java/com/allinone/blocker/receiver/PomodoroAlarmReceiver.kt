@@ -27,11 +27,12 @@ class PomodoroAlarmReceiver : BroadcastReceiver() {
         val title = intent.getStringExtra(PomodoroAlerts.EXTRA_TITLE) ?: "Pomodoro Timer"
         val text = intent.getStringExtra(PomodoroAlerts.EXTRA_TEXT) ?: ""
         val endsAt = intent.getLongExtra(PomodoroAlerts.EXTRA_ENDS_AT, 0L)
+        val locked = intent.getBooleanExtra(PomodoroAlerts.EXTRA_LOCKED, false)
 
         // A receiver normally gets only a few seconds before Android may stop
         // it. goAsync() keeps it alive just long enough for the chime to finish.
         val pending = goAsync()
-        val holdMs = PomodoroAlerts.fire(context.applicationContext, ended, title, text, endsAt)
+        val holdMs = PomodoroAlerts.fire(context.applicationContext, ended, title, text, endsAt, locked)
         if (holdMs <= 0L) {
             pending.finish()
         } else {
