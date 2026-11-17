@@ -230,7 +230,10 @@ fun AppRoot(
     // whatever screen is showing (see PomodoroCompleteOverlay.kt). The layer
     // also tells the app below whether to hide the old lockdown-complete
     // screen, because for an Ultra Focus session the overlay replaces it.
-    PomodoroCompleteLayer(overlayAllowed = onboardingCompleteState.value) { suppressLockdownCelebration ->
+    PomodoroCompleteLayer(
+        overlayAllowed = onboardingCompleteState.value,
+        onOpenPomodoro = { screenState.value = Screen.POMODORO }
+    ) { suppressLockdownCelebration ->
         AppRootContent(
             screenState = screenState,
             refreshKey = refreshKey,
