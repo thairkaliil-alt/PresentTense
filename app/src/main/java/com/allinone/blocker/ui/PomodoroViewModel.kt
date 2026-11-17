@@ -496,7 +496,10 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         val s = _state.value
         val next = nextModeAfter(s.mode, s.cycleCount)
         val copy = alertCopy(s.mode, next)
-        PomodoroAlerts.scheduleEnd(getApplication<Application>(), endsAt, s.mode, copy.first, copy.second)
+        PomodoroAlerts.scheduleEnd(
+            getApplication<Application>(), endsAt, s.mode, copy.first, copy.second,
+            locked = s.ultraSessionActive
+        )
     }
 
     /** Re-sends the alarm if one is running — used when a setting that changes its wording is edited. */
@@ -990,7 +993,10 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 // Chime + vibration + notification (skipped automatically if
                 // the background alarm already played them for this end time).
                 val copy = alertCopy(ended, nextMode)
-                PomodoroAlerts.fire(getApplication<Application>(), ended, copy.first, copy.second, finishedAt)
+                PomodoroAlerts.fire(
+                    getApplication<Application>(), ended, copy.first, copy.second, finishedAt,
+                    locked = wasLockedSession
+                )
 
                 switchMode(nextMode, newCycleCount)
                 _state.value = _state.value.copy(
