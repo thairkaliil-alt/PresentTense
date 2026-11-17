@@ -173,6 +173,9 @@ private fun primaryLabelFor(info: OverlayInfo): String = when (info.next) {
  *
  * @param overlayAllowed  false while something more important owns the
  *                        screen (e.g. the first-run walkthrough).
+ * @param onOpenPomodoro  called when the app was pulled forward by a finished
+ *                        session: the app should show the Pomodoro screen
+ *                        under the overlay.
  * @param content         the app. It is told whether it should HIDE the old
  *                        lockdown-complete screen — true when that finished
  *                        lockdown was really a Pomodoro Ultra Focus session
@@ -181,6 +184,7 @@ private fun primaryLabelFor(info: OverlayInfo): String = when (info.next) {
 @Composable
 fun PomodoroCompleteLayer(
     overlayAllowed: Boolean,
+    onOpenPomodoro: () -> Unit = {},
     viewModel: PomodoroViewModel = viewModel(),
     content: @Composable (suppressLockdownCelebration: Boolean) -> Unit
 ) {
@@ -229,6 +233,13 @@ fun PomodoroCompleteLayer(
         unlockPending == null &&
         !dismissed &&
         state.handoffFrom != null
+
+    // When the overlay appears because a finished session pulled the app
+    // forward, switch the screen UNDER it to Pomodoro, so closing the overlay
+    // lands you on the timer. (Not done if you were already using the app.)
+    LaunchedEffect(wanted) {
+        if (wanted && PomodoroAlerts.consumeOpenPomodoroRequest()) onOpenPomodoro()
+    }
 
     // Keep the last content around so the fade-out still has words to show
     // (the timer clears its state the instant the next session starts).
