@@ -29,6 +29,7 @@ package com.allinone.blocker.ui
 //   Nothing here starts or stops a lockdown. It only announces the end.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -168,12 +169,45 @@ object PomodoroAlerts {
         val vibration = prefs.getBoolean(KEY_VIBRATION, true)
 
         postNotification(app, title, text)
+        // If you were NOT already looking at Present Tense, the app is about to
+        // be pulled forward: leave a note so it opens on the Pomodoro screen
+        // (under the overlay) instead of wherever it was last left. If you
+        // were in the app, we don't move you away from what you're doing.
+        if (!isAppOnScreen(app)) openPomodoroRequestedAt = System.currentTimeMillis()
+
         // Pop the "what's next?" screen up by itself, so you don't have to
         // find the notification. (After a locked session the lockdown screen
         // does this on its own, so we stay out of its way.)
         if (!locked) bringAppToFront(app)
         return deliver(app, ended, sound, vibration)
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // "OPEN ON THE POMODORO SCREEN" NOTE
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** When the note was left; 0 = no note. Lives in memory only, on purpose. */
+    @Volatile
+    private var openPomodoroRequestedAt = 0L
+
+    /**
+     * Called by the overlay layer when the overlay appears. True (once) if the
+     * app was pulled forward by a finished session, meaning it should show the
+     * Pomodoro screen under the overlay. The note expires after a minute so a
+     * stale one can never move you around later.
+     */
+    fun consumeOpenPomodoroRequest(): Boolean {
+        val at = openPomodoroRequestedAt
+        openPomodoroRequestedAt = 0L
+        return at > 0L && System.currentTimeMillis() - at < 60_000L
+    }
+
+    /** True while Present Tense has a screen you can see right now. */
+    private fun isAppOnScreen(context: Context): Boolean = runCatching {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }.getOrDefault(false)
 
     /**
      * Opens Present Tense in front of whatever app you are in, so the
