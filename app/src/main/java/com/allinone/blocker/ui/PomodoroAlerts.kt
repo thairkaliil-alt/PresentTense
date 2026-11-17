@@ -43,9 +43,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.allinone.blocker.R
 import com.allinone.blocker.data.AlarmScheduler
+import com.allinone.blocker.data.BlockerRepository
 import com.allinone.blocker.receiver.PomodoroAlarmReceiver
 import kotlin.math.PI
 import kotlin.math.abs
@@ -64,6 +66,9 @@ object PomodoroAlerts {
     const val EXTRA_TITLE = "pomodoro_title"
     const val EXTRA_TEXT = "pomodoro_text"
     const val EXTRA_ENDS_AT = "pomodoro_ends_at"
+    // true = this was a locked Ultra Focus session. The lockdown screen already
+    // brings the app back by itself when it ends, so we must not do it twice.
+    const val EXTRA_LOCKED = "pomodoro_locked"
 
     private const val CHANNEL_ID = "pomodoro_alerts"
     // The old channel played Android's default ping and could not be changed
@@ -88,7 +93,8 @@ object PomodoroAlerts {
         endsAtMillis: Long,
         ended: PomodoroMode,
         title: String,
-        text: String
+        text: String,
+        locked: Boolean = false
     ) {
         val app = context.applicationContext
         val intent = Intent(app, PomodoroAlarmReceiver::class.java).apply {
@@ -96,6 +102,7 @@ object PomodoroAlerts {
             putExtra(EXTRA_TITLE, title)
             putExtra(EXTRA_TEXT, text)
             putExtra(EXTRA_ENDS_AT, endsAtMillis)
+            putExtra(EXTRA_LOCKED, locked)
         }
         val pending = PendingIntent.getBroadcast(
             app,
@@ -150,7 +157,8 @@ object PomodoroAlerts {
         ended: PomodoroMode,
         title: String,
         text: String,
-        endsAtMillis: Long
+        endsAtMillis: Long,
+        locked: Boolean = false
     ): Long {
         val app = context.applicationContext
         if (!claim(app, endsAtMillis)) return 0L
@@ -160,7 +168,39 @@ object PomodoroAlerts {
         val vibration = prefs.getBoolean(KEY_VIBRATION, true)
 
         postNotification(app, title, text)
+        // Pop the "what's next?" screen up by itself, so you don't have to
+        // find the notification. (After a locked session the lockdown screen
+        // does this on its own, so we stay out of its way.)
+        if (!locked) bringAppToFront(app)
         return deliver(app, ended, sound, vibration)
+    }
+
+    /**
+     * Opens Present Tense in front of whatever app you are in, so the
+     * session-finished overlay (PomodoroCompleteOverlay.kt) is the first thing
+     * you see.
+     *
+     * Android only lets an app open itself from the background if it has the
+     * "Display over other apps" permission — the blocker already needs it, so
+     * normally it is on. If it isn't, or a lockdown is running (which must
+     * not be interrupted), we quietly do nothing and you still get the
+     * notification.
+     *
+     * Flags: REORDER_TO_FRONT + SINGLE_TOP bring the EXISTING screen forward
+     * (no rebuild, nothing you were doing is lost) and only create a new one
+     * if the app isn't running at all.
+     */
+    private fun bringAppToFront(context: Context) {
+        runCatching {
+            if (!Settings.canDrawOverlays(context)) return
+            if (BlockerRepository.isInitialized && BlockerRepository.isLockdownSessionRunning()) return
+            val intent = Intent(context, MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            context.startActivity(intent)
+        }
     }
 
     /** Plays the alert without a notification — used by the "Test" buttons in settings. */
