@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pomodoro notification — EXPANDED look (after pulling the notification open).
+
+      FOCUS                            Session 2 of 4
+
+      24:31
+
+      Ends at 14:25                        ● ◉ ○ ○
+
+  Same ids as the collapsed layout (pomo_time, pomo_label, pomo_detail), plus
+  two extras that only exist here: pomo_ends and pomo_dots.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/pomo_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:letterSpacing="0.1"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/pomo_detail"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="end"
+            android:paddingStart="12dp"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <Chronometer
+        android:id="@+id/pomo_time"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:fontFamily="sans-serif-light"
+        android:fontFeatureSettings="tnum"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Title"
+        android:textSize="46sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/pomo_ends"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/pomo_dots"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="12dp"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+</LinearLayout>
