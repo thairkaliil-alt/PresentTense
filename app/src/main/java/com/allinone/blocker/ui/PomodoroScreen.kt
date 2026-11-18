@@ -149,9 +149,15 @@ private fun phaseStatus(state: PomodoroState, lockedUntil: String): PhaseStatus 
 @Composable
 fun PomodoroScreen(
     onBack: () -> Unit,
+    // Opens the Daily Tasks tab (rewards, part 1).
+    onOpenDailyTasks: () -> Unit = {},
     viewModel: PomodoroViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    // How many Daily Tasks chests are full and waiting to be opened. Drives the
+    // little red dot on the tasks icon in the top bar.
+    val dailyTasksState by viewModel.dailyTasksState.collectAsState()
+    val chestsReady = dailyTasksState.chestsReady
     // The day-by-day logbook the stats card is drawn from.
     val history by viewModel.history.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
@@ -249,6 +255,21 @@ fun PomodoroScreen(
                     }
                 },
                 actions = {
+                    // Daily Tasks tab. The dot appears when a chest is ready to open.
+                    IconButton(onClick = {
+                        haptics.tap()
+                        onOpenDailyTasks()
+                    }) {
+                        BadgedBox(
+                            badge = {
+                                if (chestsReady > 0) {
+                                    Badge(containerColor = Color(0xFFFF5A5F))
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Filled.TaskAlt, "Daily tasks", tint = OnPhase)
+                        }
+                    }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Filled.Settings, "Settings", tint = OnPhase)
                     }
