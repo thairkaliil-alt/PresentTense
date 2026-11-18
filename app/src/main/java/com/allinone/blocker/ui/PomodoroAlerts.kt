@@ -75,7 +75,12 @@ object PomodoroAlerts {
     // The old channel played Android's default ping and could not be changed
     // after creation, so it is removed and replaced by CHANNEL_ID.
     private const val OLD_CHANNEL_ID = "pomodoro_channel"
-    private const val NOTIFICATION_ID = 1001
+    // BUGFIX: this used to be 1001, the same number the Lockdown service uses
+    // for ITS notification. At the end of an Ultra Focus session the two
+    // shared one slot, so "Focus session complete" replaced the lockdown
+    // notification and could disappear along with it when the service stopped.
+    // 5001 is unique in the app (see PomodoroNotification.kt for the others).
+    private const val NOTIFICATION_ID = 5001
     private const val ALARM_REQUEST_CODE = 71001
     private const val KEY_LAST_ALERTED = "last_alerted_ends_at"
     private const val SAMPLE_RATE = 44100
@@ -168,6 +173,12 @@ object PomodoroAlerts {
         val sound = prefs.getBoolean(KEY_SOUND, true)
         val vibration = prefs.getBoolean(KEY_VIBRATION, true)
 
+        // The live "session running" notification (PomodoroNotification.kt)
+        // is finished now: take it down, then post the "it ended" one. Done
+        // here, after claim(), so only the one place that really announces
+        // the ending does it (the alarm and the running timer can both get
+        // here, and a late one must not remove a session that just started).
+        PomodoroNotification.cancel(app)
         postNotification(app, title, text)
         // If you were NOT already looking at Present Tense, the app is about to
         // be pulled forward: leave a note so it opens on the Pomodoro screen
