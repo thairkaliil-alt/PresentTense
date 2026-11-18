@@ -500,6 +500,14 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             getApplication<Application>(), endsAt, s.mode, copy.first, copy.second,
             locked = s.ultraSessionActive
         )
+        // The live countdown notification (PomodoroNotification.kt). This one
+        // function runs every time a session starts, resumes or is restored
+        // after the app was closed, so the notification is always in step with
+        // the alarm above. It counts down by itself, so it needs no updates.
+        PomodoroNotification.show(
+            getApplication<Application>(), s.mode, endsAt, s.cycleCount,
+            s.settings.sessionsUntilLongBreak, locked = s.ultraSessionActive
+        )
     }
 
     /** Re-sends the alarm if one is running — used when a setting that changes its wording is edited. */
@@ -543,6 +551,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
             .remove(KEY_RUN_ID)
             .apply()
         PomodoroAlerts.cancelEnd(getApplication<Application>())
+        // Nothing is running any more, so the live countdown goes too.
+        PomodoroNotification.cancel(getApplication<Application>())
     }
 
     /**
