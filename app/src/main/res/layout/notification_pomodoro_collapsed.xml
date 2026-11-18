@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pomodoro notification — COLLAPSED look (what you see before pulling it open).
+
+      24:31                      FOCUS
+                          Session 2 of 4
+
+  Only plain, notification-safe building blocks are used (LinearLayout,
+  Chronometer, TextView), because a notification is drawn by Android itself,
+  not by this app. The text styles are Android's own notification styles, so
+  the colours switch correctly between light and dark mode by themselves.
+
+  The countdown is a Chronometer: Android's own ticking clock. Because the
+  PHONE draws the seconds, nothing in the app has to keep running for it to
+  count down.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <Chronometer
+        android:id="@+id/pomo_time"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif-light"
+        android:fontFeatureSettings="tnum"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Title"
+        android:textSize="28sp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="end"
+        android:orientation="vertical"
+        android:paddingStart="12dp">
+
+        <TextView
+            android:id="@+id/pomo_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:letterSpacing="0.1"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/pomo_detail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+</LinearLayout>
