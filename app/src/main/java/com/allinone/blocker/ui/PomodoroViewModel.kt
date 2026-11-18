@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.allinone.blocker.data.Achievement
 import com.allinone.blocker.data.BlockerRepository
+import com.allinone.blocker.data.DailyTasksRepository
+import com.allinone.blocker.data.DailyTasksState
 import com.allinone.blocker.data.DayStats
 import com.allinone.blocker.data.PomodoroStatsMath
 import com.allinone.blocker.data.PomodoroStatsRepository
@@ -109,6 +111,12 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
     // card draws today / week / all-time / streak straight from this.
     private val stats = PomodoroStatsRepository.get(application)
     val history: StateFlow<Map<LocalDate, DayStats>> = stats.days
+
+    // The Daily Tasks (see DailyTasks.kt). Finishing a full Pomodoro set fills
+    // the built-in "Complete a full Pomodoro set" task. The screen watches this
+    // to show a dot on the tasks icon when a chest is ready to open.
+    private val dailyTasks = DailyTasksRepository.get(application)
+    val dailyTasksState: StateFlow<DailyTasksState> = dailyTasks.state
 
     private var timerJob: Job? = null
     private var autoStartJob: Job? = null
@@ -292,6 +300,8 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
      * while a break is waiting).
      */
     private fun syncDay() {
+        // The Daily Tasks flip to the new day at midnight too.
+        dailyTasks.refreshDay()
         val today = LocalDate.now()
         var s = _state.value
         if (s.today != today) {
@@ -574,7 +584,12 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
 
         val newCycle = _state.value.cycleCount + 1
         saveCycle(newCycle)
-        switchMode(nextModeAfterFocus(newCycle), newCycle)
+        val nextMode = nextModeAfterFocus(newCycle)
+        // The last session of a round brings you to the long break: a full set.
+        if (nextMode == PomodoroMode.LONG_BREAK) {
+            dailyTasks.recordPomodoroSet(runId, endsAt)
+        }
+        switchMode(nextMode, newCycle)
         _state.value = _state.value.copy(handoffFrom = PomodoroMode.FOCUS)
         if (locked) publishHandoffNote(PomodoroMode.FOCUS)
         saveHandoff(PomodoroMode.FOCUS, locked)
@@ -978,6 +993,10 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
         // alarm: we are announcing this ending ourselves right now.
         val finishedAt = alarmEndsAt
 
+        // Remember which focus run this was (it is forgotten once it is saved),
+        // so a finished set can never be counted twice by the Daily Tasks.
+        val finishedRunId = if (segRunId > 0L) segRunId else System.currentTimeMillis()
+
         // A finished focus session goes into the logbook BEFORE the run
         // memory is cleared (the logbook needs that memory to save it once).
         val achievement = if (ended == PomodoroMode.FOCUS) {
@@ -999,6 +1018,12 @@ class PomodoroViewModel(application: Application) : AndroidViewModel(application
                 saveCycle(newCycleCount)
 
                 val nextMode = nextModeAfterFocus(newCycleCount)
+
+                // The last focus session of a round brings you to the long
+                // break. That is a full Pomodoro set: tick today's daily task.
+                if (nextMode == PomodoroMode.LONG_BREAK) {
+                    dailyTasks.recordPomodoroSet(finishedRunId, System.currentTimeMillis())
+                }
 
                 // Chime + vibration + notification (skipped automatically if
                 // the background alarm already played them for this end time).
