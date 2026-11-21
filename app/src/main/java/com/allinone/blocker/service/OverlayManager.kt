@@ -60,6 +60,14 @@ class OverlayManager(private val context: Context) {
 
     val isShowing: Boolean get() = attached && overlay?.isAttachedToWindow == true
 
+    /**
+     * Called the moment the user taps "I am Committed". This lets the service
+     * tell the difference between "the user chose to close this overlay" (leave
+     * it closed) and "the overlay got taken down some other way, e.g. by the
+     * hold-the-swipe trick" (put it back).
+     */
+    var onUserDismissed: (() -> Unit)? = null
+
     /** The package this overlay is currently showing a block screen for, or null if hidden. */
     val currentPackageName: String? get() = if (isShowing) shownFor else null
 
@@ -144,6 +152,7 @@ class OverlayManager(private val context: Context) {
     private fun updateCommittedButton(isLockdown: Boolean) {
         val button = committedButton ?: return
         button.setOnClickListener {
+            onUserDismissed?.invoke()
             val home = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
