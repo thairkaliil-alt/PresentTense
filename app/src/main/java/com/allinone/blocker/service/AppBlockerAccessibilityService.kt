@@ -3,6 +3,9 @@ package com.allinone.blocker.service
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -84,11 +87,98 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     /** Throttle for [clearStuckSystemSurfaceIfNeeded] — see its doc for why this exists. */
     private var lastStuckSurfaceNudgeAtMillis = 0L
 
+    // ── Foreground re-check ("hold the swipe" bypass fix) ────────────────────
+    // BUGFIX (overlay disappears if you slowly swipe up, hold, then swipe back
+    // down): while you hold the swipe, Android briefly shows the home screen
+    // underneath, so the event handler above decides "user left the app" and
+    // takes the overlay down. When you swipe back, the blocked app is in front
+    // again — but this service only reacts to events the app sends. Social
+    // apps send them constantly (so the overlay returned), while games and
+    // browsers can go completely quiet (so it never did). This tiny loop asks
+    // Android directly "which app is in front right now?" a couple of times a
+    // second and puts the overlay back if that app should be blocked. See
+    // [recheckForegroundBlock].
+    //
+    // To keep battery use near zero, this is NOT an always-on loop. It only
+    // runs in short bursts: [armForegroundRecheck] starts one when the screen
+    // shows signs the overlay may be about to be pulled away (a window change
+    // or home-screen/System UI activity while the overlay is up), and the burst
+    // stops by itself after [FOREGROUND_RECHECK_WINDOW_MS] or as soon as the
+    // overlay is back. While nothing is going on, nothing runs.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var powerManager: PowerManager? = null
+
+    /** When the user last tapped "I am Committed" — the re-check stays out of the way briefly after. */
+    @Volatile private var userDismissedAtMillis = 0L
+
+    // Chrome hides its address bar while scrolling, so the site can be
+    // unreadable even though you're still on a blocked one. We remember the
+    // last blocked site (for a short while) to cover that gap.
+    private var rememberedBlockedDomain: String? = null
+    private var rememberedBlockedDomainPkg: String? = null
+    private var rememberedBlockedAtMillis = 0L
+
+    /** When the current burst of re-checks should stop. 0 = no burst wanted. */
+    private var recheckDeadlineMillis = 0L
+    private var recheckRunning = false
+
+    /** Absolute latest a burst may run, even while it keeps getting extended — see [extendRecheckWhileAway]. */
+    private var recheckHardStopMillis = 0L
+
+    private val foregroundRecheck = object : Runnable {
+        override fun run() {
+            runCatching { recheckForegroundBlock() }
+            if (System.currentTimeMillis() < recheckDeadlineMillis) {
+                mainHandler.postDelayed(this, FOREGROUND_RECHECK_INTERVAL_MS)
+            } else {
+                recheckRunning = false
+            }
+        }
+    }
+
+    /**
+     * Starts (or extends) a short burst of foreground re-checks. Safe to call
+     * as often as you like: if a burst is already running it just pushes the
+     * stop time out, it never starts a second one.
+     */
+    private fun armForegroundRecheck() {
+        val now = System.currentTimeMillis()
+        recheckDeadlineMillis = now + FOREGROUND_RECHECK_WINDOW_MS
+        recheckHardStopMillis = now + FOREGROUND_RECHECK_MAX_MS
+        if (!recheckRunning) {
+            recheckRunning = true
+            mainHandler.postDelayed(foregroundRecheck, FOREGROUND_RECHECK_INTERVAL_MS)
+        }
+    }
+
+    /** Ends the current burst early (job done, or the user left on purpose). */
+    private fun stopForegroundRecheck() {
+        recheckDeadlineMillis = 0L
+    }
+
+    /**
+     * Called by [recheckForegroundBlock] while the home screen / recents /
+     * System UI is what's in front — i.e. the user is "holding the swipe" (or
+     * has genuinely gone home). Keeps the burst alive so that holding the swipe
+     * for longer than one burst window can't outwait it, but never past
+     * [recheckHardStopMillis], so sitting on the home screen can't keep it
+     * running forever.
+     */
+    private fun extendRecheckWhileAway(now: Long) {
+        recheckDeadlineMillis = minOf(now + FOREGROUND_RECHECK_WINDOW_MS, recheckHardStopMillis)
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (!BlockerRepository.isInitialized) BlockerRepository.init(applicationContext)
         if (!LockdownCompletionRepository.isInitialized) LockdownCompletionRepository.init(applicationContext)
         overlay = OverlayManager(this)
+        overlay.onUserDismissed = {
+            userDismissedAtMillis = System.currentTimeMillis()
+            rememberedBlockedDomain = null
+            rememberedBlockedDomainPkg = null
+            stopForegroundRecheck()
+        }
         // Third protection layer: this is Android's one reliable "the
         // Accessibility permission is genuinely on right now" signal, so
         // it's also what clears a running Instant Off-Alarm the moment the
@@ -103,6 +193,8 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         // they're the one mode worth defending against the whole app being
         // killed (e.g. swiped out of Recent Apps) — see LockdownGuard.
         startLockdownGuardLoop()
+        mainHandler.removeCallbacks(foregroundRecheck)
+        recheckRunning = false
     }
 
     /**
@@ -220,6 +312,22 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) return
+
+        // Re-check safety net: while a block overlay is up, window changes and
+        // home-screen/System UI activity are the signature of the
+        // "swipe up, hold, swipe back" trick (this very event may be the one
+        // that makes the code below take the overlay down). Arm a short burst
+        // of re-checks so it gets put back even if the blocked app then stays
+        // silent. Chatty content-change events from ordinary apps are ignored
+        // here on purpose — see armForegroundRecheck.
+        if (this::overlay.isInitialized && overlay.isShowing) {
+            val evPkg = event.packageName?.toString()
+            if (eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                (evPkg != null && isHomeOrSystemSurface(evPkg))
+            ) {
+                armForegroundRecheck()
+            }
+        }
 
         // BUGFIX ("typing in a whitelisted app bounces back to the lockdown
         // screen"): see isInputMethodWindowEvent's doc below. Must run before
@@ -626,6 +734,9 @@ class AppBlockerAccessibilityService : AccessibilityService() {
         }
 
         if (BlockerRepository.isWebsiteBlocked(domain)) {
+            rememberedBlockedDomain = domain
+            rememberedBlockedDomainPkg = pkg
+            rememberedBlockedAtMillis = System.currentTimeMillis()
             ioScope.launch { ScreenTimeTracker.recordDomainBlockedAttempt(applicationContext, domain) }
             overlay.show(
                 packageName = pkg,
@@ -636,9 +747,150 @@ class AppBlockerAccessibilityService : AccessibilityService() {
             )
             lastOverlayShouldShow = true
         } else {
+            rememberedBlockedDomain = null
+            rememberedBlockedDomainPkg = null
             overlay.hide()
             lastOverlayShouldShow = false
         }
+    }
+
+    /**
+     * Safety net that runs every [FOREGROUND_RECHECK_INTERVAL_MS], but only
+     * during a short burst started by [armForegroundRecheck] — never around
+     * the clock. It does NOT wait for the blocked app to send an event: it asks
+     * Android which app is in front right now, and if that app (or the website
+     * open in a browser) should be blocked but the overlay isn't showing, it
+     * puts the overlay back. This closes the "swipe up slowly, hold, swipe back
+     * down" bypass for apps and games that stay silent (send no events) after
+     * the overlay was taken down.
+     *
+     * It stays out of the way when:
+     *  - the screen is off,
+     *  - a lockdown session is live (lockdown has its own guard loop),
+     *  - the user just tapped "I am Committed" (they're on their way home),
+     *  - the overlay is already showing for this app, or
+     *  - the app in front is us or the notification shade. (If the home screen
+     *    or System UI is in front, it does nothing BUT keeps the burst alive —
+     *    see [extendRecheckWhileAway].)
+     *
+     * It only ever ADDS the overlay back. It never hides anything.
+     */
+    private fun recheckForegroundBlock() {
+        if (!this::overlay.isInitialized) return
+        val pm = powerManager ?: getSystemService(PowerManager::class.java).also { powerManager = it }
+        if (pm?.isInteractive == false) return
+        if (isLockdownSessionLive()) return
+
+        val now = System.currentTimeMillis()
+        if (now - userDismissedAtMillis < USER_DISMISS_GRACE_MS) return
+
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        if (root == null) {
+            // Nothing readable in front right now (common mid-gesture): keep waiting.
+            extendRecheckWhileAway(now)
+            return
+        }
+        try {
+            val pkg = root.packageName?.toString() ?: return
+            if (isHomeOrSystemSurface(pkg)) {
+                // Home screen / recents / System UI is in front: the user is
+                // mid-swipe or went home. Stay on watch, don't give up yet.
+                extendRecheckWhileAway(now)
+                return
+            }
+            if (pkg == packageName) return
+            if (isShadeOrStatusBarWindow(root)) return
+
+            val isBrowser = pkg in UrlExtractor.BROWSER_PACKAGES
+
+            // Overlay already up for this app: nothing to fix. (For a browser,
+            // keep the "remembered blocked site" fresh while we can see it.)
+            if (overlay.isShowing && overlay.currentPackageName == pkg) {
+                if (isBrowser && rememberedBlockedDomainPkg == pkg) rememberedBlockedAtMillis = now
+                return
+            }
+
+            // 1) A fully blocked app (schedule, permanent block, limits...).
+            val app = BlockerRepository.appFor(pkg)
+            if (app != null) {
+                // The session-limit timer is only trustworthy when this is the
+                // app we've been tracking; otherwise skip that one rule here
+                // (0 = "no session") and let the normal event path handle it.
+                val sessionStartForCheck =
+                    if (pkg == currentForeground) effectiveSessionStart(pkg) else 0L
+                val decision = BlockEngine.evaluate(
+                    context = this,
+                    app = app,
+                    sessionStart = sessionStartForCheck
+                )
+                if (decision.blocked) {
+                    syncForegroundTo(pkg)
+                    ioScope.launch { ScreenTimeTracker.recordBlockedAttempt(applicationContext, pkg) }
+                    overlay.show(
+                        packageName = pkg,
+                        appName = app.appName,
+                        reason = decision.reason,
+                        motivation = MOTIVATION,
+                        isLockdown = false
+                    )
+                    lastOverlayShouldShow = true
+                    stopForegroundRecheck()
+                    return
+                }
+            }
+
+            // 2) A blocked website open in a browser.
+            if (isBrowser) {
+                val domain = UrlExtractor.extractDomain(pkg, root)
+                val remembered = rememberedBlockedDomain
+                val blockedDomain: String? = when {
+                    domain != null && BlockerRepository.isWebsiteBlocked(domain) -> domain
+                    // Address bar unreadable (e.g. hidden while scrolling) but we
+                    // were on a blocked site a moment ago: assume we still are.
+                    domain == null && remembered != null &&
+                        rememberedBlockedDomainPkg == pkg &&
+                        now - rememberedBlockedAtMillis < REMEMBERED_DOMAIN_TTL_MS -> remembered
+                    else -> null
+                }
+                if (blockedDomain != null) {
+                    syncForegroundTo(pkg)
+                    rememberedBlockedDomain = blockedDomain
+                    rememberedBlockedDomainPkg = pkg
+                    rememberedBlockedAtMillis = now
+                    ioScope.launch {
+                        ScreenTimeTracker.recordDomainBlockedAttempt(applicationContext, blockedDomain)
+                    }
+                    overlay.show(
+                        packageName = pkg,
+                        appName = blockedDomain,
+                        reason = "This website is blocked",
+                        motivation = MOTIVATION,
+                        isLockdown = false
+                    )
+                    lastOverlayShouldShow = true
+                    stopForegroundRecheck()
+                } else if (domain != null) {
+                    // A readable, allowed site: forget any old blocked-site memory.
+                    rememberedBlockedDomain = null
+                    rememberedBlockedDomainPkg = null
+                }
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /**
+     * Brings the "which app is in front" bookkeeping in line with reality when
+     * [recheckForegroundBlock] has to put the overlay back for an app that came
+     * to the front without sending us any event. Same thing the normal
+     * app-switch path does, so session timers stay correct.
+     */
+    private fun syncForegroundTo(pkg: String) {
+        if (pkg == currentForeground) return
+        commitLiveSessionStint()
+        currentForeground = pkg
+        sessionStart = System.currentTimeMillis()
     }
 
     private fun appLabelOrPackage(pkg: String): String =
@@ -1008,6 +1260,7 @@ class AppBlockerAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(foregroundRecheck)
         if (this::overlay.isInitialized) overlay.hide()
         // Best-effort save of whatever's left of the current session stint —
         // without this, the service being killed mid-session (Android
@@ -1023,6 +1276,25 @@ class AppBlockerAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MOTIVATION = "Discipline is choosing what you want most over what you want now."
+
+        /** How often [recheckForegroundBlock] looks at which app is in front, while a burst is running. */
+        private const val FOREGROUND_RECHECK_INTERVAL_MS = 500L
+
+        /** How long one burst of re-checks lasts after the last warning sign. */
+        private const val FOREGROUND_RECHECK_WINDOW_MS = 15_000L
+
+        /**
+         * Hard ceiling on a burst that keeps getting extended while the home
+         * screen is in front (a very long "hold the swipe"). After this the
+         * burst ends no matter what, so battery use stays bounded.
+         */
+        private const val FOREGROUND_RECHECK_MAX_MS = 120_000L
+
+        /** After "I am Committed" is tapped, the re-check waits this long so it doesn't fight the user leaving. */
+        private const val USER_DISMISS_GRACE_MS = 2_500L
+
+        /** How long a blocked website is "remembered" when the browser's address bar can't be read. */
+        private const val REMEMBERED_DOMAIN_TTL_MS = 20_000L
 
         /** How long to wait after the overlay appears before nudging Back — see [clearStuckSystemSurfaceIfNeeded]. */
         private const val STUCK_SURFACE_NUDGE_DELAY_MS = 250L
